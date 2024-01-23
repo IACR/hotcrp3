@@ -57,6 +57,10 @@
         "print_function": "Home_Page::print_admin_sidebar"
     },
     {
+        "name": "home/sidebar/admin/iacr", "order": 5, "allow_if": "chair",
+        "print_function": "Home_Page::print_admin_iacr"
+    },
+    {
         "name": "home/sidebar/admin/settings", "order": 10, "allow_if": "chair",
         "print_function": "Home_Page::print_admin_settings"
     },

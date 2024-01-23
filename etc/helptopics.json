@@ -1,5 +1,12 @@
 [
     {
+      "name": "iacr",
+      "title": "IACR extensions",
+      "order": -1,
+      "description": "IACR extensions for HotCRP (chairs only)",
+      "print_function": "IACR_HelpTopic::print"
+    },
+    {
         "name": "chair", "title": "Chair’s guide", "order": 0,
         "description": "<0>How to run a conference using HotCRP."
     },

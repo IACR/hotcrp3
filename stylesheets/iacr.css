@@ -1,0 +1,174 @@
+body#body-help, body#body-settings, body.leftmenu {
+  background: linear-gradient(to bottom, white, white 105px, transparent 10px, transparent),
+  linear-gradient(to right, #ecf2f4, #ecf2f4 164px, white 164px, white);
+
+}
+
+#top {
+    min-height: 80px;
+}
+/* Reposition the search bar so it doesn't appear below iacr logo */
+table.vbar {
+  position: absolute;
+  top: 40px;
+  right: 0px;
+}
+/* main top left nav has logo in it */
+#h-site {
+  position: relative;
+  top: 10px;
+  left: 10px;
+  min-height: 100px;
+  vertical-align: middle;
+  background: none;
+  color: #102a83;
+  border: none;
+  display: flex;
+  align-items: center;
+}
+
+#h-site:before {
+  margin-left: 10px;
+  margin-right: 10px;
+  position: relative;
+  top: 5px;
+  background-image: url('https://iacr.org/img/logo/iacrlogo_small.png');
+  background-size: 75px 75px;
+  display:inline-block;
+  height: 75px;
+  width: 75px;
+  content:"";
+}
+
+.leftmenu-left {
+  top: 20px;
+}
+
+button.iacrButton {
+  background-image: none;
+  background-color: #4CAF50;
+  color: white;
+}
+button.iacrButton:hover {
+    background-image: none;
+    background-color: green;
+}
+p.login_instructions {
+    max-width: 50%;
+    margin-top: 10px;
+    font-weight: 600;
+    color: #102a83;
+    background-color: #fffdf0;
+    border: 1px solid #b2a584;
+    padding: 5px;
+}
+
+/* hotcrp overloads .btn and .btn-primary, so we use classes modeled
+on what .btn and .btn-primary are in bootstrap 4.3. */
+
+.button {
+    background-image: none;
+    display: inline-block;
+    font-weight: 400;
+    color: #212529;
+    text-align: center;
+    vertical-align: middle;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    background-color: transparent;
+    border: 1px solid transparent;
+    padding: 0.375rem 0.75rem;
+    font-size: 1rem;
+    line-height: 1.5;
+    border-radius: 0.25rem;
+    transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+    .button {
+        transition: none;
+    }
+}
+.button:hover {
+    background: none;
+    background-image: none;
+    color: #212529;
+    text-decoration: none;
+}
+.button-primary {
+    color: #fff;
+    background-color: #007bff;
+    border-color: #007bff;
+}
+.button-primary:hover {
+    color: #fff;
+    background-color: #0069d9;
+    border-color: #0062cc;
+}
+.button-primary:focus, .button-primary.focus {
+    box-shadow: 0 0 0 0.2rem rgba(38, 143, 255, 0.5);
+}
+
+div#iacrError {
+    margin-bottom: 1rem;
+}
+
+.collaborators-form {
+  display: flex;
+  align-items: center;
+}
+
+select#iacrvenue, input#year, textarea#pclist {
+  /* mimic .form-control from Bootstrap 4.3, minus display block & width 100 */
+  padding: .375rem .75rem;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.5;
+  color: #495057;
+  background-color: #FFF;
+  background-clip: padding-box;
+  border: 1px solid #CED4DA;
+  border-radius: .25rem;
+  transition: border-color .15s ease-in-out,box-shadow .15s ease-in-out;
+}
+
+select#iacrvenue {
+  margin-right: 0.8rem;
+  width: 30%;
+}
+
+button#fetchIACR {
+  margin-left: 0.8rem;
+}
+
+/* buttons for submitting final paper and slides. */
+a.iacrSubmitButtons {
+  border-radius: 4px;
+  margin: .0 2rem .5rem 0rem;
+  background-color: #17a2b8;
+  border-color: #17a2b8;
+  color: white;
+  padding: .4em;
+  text-decoration: none;
+  display: inline-block;
+}
+
+a.iacrSubmitButtons:hover {
+  background-color: #138496;
+  border-color: #117a8b;
+}
+
+div.iacrSetting {
+    background-color: #ffcccc;
+}
+div.iacrSetting button.delete {
+    display: none;
+}
+div.iacrSetting div.entryi:not(:last-child):before {
+    white-space: break-spaces;
+    content: 'Not editable: ';
+}
+div.iacrSetting input, div.iacrSetting textarea, div.iacrSetting select {
+    pointer-events: none;
+}

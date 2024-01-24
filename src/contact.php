@@ -204,15 +204,6 @@ class Contact implements JsonSerializable {
     public $myReviewPermissions;
     public $paperId;
 
-    /** @deprecated */
-    const DISABLEMENT_USER = 1;
-    /** @deprecated */
-    const DISABLEMENT_PLACEHOLDER = 2;
-    /** @deprecated */
-    const DISABLEMENT_ROLE = 4;
-    /** @deprecated */
-    const DISABLEMENT_DELETED = 8;
-
     const CF_UDISABLED = 0x1;
     const CF_PLACEHOLDER = 0x2;
     const CF_ROLEDISABLED = 0x4;
@@ -223,24 +214,6 @@ class Contact implements JsonSerializable {
 
     const CFM_DISABLEMENT = 0x1F;
     const CFM_DB = ~0xC;
-
-    /** @deprecated */
-    const CFLAG_UDISABLED = 0x1;
-    /** @deprecated */
-    const CFLAG_PLACEHOLDER = 0x2;
-    /** @deprecated */
-    const CFLAG_ROLEDISABLED = 0x4;
-    /** @deprecated */
-    const CFLAG_DELETED = 0x8;
-    /** @deprecated */
-    const CFLAG_GDISABLED = 0x10;
-    /** @deprecated */
-    const CFLAG_UNCONFIRMED = 0x20;
-
-    /** @deprecated */
-    const CFMASK_DISABLEMENT = 0x1F;
-    /** @deprecated */
-    const CFMASK_DB = ~0xC;
 
     const PROP_LOCAL = 0x01;
     const PROP_CDB = 0x02;
@@ -805,13 +778,7 @@ class Contact implements JsonSerializable {
 
         // maybe auto-create a user
         if (($this->_activated & 2) === 0 && $this->email) {
-            if ($this->activate_placeholder_prop(($this->_activated & 7) === 1)) {
-                $this->save_prop();
-                if (($cdbu = $this->cdb_user())
-                    && $cdbu->activate_placeholder_prop(($this->_activated & 7) === 1)) {
-                    $cdbu->save_prop();
-                }
-            }
+            $this->activate_placeholder(($this->_activated & 7) === 1);
             $trueuser_aucheck = $qreq->csession("trueuser_author_check") ?? 0;
             if (!$this->has_account_here()
                 && $trueuser_aucheck + 600 < Conf::$now) {
@@ -938,7 +905,7 @@ class Contact implements JsonSerializable {
         if (!$u
             && $this->conf->contactdb()
             && $this->has_email()
-            && !self::is_anonymous_email($this->email)) {
+            && self::is_real_email($this->email)) {
             $u = $this->_cdb_user = Contact::make_cdb_email($this->conf, $this->email);
             if ($this->contactId > 0) {
                 $u->contactXid = $this->contactId;
@@ -971,7 +938,7 @@ class Contact implements JsonSerializable {
     function update_cdb() {
         if (!$this->conf->contactdb()
             || !$this->has_account_here()
-            || !validate_email($this->email)) {
+            || !self::is_real_email($this->email)) {
             return false;
         }
 
@@ -1088,18 +1055,6 @@ class Contact implements JsonSerializable {
         }
         $e = $this->preferredEmail ? : $this->email;
         return ($this->cflags & $disabled) === 0 && self::is_real_email($e);
-    }
-
-    /** @param string $email
-     * @return bool */
-    static function is_real_email($email) {
-        $len = strlen($email);
-        return ($at = strpos($email, "@")) !== false
-            && $at + 1 < $len
-            && $email[$at + 1] !== "_"
-            && ($at + 12 > $len
-                || (ord($email[$len - 11]) | 0x20) !== 0x65 /* 'e' */
-                || !preg_match('/\G[@.]example\.(?:com|net|org|edu)\z/i', $email, $m, 0, $len - 12));
     }
 
     /** @return int */
@@ -1293,6 +1248,24 @@ class Contact implements JsonSerializable {
         // see also PaperSearch, Mailer
         return substr_compare($email, "anonymous", 0, 9, true) === 0
             && (strlen($email) === 9 || ctype_digit(substr($email, 9)));
+    }
+
+    /** @param string $email
+     * @return bool */
+    static function is_example_email($email) {
+        $len = strlen($email);
+        return ($at = strpos($email, "@")) !== false
+            && $at + 1 < $len
+            && ($email[$at + 1] === "_"
+                || ($at + 12 <= $len
+                    && (ord($email[$len - 11]) | 0x20) === 0x65 /* 'e' */
+                    && preg_match('/\G[@.]example\.(?:com|net|org|edu)\z/i', $email, $m, 0, $len - 12)));
+    }
+
+    /** @param string $email
+     * @return bool */
+    static function is_real_email($email) {
+        return validate_email($email) && !self::is_example_email($email);
     }
 
     /** @return bool */
@@ -1782,7 +1755,7 @@ class Contact implements JsonSerializable {
         if ($prop === "roles") {
             return $value & ($this->cdb_confid === 0 ? self::ROLE_DBMASK : self::ROLE_CDBMASK);
         } else if ($prop === "cflags") {
-            return $value & self::CFM_DB;
+            return $value > 0 ? $value & self::CFM_DB : $value;
         } else {
             assert(false);
             return $value;
@@ -1939,7 +1912,7 @@ class Contact implements JsonSerializable {
 
     /** @param bool $confirm
      * @return bool */
-    function activate_placeholder_prop($confirm) {
+    private function activate_placeholder_prop($confirm) {
         $changed = false;
         if (($this->cflags & self::CF_PLACEHOLDER) !== 0) {
             $this->set_prop("cflags", $this->cflags & ~self::CF_PLACEHOLDER);
@@ -2040,6 +2013,20 @@ class Contact implements JsonSerializable {
         $this->_mod_undo = $this->_jdata = null;
         $this->_aucollab_matchers = $this->_aucollab_general_pregexes = null;
         $this->set_roles_properties();
+    }
+
+    /** @param bool $confirm
+     * @return bool */
+    function activate_placeholder($confirm) {
+        if (!$this->activate_placeholder_prop($confirm)) {
+            return false;
+        }
+        $this->save_prop();
+        if (($cdbu = $this->cdb_user())
+            && $cdbu->activate_placeholder_prop($confirm)) {
+            $cdbu->save_prop();
+        }
+        return true;
     }
 
 
@@ -2167,7 +2154,7 @@ class Contact implements JsonSerializable {
 
         // import properties from cdb
         if (!$localu) {
-            $this->_mod_undo = ["disabled" => 0, "cflags" => 0];
+            $this->_mod_undo = ["disabled" => -1, "cflags" => -1];
             foreach (self::importable_props() as $prop => $shape) {
                 $this->_mod_undo[$prop] = ($shape & self::PROP_NULL) !== 0 ? null : "";
             }

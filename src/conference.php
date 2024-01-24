@@ -354,7 +354,7 @@ class Conf {
 
     function load_settings() {
         $this->__load_settings();
-        if ($this->sversion < 288) {
+        if ($this->sversion < 289) {
             $old_nerrors = Dbl::$nerrors;
             while ((new UpdateSchema($this))->run()) {
                 usleep(50000);
@@ -3436,7 +3436,7 @@ class Conf {
     function set_site_path_relative($nav, $url) {
         if ($nav->site_path_relative !== $url) {
             $old_baseurl = $nav->base_path_relative;
-            $base = $nav->set_site_path_relative($url);
+            $nav->set_site_path_relative($url);
             if ($this->_assets_url === $old_baseurl) {
                 $this->_assets_url = $nav->base_path_relative;
                 Ht::$img_base = $this->_assets_url . "images/";
@@ -3455,6 +3455,7 @@ class Conf {
     const HOTURL_SERVERREL = 16;
     const HOTURL_NO_DEFAULTS = 32;
     const HOTURL_REDIRECTABLE = 64;
+    const HOTURL_MAYBE_POST = 128;
 
     /** @param string $page
      * @param null|string|array $params
@@ -3464,7 +3465,12 @@ class Conf {
         $qreq = Qrequest::$main_request;
         $amp = ($flags & self::HOTURL_RAW ? "&" : "&amp;");
         if (str_starts_with($page, "=")) {
-            $page = substr($page, 1);
+            if ($page[1] === "?") {
+                $flags |= self::HOTURL_MAYBE_POST;
+                $page = substr($page, 2);
+            } else {
+                $page = substr($page, 1);
+            }
             $flags |= self::HOTURL_POST;
         }
         $t = $page;
@@ -3512,8 +3518,13 @@ class Conf {
                 }
             }
         }
-        if ($flags & self::HOTURL_POST) {
-            $param .= "{$sep}post=" . $qreq->post_value();
+        if (($flags & (self::HOTURL_POST | self::HOTURL_MAYBE_POST)) !== 0) {
+            if (($flags & self::HOTURL_MAYBE_POST) !== 0) {
+                $post = $qreq->maybe_post_value();
+            } else {
+                $post = $qreq->post_value();
+            }
+            $param .= "{$sep}post={$post}";
             $sep = $amp;
         }
         // append forceShow to links to same paper if appropriate

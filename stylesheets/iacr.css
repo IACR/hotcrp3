@@ -8,6 +8,7 @@ body#body-help, body#body-settings, body.leftmenu {
     min-height: 80px;
 }
 /* Reposition the search bar so it doesn't appear below iacr logo */
+
 table.vbar {
   position: absolute;
   top: 40px;
@@ -44,15 +45,24 @@ table.vbar {
   top: 20px;
 }
 
-button.iacrButton {
+a.iacrButton, button.iacrButton {
   background-image: none;
   background-color: #4CAF50;
   color: white;
 }
-button.iacrButton:hover {
+a.iacrButton:hover, button.iacrButton:hover {
     background-image: none;
     background-color: green;
 }
+a.iacrButton {
+    display: inline-block;
+    margin: 10px 0 10px 0;
+    padding: 2px 7px 3px 7px;
+    border: 1px solid #222;
+    text-decoration: none;
+    border-radius: 5px;
+}
+
 p.login_instructions {
     max-width: 50%;
     margin-top: 10px;
@@ -171,4 +181,14 @@ div.iacrSetting div.entryi:not(:last-child):before {
 }
 div.iacrSetting input, div.iacrSetting textarea, div.iacrSetting select {
     pointer-events: none;
+}
+
+/* Hide some editing controls on the IACR settings. */
+div.option-3333 div.entryi:nth-child(5),
+div.option-3333 div.entryi:nth-child(6),
+div.option-3333 div.entryi:nth-child(7),
+div.option-3444 div.entryi:nth-child(5),
+div.option-3444 div.entryi:nth-child(6),
+div.option-3444 div.entryi:nth-child(7){
+    display:none;
 }

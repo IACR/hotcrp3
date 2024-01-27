@@ -458,7 +458,7 @@
 
     {
         "name": "json", "order": 2000,
-        "short_title": "Advanced", "title": "JSON site configuration <font color='red'>(extreme danger!)</font>",
+        "short_title": "Advanced", "title": "JSON site configuration <br><font color='red'>(editing is disabled in the IACR version)</font>",
         "description": "<0>Full site configuration in JSON.",
         "title_help_group": "jsonsettings",
         "print_function": "JSON_SettingParser::print",

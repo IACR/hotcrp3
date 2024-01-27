@@ -6,15 +6,12 @@ global $Conf;
 $Conf = initialize_conf();
 initialize_request();
 
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// THIS IS DEPRECATED SINCE HotCRP no longer stores a field in PaperOption
+// to show final version uploaded.
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function getFinalPaperOptionId() {
-  global $Conf;
-  $paper_options = $Conf->options()->universal();
-  foreach($paper_options as $id => $papt) {
-    if ($papt->iacrSetting == 'final_paper') {
-      return $id;
-    }
-  }
-  return NULL;
+  return PaperOption::IACRFINAL_ID;
 }
 
 function getLNCSFilename() {
@@ -22,6 +19,9 @@ function getLNCSFilename() {
   return '../filestore/lncs_' . $Me->contactId . '.json';
 }
 
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// THIS IS INVALID for CiC
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 // Fetches the final paper data from www.iacr.org using the API.
 // This does not check if all papers have uploaded their final,
 // so it may return incomplete data.

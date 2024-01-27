@@ -260,6 +260,9 @@ class Options_SettingParser extends SettingParser {
         if ($this->sfs->option_id <= 0) {
             $ij = $this->basic_intrinsic_json($this->sfs->option_id);
             $content = "Intrinsic field (" . htmlspecialchars($ij->name) . ")";
+         } elseif ($this->sfs->option_id == PaperOption::IACRFINAL_ID ||
+                   $this->sfs->option_id == PaperOption::IACRCOPYRIGHT_ID) {
+            $content = "IACR field";
         } else {
             $types = $this->conf->option_type_map();
             $curt = $types[$this->sfs->type];
@@ -364,7 +367,9 @@ class Options_SettingParser extends SettingParser {
                 Ht::button(Icons::ui_use("movearrow0"), ["class" => "btn-licon ui js-settings-sf-move moveup need-tooltip", "aria-label" => "Move up in display order"]),
                 Ht::button(Icons::ui_use("movearrow2"), ["class" => "btn-licon ui js-settings-sf-move movedown need-tooltip", "aria-label" => "Move down in display order"]),
                 '</span>';
-            if ($this->sfs->option_id > 0) {
+            if ($this->sfs->option_id === PaperOption::IACRFINAL_ID || $this->sfs->option_id === PaperOption::IACRCOPYRIGHT_ID) {
+                echo Ht::button(Icons::ui_use("trash"), ["class" => "btn-licon disabled need-tooltip", "aria-label" => "This IACR field cannot be deleted.", "tabindex" => -1]);
+            } elseif ($this->sfs->option_id > 0) {
                 echo Ht::button(Icons::ui_use("trash"), ["class" => "btn-licon ui js-settings-sf-move delete need-tooltip", "aria-label" => "Delete", "data-exists-count" => $this->option_use_count($this->sfs->option_id)]);
             } else {
                 echo Ht::button(Icons::ui_use("trash"), ["class" => "btn-licon disabled need-tooltip", "aria-label" => "This intrinsic field cannot be deleted.", "tabindex" => -1]);
@@ -444,8 +449,8 @@ class Options_SettingParser extends SettingParser {
         if ($this->sfs->existed && $mode !== self::MODE_SAMPLE) {
             $this->print_one_option_view($this->sfs->source_option, $sv, $ctr);
         }
-
-        echo '<div id="sf/', $ctr, '/edit" class="settings-xf-edit fx2">';
+        // IACR requires the option id as a class to modify the css.
+        echo '<div id="sf/', $ctr, '/edit" class="settings-xf-edit fx2 option-' . strval($this->sfs->option_id) . '">';
         if ($sv->has_req("sf/{$ctr}/template")) {
             echo Ht::hidden("sf/{$ctr}/template", $sv->reqstr("sf/{$ctr}/template"));
         }

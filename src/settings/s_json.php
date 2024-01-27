@@ -9,8 +9,8 @@ class JSON_SettingParser extends SettingParser {
         $mainj = $wantjreq ? $sv->reqstr("json_settings") : $defj;
         $mainh = htmlspecialchars($mainj);
         echo '<div class="settings-json-panels">',
-            '<div class="settings-json-panel-edit textarea">',
-            '<div class="pw need-settings-json uii ui-beforeinput" contenteditable spellcheck="false" autocapitalization="none" data-reflect-text="json_settings"';
+            '<div class="settings-json-panel-edit"><strong>Click on fields to view their role.</strong>', // contenteditable removed in IACR version.
+            '<div class="pw need-settings-json uii ui-beforeinput" spellcheck="false" autocapitalization="none" data-reflect-text="json_settings"';
         $hl = $tips = [];
         foreach ($sv->message_list() as $mi) {
             if ($mi->pos1 !== null
@@ -44,7 +44,8 @@ class JSON_SettingParser extends SettingParser {
             '</ul>',
             '</div></div></div>';
         // NB On Safari, HTMLTextAreaElement.setRangeText only works on displayed elements.
-        echo '<textarea name="json_settings" id="json_settings" class="position-absolute invisible"';
+        // IACR: make this text area disabled so you can't update it.
+        echo '<textarea name="json_settings" disabled id="json_settings" class="position-absolute invisible"';
         if ($mainj !== $defj) {
             echo ' data-default-value="', htmlspecialchars($defj), '"';
         }

@@ -3,6 +3,12 @@
         "name": "checkbox", "title": "Checkbox", "order": 100,
         "function": "+Checkbox_PaperOption"
     },
+  {
+    "name": "iacrfinal",
+    "title": "IACR Checkbox",
+    "order": 150,
+    "function": "+IACRFinal_PaperOption"
+  },
     {
         "name": "dropdown", "title": "Dropdown", "order": 200,
         "function": "+Selector_PaperOption",

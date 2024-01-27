@@ -12,6 +12,10 @@ class PaperOption implements JsonSerializable {
     const PCCONFID = -1006;
     const COLLABORATORSID = -1007;
     const SUBMISSION_VERSION_ID = -1008;
+    // These are added by the script that creates the instance. They are not
+    // treated as intrinsic, but have their own special treatment.
+    const IACRFINAL_ID = 3333;
+    const IACRCOPYRIGHT_ID = 3444;
 
     /** @var Conf
      * @readonly */
@@ -127,6 +131,7 @@ class PaperOption implements JsonSerializable {
         "slides" => "+Document_PaperOption",
         "video" => "+Document_PaperOption",
         "document" => "+Document_PaperOption",
+        "iacrfinal" => "+IACRFinal_PaperOption",
         "attachments" => "+Attachments_PaperOption",
         "topics" => "+Topics_PaperOption"
     ];
@@ -1082,6 +1087,7 @@ class Checkbox_PaperOption extends PaperOption {
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         $cb = Ht::checkbox($this->formid, 1, !!$reqov->value, [
             "id" => $this->readable_formid(),
+            "class" => get_class($this), // To recognize IACRFinal_PaperOption in iacr.js
             "data-default-checked" => !!$ov->value
         ]);
         $pt->print_editable_option_papt($this,
@@ -1116,6 +1122,27 @@ class Checkbox_PaperOption extends PaperOption {
 
     function parse_fexpr(FormulaCall $fcall, &$t) {
         return $this->present_fexpr();
+    }
+}
+
+class IACRFinal_PaperOption extends Checkbox_PaperOption {
+    function __construct(Conf $conf, $args) {
+        parent::__construct($conf, $args, "only-form");
+    }
+    function print_web_edit(PaperTable $pt, $ov, $reqov) {
+        // $this->id is from etc/intrinsicoptions.json
+        if ($this->id === -2) {
+          $iacrType = $this->conf->opt['iacrType'];
+          if ($iacrType === 'cic') {
+            $href = 'https://uploadicc.com/';
+          } else {
+            $href = 'https://uploadcrypto.com/';
+          }
+        } else {
+          $href = 'https://copyright.com/';
+        }
+        echo "<a class='iacrButton' target='_blank' href='$href'>", $this->name, "</a>";
+        parent::print_web_edit($pt, $ov, $reqov);
     }
 }
 

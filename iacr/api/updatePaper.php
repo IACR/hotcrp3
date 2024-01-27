@@ -38,15 +38,10 @@ if (empty($_POST['action']) || $_POST['action'] !== 'finalPaper') {
   exit;
 }
 try {
-  // Note that the ID number is the predefined option value defined in create_conf.py.
-  // This used to be hard-coded.
-  $optionId = getFinalPaperOptionId();
-  if (!$optionId) {
-    showError('Unable to update hotcrp: missing option');
-  } else {
-    $Conf->q("INSERT INTO PaperOption set paperId=?,optionId=?,value=?", $_POST['paperId'], $optionId, 1);
+    $Conf->q("UPDATE Paper set timeFinalSubmitted=? WHERE paperId=?", $Conf::$now, $_POST['paperId']);
+    $Conf->q("DELETE FROM PaperOption WHERE paperId=? AND optionId=?", $_POST['paperId'], PaperOption::IACRFINAL_ID);
+    $Conf->q("INSERT INTO PaperOption (paperId,optionId,value) VALUES (?,?,1)", $_POST['paperId'], PaperOption::IACRFINAL_ID);
     echo json_encode(array("response" => "ok"));
-  }
 } catch (PDOException $e) {
   showError('Database error: ' . $e->message());
 }

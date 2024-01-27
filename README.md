@@ -22,6 +22,21 @@ software internals, and developing extensions, check the [HotCRP development
 manual](./devel/manual/index.md) in `devel/manual`.
 
 
+IACR Changes
+------------
+
+This is a fork of hotcrp that adds some features for integration with
+the IACR publishing workflow. These features include:
+1. Automatically identifying potential conflicts of interest using [cryptodb](https://iacr.org/cryptodb). We
+   may switch to using a subset of DBLP in the future.
+2. Adding some fields to the submission form for
+   a. Uploading the final version.
+   b. Filling out copyright or license form.
+   c. Other fields that depend on the conference type.
+3. Uploading the list of accepted papers to the [IACR program editor](https://iacr.org/tools/program).
+4. Creation of LNCS front matter (where appropriate). This is a drag-and-drop web editor.
+5. Upload of slides for talks.
+
 Prerequisites
 -------------
 

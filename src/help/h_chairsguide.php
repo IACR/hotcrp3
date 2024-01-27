@@ -326,12 +326,11 @@ available.  The mail can also contain the reviews and comments
 themselves.</p></li>\n";
 
         } else if ($gj->itemid === 5) {
-            echo "<li><p><strong>", $hth->setting_link("Collect final papers (optional).", "final_open"),
-"</strong> If you’re putting together the program
-yourself, it can be convenient to collect final versions using HotCRP.
-Authors upload final versions just as they did submissions.  You can then ",
-$hth->search_link("download all final versions as a <code>.zip</code> archive", "dec:yes"),
-".  (The submitted versions are archived for reference.)</p></li>\n";
+          // IACR change.
+ echo "<li><p><strong>", $hth->setting_link("Collect final papers.", "final_open"),
+"</strong> IACR collects final versions of papers in a different way from other
+HotCRP instances. They get uploaded to a separate server, and instructions appear on
+the IACR Integration documentation.</p></li>\n";
         }
     }
 }

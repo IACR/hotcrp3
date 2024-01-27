@@ -2360,6 +2360,7 @@ class PaperTable {
         }
 
         echo "</div></form>";
+        Ht::stash_script("iacrSubmitAndUploadCheckboxes()");
         $this->user->set_overrides($overrides);
     }
 

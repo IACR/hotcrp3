@@ -12,11 +12,14 @@ class PaperOption implements JsonSerializable {
     const PCCONFID = -1006;
     const COLLABORATORSID = -1007;
     const SUBMISSION_VERSION_ID = -1008;
-    // These are added by the script that creates the instance. They are not
-    // treated as intrinsic, but have their own special treatment.
-    const IACRFINAL_ID = 3333;
-    const IACRCOPYRIGHT_ID = 3444;
-
+    // These are used by IACR, and added by the script that creates the instance.
+    // They are not treated as intrinsic, but have their own special treatment.
+    // IACR start
+    const IACR_FINAL_ID = 3333;
+    const IACR_COPYRIGHT_ID = 3444;
+    const IACR_SLIDES_ID = 3555;
+    const IACR_VIDEO_ID = 3666;
+    // IACR end
     /** @var Conf
      * @readonly */
     public $conf;
@@ -131,7 +134,10 @@ class PaperOption implements JsonSerializable {
         "slides" => "+Document_PaperOption",
         "video" => "+Document_PaperOption",
         "document" => "+Document_PaperOption",
-        "iacrfinal" => "+IACRFinal_PaperOption",
+        // IACR START
+        "iacrcb" => "+IACRCB_PaperOption",
+        "iacrlink" => "+IACRLink_PaperOption",
+        // IACR END
         "attachments" => "+Attachments_PaperOption",
         "topics" => "+Topics_PaperOption"
     ];
@@ -1087,7 +1093,9 @@ class Checkbox_PaperOption extends PaperOption {
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         $cb = Ht::checkbox($this->formid, 1, !!$reqov->value, [
             "id" => $this->readable_formid(),
-            "class" => get_class($this), // To recognize IACRFinal_PaperOption in iacr.js
+            // IACR START
+            "class" => get_class($this), // To recognize IACRCB_PaperOption in iacr.js
+            // IACR END
             "data-default-checked" => !!$ov->value
         ]);
         $pt->print_editable_option_papt($this,
@@ -1125,26 +1133,73 @@ class Checkbox_PaperOption extends PaperOption {
     }
 }
 
-class IACRFinal_PaperOption extends Checkbox_PaperOption {
+// IACR START
+require_once('/var/www/util/hotcrp/hmac.php');
+// for iacr_paperid and get_iacr_url
+require_once(SiteLoader::find("iacr/api/util.php"));
+
+class IACRCB_PaperOption extends Checkbox_PaperOption {
+  function __construct(Conf $conf, $args) {
+    parent::__construct($conf, $args, "only-form");
+  }
+  function print_web_edit(PaperTable $pt, $ov, $reqov) {
+        // Calculate the link to be shown.
+      $dbName = $this->conf->opt['dbName'];
+      $paperId = $pt->prow->paperId;
+      if ($paperId) {
+        $href = get_iacr_url($this->id, $paperId);
+      } else { // when it shows in the "settings" page.
+        $href = '';
+      }
+      if ($href === NULL) {
+        $this->name = 'An Error has occurred. Contact Administrator.';
+      }
+      $cb = Ht::checkbox($this->formid, 1, !!$reqov->value, [
+            "id" => $this->readable_formid(),
+            // IACR START
+            "class" => get_class($this), // To recognize IACRCB_PaperOption in iacr.js
+            // IACR END
+            "data-default-checked" => !!$ov->value
+        ]);
+        $pt->print_editable_option_papt($this, '<span class="checkc">' . $cb . '</span>' . $pt->edit_title_html($this),
+            ["for" => "checkbox", "tclass" => "ui js-click-child"]);
+        echo Ht::link($this->name, $href, array('class' => 'iacrButton', 'target' => '_blank'));
+        echo "</div>\n\n";
+    }
+}
+
+/* This option is used for phase:final to present a custom link for external
+   actions that do not require tracking in hotcrp. Examples include uploading
+   slides or video to the IACR server. The IACRCB_PaperOption shows a checkbox
+   to indicate when it has been completed, and requires a callback to set the
+   checkbox when it has been completed.
+   */
+
+Class IACRLink_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
         parent::__construct($conf, $args, "only-form");
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        // $this->id is from etc/intrinsicoptions.json
-        if ($this->id === -2) {
-          $iacrType = $this->conf->opt['iacrType'];
-          if ($iacrType === 'cic') {
-            $href = 'https://uploadicc.com/';
-          } else {
-            $href = 'https://uploadcrypto.com/';
-          }
-        } else {
-          $href = 'https://copyright.com/';
-        }
-        echo "<a class='iacrButton' target='_blank' href='$href'>", $this->name, "</a>";
-        parent::print_web_edit($pt, $ov, $reqov);
+      // Calculate the link to be shown.
+      $paperId = $pt->prow->paperId;
+      if ($paperId) {
+        $href = get_iacr_url($this->id, $paperId);
+      } else { // when it shows in the "settings" page.
+        $href = '';
+      }
+      if ($href === NULL) {
+        $this->name = 'An Error has occurred. Contact Administrator.';
+      }
+      echo '<div class="pf pfe">';
+      if (($h = $pt->edit_title_html($this))) {
+          echo '<h3 class="pfehead">', $h, '</h3>';
+      }
+      $pt->print_field_description($this);
+      echo Ht::link($this->name, $href, array('class' => 'iacrButton', 'target' => '_blank'));
+      echo '</div>';
     }
 }
+// IACR END
 
 trait Multivalue_OptionTrait {
     /** @var list<string> */

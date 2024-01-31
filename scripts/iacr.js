@@ -19,23 +19,8 @@ function removeClickEventOnCheckbox(cb) {
  *  This is used on the paper submission form.
  */
 function iacrSubmitAndUploadCheckboxes() {
-  let checkboxes = document.querySelectorAll('.IACRFinal_PaperOption');
+  let checkboxes = document.querySelectorAll('.IACRCB_PaperOption');
   for (let i = 0; i < checkboxes.length; i++) {
     removeClickEventOnCheckbox(checkboxes[i]);
   }
 }
-
-/*
-* Always look to hide final version uploader.
-*/
-window.addEventListener('DOMContentLoaded', (event) => {
-  console.log('event fired');
-  let elem = document.querySelector('foodiv.settings-sf-final');
-  // let elem = document.getElementById('final:uploader');
-  if (elem) {
-    console.log(elem);
-    elem.style.display = 'none';
-  } else {
-    console.log('no uploader');
-  }
-});

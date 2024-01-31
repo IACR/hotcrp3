@@ -39,8 +39,8 @@ if (empty($_POST['action']) || $_POST['action'] !== 'finalPaper') {
 }
 try {
     $Conf->q("UPDATE Paper set timeFinalSubmitted=? WHERE paperId=?", $Conf::$now, $_POST['paperId']);
-    $Conf->q("DELETE FROM PaperOption WHERE paperId=? AND optionId=?", $_POST['paperId'], PaperOption::IACRFINAL_ID);
-    $Conf->q("INSERT INTO PaperOption (paperId,optionId,value) VALUES (?,?,1)", $_POST['paperId'], PaperOption::IACRFINAL_ID);
+    $Conf->q("DELETE FROM PaperOption WHERE paperId=? AND optionId=?", $_POST['paperId'], PaperOption::IACR_FINAL_ID);
+    $Conf->q("INSERT INTO PaperOption (paperId,optionId,value) VALUES (?,?,1)", $_POST['paperId'], PaperOption::IACR_FINAL_ID);
     echo json_encode(array("response" => "ok"));
 } catch (PDOException $e) {
   showError('Database error: ' . $e->message());

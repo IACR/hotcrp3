@@ -65,25 +65,29 @@
            }
          }
        }
-       // remove parentheses from "IBM Research (Watson)"
-       let coa = data.coauthors;
-       for(let i = 0; i < coa.length; i++) {
-         let line = coa[i]['name'] + ' ';
-         let aff = coa[i]['affiliation'];
-         if (aff) {
-           aff = ' (' + aff.replace(/\(|\)/g, ' ') + ')';
-         } else {
-           aff = '';
+       if (data.error) {
+         showError(data.error);
+       } else {
+         // remove parentheses from "IBM Research (Watson)"
+         let coa = data.coauthors;
+         for(let i = 0; i < coa.length; i++) {
+           let line = coa[i]['name'] + ' ';
+           let aff = coa[i]['affiliation'];
+           if (aff) {
+             aff = ' (' + aff.replace(/\(|\)/g, ' ') + ')';
+           } else {
+             aff = '';
+           }
+           line += aff;
+           if (!collab.has(line)) {
+             collab.add(line.trim().replace(/\s{2,}/g, ' '));
+           }
          }
-         line += aff;
-         if (!collab.has(line)) {
-           collab.add(line.trim().replace(/\s{2,}/g, ' '));
-         }
+         showError('You may want to eliminate duplicates or add affiliations');
+         textareaNode.setAttribute('rows', Math.max(5, collab.size));
+         // sort to make it easier to spot duplicates
+         textareaNode.value = Array.from(collab.values()).sort().join('\n');
        }
-       showError('You may want to eliminate duplicates or add affiliations');
-       textareaNode.setAttribute('rows', Math.max(5, collab.size));
-       // sort to make it easier to spot duplicates
-       textareaNode.value = Array.from(collab.values()).sort().join('\n');
      }).catch(function(error) {
        console.dir(url);
        console.dir(error);

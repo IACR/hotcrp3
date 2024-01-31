@@ -11,10 +11,11 @@ initialize_request();
 // to show final version uploaded.
 // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function getFinalPaperOptionId() {
-  return PaperOption::IACRFINAL_ID;
+  return PaperOption::IACR_FINAL_ID;
 }
 
 function getLNCSFilename() {
+  // TODO: Switch to using Contact::$main_user
   global $Me;
   return '../filestore/lncs_' . $Me->contactId . '.json';
 }

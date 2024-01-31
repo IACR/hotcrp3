@@ -1618,6 +1618,7 @@ class UserStatus extends MessageSet {
         $us->cs()->add_section_class("w-text")->print_start_section();
         echo '<h3 class="', $us->control_class("collaborators", "form-h"), '">Collaborators and other affiliations</h3>', "\n",
             "<p>List potential conflicts of interest one per line, using parentheses for affiliations and institutions. We may use this information when assigning reviews.<br>Examples: “Ping Yen Zhang (INRIA)”, “All (University College London)”</p>";
+        include(SiteLoader::find('iacr/collaborators.inc'));
         if ($cd !== "" && preg_match('/<(?:p|div)[ >]/', $cd)) {
             echo $cd;
         } else {

@@ -32,7 +32,6 @@ table.vbar {
   margin-left: 10px;
   margin-right: 10px;
   position: relative;
-  top: 5px;
   background-image: url('https://iacr.org/img/logo/iacrlogo_small.png');
   background-size: 75px 75px;
   display:inline-block;
@@ -183,12 +182,11 @@ div.iacrSetting input, div.iacrSetting textarea, div.iacrSetting select {
     pointer-events: none;
 }
 
-/* Hide some editing controls on the IACR settings. */
-div.option-3333 div.entryi:nth-child(5),
-div.option-3333 div.entryi:nth-child(6),
-div.option-3333 div.entryi:nth-child(7),
-div.option-3444 div.entryi:nth-child(5),
-div.option-3444 div.entryi:nth-child(6),
-div.option-3444 div.entryi:nth-child(7){
+/* Hide some editing controls on the IACR settings. Specifically,
+hide Required, Visibility, Display
+*/
+div.iacroption div.entryi:nth-child(5),
+div.iacroption div.entryi:nth-child(6),
+div.iacroption div.entryi:nth-child(7) {
     display:none;
 }

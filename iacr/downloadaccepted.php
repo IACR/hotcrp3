@@ -67,7 +67,7 @@ try {
 
     unset($paper);
     header('Content-Type: application/json');
-    $data = array('_source' => 'IACR/hotcrp v1',
+    $data = array('_source' => 'IACR/hotcrp v2',
                   'acceptedPapers' => $papers);
     echo json_encode($data, JSON_PRETTY_PRINT);
     $db = null;

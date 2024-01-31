@@ -4,10 +4,16 @@
         "function": "+Checkbox_PaperOption"
     },
   {
-    "name": "iacrfinal",
+    "name": "iacrcb",
     "title": "IACR Checkbox",
     "order": 150,
-    "function": "+IACRFinal_PaperOption"
+    "function": "+IACRCB_PaperOption"
+  },
+  {
+    "name": "iacrlink",
+    "title": "IACR Link",
+    "order": 160,
+    "function": "+IACRLink_PaperOption"
   },
     {
         "name": "dropdown", "title": "Dropdown", "order": 200,

@@ -46,7 +46,7 @@ try {
   }
 
   unset($paper);
-  $data = array('_source' => 'IACR/hotcrp v1',
+  $data = array('_source' => 'IACR/hotcrp v2',
                 'shortName' => $Opt['shortName'],
                 'longName' => $Opt['longName'],
                 'venue' => $Opt['iacrType'],

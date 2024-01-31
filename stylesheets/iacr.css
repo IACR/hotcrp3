@@ -190,3 +190,9 @@ div.iacroption div.entryi:nth-child(6),
 div.iacroption div.entryi:nth-child(7) {
     display:none;
 }
+
+/* This hides the option to add submission classes. We don't
+use them. */
+button.js-settings-submission-round-new {
+    display:none !important;
+}

@@ -1,3 +1,68 @@
+# This is an IACR version of HotCRP.
+
+IACR Changes
+------------
+
+This is a fork of hotcrp that adds some features for integration with
+the IACR publishing workflow. These features include:
+1. Automatically identifying potential conflicts of interest using [cryptodb](https://iacr.org/cryptodb). We
+   may switch to using a subset of DBLP in the future.
+2. Adding some fields to the submission form for authors:
+   a. Uploading the final version.
+   b. Filling out copyright or license form.
+   c. Upload of slides and videos to an external web hosting framework
+      to facilitate integration with a conference website.
+3. Admin ability to upload the list of accepted papers to the
+   [IACR program editor](https://iacr.org/tools/program) and IACR conference websites.
+4. Creation of LNCS front matter (where appropriate). This is a drag-and-drop web editor.
+
+We use a python script to produce a new instance of HotCRP for each IACR
+conference or journal issue. That script is about a thousand lines and uses this
+codebase to start from, but customizes it based on some command line flags
+to specify the venue (e.g., eurocrypt), year, volume, issue, etc.  Features are
+added for each instance as appropriate, including
+
+1. integration with publish.iacr.org for cic.iacr.org.
+2. integration with www.iacr.org to accept uploaded final versions, slides, and videos.
+3. choice of an appropriate license/copyright form. These are stored externally from HotCRP.
+4. policy choices (e.g, blind submissions, long papers, resubmissions, keywords, areas).
+
+HotCRP is an amazing piece of software, but I still have a wishlist for the future:
+1. Stability rather than new features.
+2. Improved readability of code. There are very few comments thoughout the code, which
+   makes it a challenge to modify.
+3. Use of a template system to separate most logic and workflow from presentation.
+   A natural candidate would be Twig, which is now very stable for PHP and shares
+   some syntax with other systems like jinja. The current HotCRP system has
+   excretion of HTML fragments scattered throughout the code with over 1600
+   invocations of `echo`, which makes it difficult to work with. Unfortunately
+   this would be an almost complete rewrite of HotCRP.
+
+HotCRP can be regarded in the first of three steps in a publishing system for journals
+and conferences, namely
+
+1. submission, review, and acceptance (HotCRP).
+2. production and copy editing (ours is based on automatic LaTeX processing).
+3. publishing, archiving, and indexing
+
+Papers move in one direction 1 => 2 => 3.  HotCRP is the most complicated of
+these three parts because it mediates interaction between many parties. We
+accomplish 1 => 2 by providing external authenticated links in HotCRP pointing
+to the external system. In some cases (like successful upload of a final paper)
+there will be a REST API call made back to HotCRP (we use our own API that sets
+paper options with pre-defined IDs). This allows authors to know when they are
+finished with their paper in HotCRP. Authentication is done via simple HMACS
+with shared keys. We do not rely upon the HTTPS layer for authentication.
+
+We plan to make our platform for #2 open source in the future. It's currently
+11K lines of python and 6K lines of HTML templates. It runs LaTeX in a docker
+container when an author uploads their final version, and gives feedback to
+authors, copy editors, and editors.  For more information, see [this
+paper](https://arxiv.org/abs/2301.08277) and [this blog
+post](https://sigcrap.org/2023/12/a-new-academic-journal-publishing-platform/).
+The third part is the easiest, and we may also make ours open source in the
+future.  Both 2 and 3 are written in python.
+
 HotCRP Conference Review Software [![Build Status](https://github.com/kohler/hotcrp/actions/workflows/tests.yml/badge.svg)](https://github.com/kohler/hotcrp/actions/workflows/tests.yml)
 =================================
 
@@ -20,22 +85,6 @@ To learn more about configuring and using HotCRP, first check the extensive
 online help once you set it up. To learn about advanced configuration,
 software internals, and developing extensions, check the [HotCRP development
 manual](./devel/manual/index.md) in `devel/manual`.
-
-
-IACR Changes
-------------
-
-This is a fork of hotcrp that adds some features for integration with
-the IACR publishing workflow. These features include:
-1. Automatically identifying potential conflicts of interest using [cryptodb](https://iacr.org/cryptodb). We
-   may switch to using a subset of DBLP in the future.
-2. Adding some fields to the submission form for
-   a. Uploading the final version.
-   b. Filling out copyright or license form.
-   c. Other fields that depend on the conference type.
-3. Uploading the list of accepted papers to the [IACR program editor](https://iacr.org/tools/program).
-4. Creation of LNCS front matter (where appropriate). This is a drag-and-drop web editor.
-5. Upload of slides for talks.
 
 Prerequisites
 -------------

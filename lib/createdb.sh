@@ -394,7 +394,9 @@ if [ "$createdb" = y ]; then
     eval $MYSQLADMIN $mycreatedb_args $myargs $FLAGS --default-character-set=utf8 create $DBNAME || exit 1
 fi
 
-allhosts="localhost 127.0.0.1 localhost.localdomain$granthosts"
+# IACR only uses localhost
+#allhosts="localhost 127.0.0.1 localhost.localdomain$granthosts"
+allhosts="localhost"
 
 if [ "$createuser" = y ]; then
     $qecho "Creating $DBUSER user and password..."

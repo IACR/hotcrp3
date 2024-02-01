@@ -359,12 +359,13 @@ echo 'select User from user group by User;' | eval $MYSQL $mycreatedb_args $myar
 userexists="$?"
 
 createdb=y; createuser=y
-if $dbuser_existing && [ "$userexists" != 0 ]; then
-    echo "* The requested database user $DBUSER does not exist." 1>&2
-    exit 1
-elif $dbuser_existing; then
-    createuser=n
-fi
+# IACR removed this.
+#if $dbuser_existing && [ "$userexists" != 0 ]; then
+#    echo "* The requested database user $DBUSER does not exist." 1>&2
+#    exit 1
+#elif $dbuser_existing; then
+#    createuser=n
+#fi
 
 if [ "$createdb$dbexists" = y0 -o "$createuser$userexists" = y0 ]; then
     echo 1>&2
@@ -406,11 +407,12 @@ if [ "$createuser" = y ]; then
     for host in $allhosts; do
         echo "select User from user where User='$DBUSER' and Host='$host';" | eval $MYSQL $mycreatedb_args $myargs $FLAGS -N mysql | grep . >/dev/null 2>&1
         if [ $? = 0 ]; then
+            # IACR modify to add "IF EXISTS"
             if $verbose; then
-                echo ". DROP USER '$DBUSER'@'$host';"
+                echo ". DROP USER IF EXISTS '$DBUSER'@'$host';"
             fi
             eval $MYSQL $mycreatedb_args $myargs $FLAGS mysql <<__EOF__ || exit 1
-DROP USER '$DBUSER'@'$host';
+DROP USER IF EXISTS '$DBUSER'@'$host';
 __EOF__
         fi
         if $verbose; then

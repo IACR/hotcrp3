@@ -367,7 +367,9 @@ class Options_SettingParser extends SettingParser {
                 Ht::button(Icons::ui_use("movearrow0"), ["class" => "btn-licon ui js-settings-sf-move moveup need-tooltip", "aria-label" => "Move up in display order"]),
                 Ht::button(Icons::ui_use("movearrow2"), ["class" => "btn-licon ui js-settings-sf-move movedown need-tooltip", "aria-label" => "Move down in display order"]),
                 '</span>';
-            if ($this->sfs->option_id === PaperOption::IACR_FINAL_ID || $this->sfs->option_id === PaperOption::IACR_COPYRIGHT_ID) {
+            if ($this->sfs->option_id === PaperOption::IACR_FINAL_ID ||
+            $this->sfs->option_id === PaperOption::IACR_COPYRIGHT_ID ||
+            $this->sfs->option_id === PaperOption::IACR_PUBTYPE_ID) {
                 echo Ht::button(Icons::ui_use("trash"), ["class" => "btn-licon disabled need-tooltip", "aria-label" => "This IACR field cannot be deleted.", "tabindex" => -1]);
             } elseif ($this->sfs->option_id > 0) {
                 echo Ht::button(Icons::ui_use("trash"), ["class" => "btn-licon ui js-settings-sf-move delete need-tooltip", "aria-label" => "Delete", "data-exists-count" => $this->option_use_count($this->sfs->option_id)]);
@@ -454,7 +456,8 @@ class Options_SettingParser extends SettingParser {
         if ($this->sfs->option_id == PaperOption::IACR_FINAL_ID ||
             $this->sfs->option_id == PaperOption::IACR_COPYRIGHT_ID ||
             $this->sfs->option_id == PaperOption::IACR_SLIDES_ID ||
-            $this->sfs->option_id == PaperOption::IACR_VIDEO_ID) {
+            $this->sfs->option_id == PaperOption::IACR_VIDEO_ID ||
+            $this->sfs->option_id == PaperOption::IACR_PUBTYPE_ID) {
           $classes .= ' iacroption';
         }
         echo '<div id="sf/', $ctr, '/edit" class="', $classes, '">';

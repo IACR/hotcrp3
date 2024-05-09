@@ -196,3 +196,8 @@ use them. */
 button.js-settings-submission-round-new {
     display:none !important;
 }
+
+/* hide upload of final version to hotcrp (id=DTYPE_FINAL) */
+div#optionDiv_-1 {
+    display: none;
+}

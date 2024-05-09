@@ -489,7 +489,7 @@ class PaperTable {
         } else {
             $for = $rest["for"] ?? false;
         }
-        echo '<div class="pf pfe';
+        echo '<div id="optionDiv_' . $opt->id . '" class="pf pfe';
         if ((!$opt->test_exists($this->prow) && !$this->settings_mode)
             || ($rest["hidden"] ?? false)) {
             echo ' hidden';

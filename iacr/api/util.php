@@ -88,6 +88,21 @@ function get_iacr_url($optionId, $paperId) {
           $db = new PDO("mysql:host=localhost;dbname=$dbName;charset=utf8",
                         $Opt['dbUser'],
                         $Opt['dbPassword']);
+          $sql = "SELECT value FROM PaperOption where paperId=:paperId and optionId=:optionId";
+          $stmt = $db->prepare($sql);
+          $res = $stmt->bindParam(':paperId', $paperId, PDO::PARAM_INT);
+          $pubtype_id = PaperOption::IACR_PUBTYPE_ID;
+          $res = $stmt->bindParam(':optionId', $pubtype_id, PDO::PARAM_INT);
+          $res = $stmt->execute();
+          $row = $stmt->fetch(PDO::FETCH_ASSOC);
+          $pubtype = $row['value'];
+          error_log('pubtype was ' . $pubtype);
+          // These match what create_conf.py will create in the PaperOption table and the enum values
+          // publish.iacr.org expects.
+          $pubtype_values = array(1 => 'RESEARCH',
+                                  2 => 'SOK',
+                                  3 => 'ERRATA');
+          $pubtype = $pubtype_values[$pubtype];
           $sql = "SELECT timeSubmitted FROM Paper WHERE paperId=:paperId";
           $stmt = $db->prepare($sql);
           $res = $stmt->bindParam(':paperId', $paperId, PDO::PARAM_INT);
@@ -109,6 +124,7 @@ function get_iacr_url($optionId, $paperId) {
           $db = null;
           $iacr_paperid = iacr_paperid($paperId);
           $authmsg = $iacr_paperid . $Opt['shortName'] . $paperId . 'candidate' . $submitted . $accepted;
+          $authmsg = $authmsg . 'cic' . $Opt['volume'] . $Opt['issue'] . $pubtype;
           $auth = hash_hmac('sha256', $authmsg, $Opt['publish_shared_key']);
           $querydata = array('paperid' => $iacr_paperid,
                              'auth' => $auth,

@@ -53,9 +53,6 @@ function iacr_paperid($paperId) {
 
 require_once('/var/www/util/hotcrp/hmac.php');
 /**
- * NOTE: this is _not_ called for $optionId === IACR_FINAL_ID and iacrType == cic, because
- * those URLs go to publish.iacr.org. This is used only to go to www.iacr.org/submit.
- *
  * $optionId is one of IACR_FINAL_ID, IACR_SLIDES_ID, or IACR_VIDEO_ID
  * $paperId is the ID of the paper that this appears on.
  * $email is the email of the user.
@@ -136,7 +133,8 @@ function get_iacr_url($optionId, $paperId) {
                              'email' => $email,
                              'hotcrp' => $Opt['shortName'],
                              'hotcrp_id' => $paperId,
-                             'journal' => 'cic');
+                             'journal' => 'cic',
+                             'pubtype' => $pubtype);
           return 'https://publish.iacr.org/submit?' . http_build_query($querydata);
         } catch (PDOException $e) {
           $submitted = 'error';

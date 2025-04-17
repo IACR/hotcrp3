@@ -15,6 +15,8 @@ function dedup_strings($arr) {
 
 try {
     $db = new PDO("mysql:host=localhost;dbname=$dbname;charset=utf8", $Opt['dbUser'], $Opt['dbPassword']);
+    // First fetch final papers.
+    $finalData = getFinalPaperData();
     $sql = "SELECT paperId,title,authorInformation,abstract FROM Paper WHERE outcome > 0 AND timeWithdrawn = 0";
     $stmt = $db->query($sql);
     $papers = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -24,8 +26,6 @@ try {
       }
     }
 
-    // First fetch final papers.
-    $finalData = getFinalPaperData();
     $finalPapers = array();
     // Create finalPapers version of $finalData, keyed by paperId for easy lookup.
     foreach($finalData as &$paper) {

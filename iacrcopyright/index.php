@@ -1,8 +1,11 @@
 <?php
 require_once(dirname(__DIR__)."/conf/options.php");
 require_once(dirname(__DIR__)."/src/init.php");
-initialize_conf();
-initialize_request();
+$qreq = null;
+$conf = initialize_conf();
+$nav = Navigation::get();
+$qreq = initialize_request($conf, $nav);
+$user = initialize_user($qreq);
 require_once("src/paperrequest.php");
 
 function showError($msg) {

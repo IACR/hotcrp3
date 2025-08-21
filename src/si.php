@@ -1,6 +1,6 @@
 <?php
 // si.php -- HotCRP conference settings information class
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Si {
     /** @var Conf
@@ -27,6 +27,11 @@ class Si {
     /** @var ?Sitype
      * @readonly */
     private $_tclass;
+    /** @var ?list<string> */
+    private $tags;
+    /** @var ?list<string>
+     * @readonly */
+    public $member_tags;
     /** @var string
      * @readonly */
     private $title;
@@ -58,6 +63,9 @@ class Si {
     /** @var bool
      * @readonly */
     public $internal = false;
+    /** @var bool
+     * @readonly */
+    public $id_member = false;
     /** @var int
      * @readonly */
     public $storage_type;
@@ -109,6 +117,7 @@ class Si {
     static private $key_storage = [
         "autogrow" => "is_bool",
         "description" => "is_string",
+        "id_member" => "is_bool",
         "internal" => "is_bool",
         "json_values" => "Si::is_auto_or_list",
         "order" => "is_number",
@@ -159,6 +168,24 @@ class Si {
         foreach ((array) $j as $k => $v) {
             if (isset(self::$key_storage[$k])) {
                 $this->store($k, $j, $k, self::$key_storage[$k]);
+            }
+        }
+        if (isset($j->tags)) {
+            if (is_string($j->tags)) {
+                $this->tags = preg_split('/\s+/', trim($j->tags));
+            } else if (isset($j->tags) && is_string_list($j->tags)) {
+                $this->tags = $j->tags;
+            } else {
+                trigger_error("setting {$j->name}.tags format error");
+            }
+        }
+        if (isset($j->member_tags)) {
+            if (is_string($j->member_tags)) {
+                $this->member_tags = preg_split('/\s+/', trim($j->member_tags));
+            } else if (isset($j->member_tags) && is_string_list($j->member_tags)) {
+                $this->member_tags = $j->member_tags;
+            } else {
+                trigger_error("setting {$j->name}.member_tags format error");
             }
         }
         if (isset($j->configurable) && is_bool($j->configurable)) {
@@ -278,7 +305,7 @@ class Si {
         while ($p0 < $l && ($p1 = strpos($s, '$', $p0)) !== false) {
             $n = strspn($s, '$', $p1);
             if ($n === 1 && $p1 + 1 < $l && $s[$p1 + 1] === "{") {
-                $rb = SearchSplitter::span_balanced_parens($s, $p1 + 2, "", true);
+                $rb = SearchParser::span_balanced_parens($s, $p1 + 2, "", true);
                 if ($sv
                     && $rb < $l
                     && $s[$rb] === "}"
@@ -360,18 +387,16 @@ class Si {
             && ($this->storage_type === self::SI_MEMBER || $this->storage_type === self::SI_NONE)
             && str_starts_with($title, "/")) {
             return ltrim(substr($title, 1));
-        } else {
-            return $title;
         }
+        return $title;
     }
 
     /** @return ?string */
-    function title_html(SettingValues $sv = null) {
+    function title_html(?SettingValues $sv = null) {
         if (($t = $this->title($sv))) {
             return htmlspecialchars($t);
-        } else {
-            return null;
         }
+        return null;
     }
 
     /** @param string $subtype
@@ -426,14 +451,55 @@ class Si {
         if ($this->storage === null) {
             if ($this->storage_type === self::SI_MEMBER) {
                 return substr($this->name2, 1);
-            } else {
-                return $this->name;
             }
+            return $this->name;
         } else if ($this->name_parts === null) {
             return $this->storage;
-        } else {
-            return $this->_expand_pattern($this->storage, null);
         }
+        return $this->_expand_pattern($this->storage, null);
+    }
+
+    private function resolve_tags() {
+        $n = $this->name0;
+        if (str_ends_with($n, "/")) {
+            $n = substr($n, 0, -1);
+        }
+        if (($psi = $this->conf->si($n))) {
+            if ($psi->tags === null
+                && $psi->name_parts !== null) {
+                $psi->resolve_tags();
+            }
+            $this->tags = $psi->tags ?? [];
+        } else {
+            $this->tags = [];
+        }
+    }
+
+    /** @param SearchExpr $expr
+     * @param bool $member_tags
+     * @return bool */
+    function expr_matches($expr, $member_tags = false) {
+        if ($expr->kword) {
+            return false;
+        }
+        if (str_starts_with($expr->text, "#")) {
+            if ($this->tags === null
+                && $this->name_parts !== null) {
+                $this->resolve_tags();
+            }
+            $t = $member_tags ? $this->member_tags : $this->tags;
+            return $t !== null
+                && in_array(substr($expr->text, 1), $t, true);
+        }
+        if ($expr->text === "id") {
+            return $this->name_parts !== null
+                && $this->name2 === "/id";
+        }
+        $f = str_replace("\\*", ".*", preg_quote($expr->text, "/"));
+        if (!str_starts_with($f, ".*")) {
+            $f = "\\A" . $f;
+        }
+        return preg_match("/{$f}/", $this->name);
     }
 
     /** @return bool */
@@ -492,7 +558,7 @@ class Si {
         if ($this->pages === null && !$this->_has_pages) {
             $this->_collect_pages();
         }
-        return in_array($t, $this->pages ?? []);
+        return in_array($t, $this->pages ?? [], true);
     }
 
     /** @return bool */
@@ -532,9 +598,8 @@ class Si {
     function sv_hoturl($sv) {
         if ($this->hashid !== false && $this->has_tag($sv->canonical_page)) {
             return "#" . urlencode($this->hashid());
-        } else {
-            return $this->hoturl();
         }
+        return $this->hoturl();
     }
 
     /** @param SettingValues $sv
@@ -544,9 +609,8 @@ class Si {
             && $this->parser_class
             && ($v = $sv->si_parser($this)->values($this, $sv)) !== null) {
             return $v;
-        } else {
-            return $this->values !== "auto" ? $this->values : null;
         }
+        return $this->values !== "auto" ? $this->values : null;
     }
 
     /** @param SettingValues $sv
@@ -556,9 +620,8 @@ class Si {
             && $this->parser_class
             && ($v = $sv->si_parser($this)->json_values($this, $sv)) !== null) {
             return $v;
-        } else {
-            return $this->json_values !== "auto" ? $this->json_values : null;
         }
+        return $this->json_values !== "auto" ? $this->json_values : null;
     }
 
     /** @param SettingValues $sv
@@ -567,9 +630,8 @@ class Si {
         if ($this->placeholder === "auto"
             && $this->parser_class) {
             return $sv->si_parser($this)->placeholder($this, $sv);
-        } else {
-            return $this->placeholder;
         }
+        return $this->placeholder;
     }
 
     /** @param SettingValues $sv */
@@ -581,12 +643,10 @@ class Si {
         } else if (($this->storage_type & self::SI_DATA) !== 0) {
             if (str_starts_with($this->storage ?? "", "msg.")) {
                 return $sv->conf->fmt()->default_translation(substr($this->storage_name(), 4)) ?? "";
-            } else {
-                return $this->default_value ?? "";
             }
-        } else {
-            return $this->default_value;
+            return $this->default_value ?? "";
         }
+        return $this->default_value;
     }
 
     /** @param SettingValues $sv */
@@ -608,15 +668,15 @@ class Si {
     function parse_reqv($reqv, SettingValues $sv) {
         if ($reqv === null) {
             return $this->_tclass ? $this->_tclass->parse_null_vstr($this) : null;
-        } else if ($this->_tclass) {
-            $v = trim($reqv);
-            if ($v === $this->placeholder($sv)) {
-                $v = "";
-            }
-            return $this->_tclass->parse_reqv($v, $this, $sv);
-        } else {
+        }
+        if (!$this->_tclass) {
             throw new ErrorException("Don't know how to parse_reqv {$this->name}.");
         }
+        $v = trim($reqv);
+        if ($v === $this->placeholder($sv)) {
+            $v = "";
+        }
+        return $this->_tclass->parse_reqv($v, $this, $sv);
     }
 
     /** @param null|int|string $v
@@ -624,25 +684,23 @@ class Si {
     function base_unparse_reqv($v, SettingValues $sv) {
         if ($this->_tclass) {
             return $this->_tclass->unparse_reqv($v, $this, $sv);
-        } else {
-            return (string) $v;
         }
+        return (string) $v;
     }
 
     /** @param mixed $jv
      * @return ?string */
     function jsonv_reqstr($jv, SettingValues $sv) {
-        if ($this->_tclass) {
-            if (is_string($jv)) {
-                $jv = trim($jv);
-                if ($jv === $this->placeholder($sv)) {
-                    $jv = "";
-                }
-            }
-            return $this->_tclass->jsonv_reqstr($jv, $this, $sv);
-        } else {
+        if (!$this->_tclass) {
             throw new ErrorException("Don't know how to jsonv_reqstr {$this->name}.");
         }
+        if (is_string($jv)) {
+            $jv = trim($jv);
+            if ($jv === $this->placeholder($sv)) {
+                $jv = "";
+            }
+        }
+        return $this->_tclass->jsonv_reqstr($jv, $this, $sv);
     }
 
     /** @param null|int|string $v
@@ -650,14 +708,16 @@ class Si {
     function base_unparse_jsonv($v, SettingValues $sv) {
         if ($this->_tclass) {
             return $this->_tclass->unparse_jsonv($v, $this, $sv);
-        } else {
-            return $v;
         }
+        return $v;
     }
 
     /** @return mixed */
     function json_examples(SettingValues $sv) {
-        return $this->_tclass ? $this->_tclass->json_examples($this, $sv) : null;
+        if ($this->_tclass) {
+            return $this->_tclass->json_examples($this, $sv);
+        }
+        return null;
     }
 
     /** @param Si $xta

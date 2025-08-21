@@ -1,6 +1,6 @@
 <?php
 // xtparams.php -- HotCRP class for expanding extensions
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class XtParams {
     /** @var Conf */
@@ -11,8 +11,8 @@ class XtParams {
     public $alias = true;
     /** @var string */
     public $reflags = "";
-    /** @var ?list<callable(object,XtParams):(?bool)> */
-    public $allow_checkers;
+    /** @var ?string */
+    public $require_key;
     /** @var ?list<callable(string,object,XtParams):(?bool)> */
     public $primitive_checkers;
     /** @var ?object */
@@ -31,19 +31,23 @@ class XtParams {
         $this->user = $user;
     }
 
+    /** @param ?string $method
+     * @return $this */
+    function set_require_key_for_method($method) {
+        if ($method === null || $method === "") {
+            $this->require_key = null;
+        } else if ($method === "GET" || $method === "HEAD") {
+            $this->require_key = "get";
+        } else {
+            $this->require_key = strtolower($method);
+        }
+        return $this;
+    }
+
     /** @param object $xt
      * @return bool */
     function checkf($xt) {
-        if (isset($xt->allow_if) && !$this->check($xt->allow_if, $xt)) {
-            return false;
-        }
-        if ($this->allow_checkers !== null) {
-            foreach ($this->allow_checkers as $checker) {
-                if (($x = $checker($xt, $this)) !== nulL)
-                    return $x;
-            }
-        }
-        return true;
+        return !isset($xt->allow_if) || $this->check($xt->allow_if, $xt);
     }
 
     /** @param string $s
@@ -58,6 +62,8 @@ class XtParams {
             return !$user || $user->is_manager();
         } else if ($s === "pc") {
             return !$user || $user->isPC;
+        } else if ($s === "pc_member") {
+            return !$user || $user->is_pc_member();
         } else if ($s === "author") {
             return !$user || $user->is_author();
         } else if ($s === "reviewer") {
@@ -93,7 +99,7 @@ class XtParams {
             return self::resolve_comparison($v, $compar, $compval);
         } else if (str_starts_with($s, "setting.")) {
             list($x, $compar, $compval) = self::split_comparison($s);
-            $v = $this->conf->opt(substr($x, 8));
+            $v = $this->conf->setting(substr($x, 8));
             return self::resolve_comparison($v, $compar, $compval);
         } else if (str_starts_with($s, "conf.")) {
             $f = substr($s, 5);
@@ -101,16 +107,15 @@ class XtParams {
         } else if (str_starts_with($s, "user.")) {
             $f = substr($s, 5);
             return !$user || $user->$f();
-        } else {
-            if (isset($this->primitive_checkers)) {
-                foreach ($this->primitive_checkers as $checker) {
-                    if (($x = $checker($s, $xt, $this)) !== null)
-                        return $x;
-                }
-            }
-            error_log("unknown xt_check {$s}");
-            return false;
         }
+        if (isset($this->primitive_checkers)) {
+            foreach ($this->primitive_checkers as $checker) {
+                if (($x = $checker($s, $xt, $this)) !== null)
+                    return $x;
+            }
+        }
+        error_log("unknown xt_check {$s}");
+        return false;
     }
 
     /** @param string $s
@@ -143,9 +148,8 @@ class XtParams {
             return $v !== $compval;
         } else if ($compar === "=" || $compar === "==") {
             return $v === $compval;
-        } else {
-            return false;
         }
+        return false;
     }
 
     /** @param string $s
@@ -242,13 +246,12 @@ class XtParams {
             return $expr;
         } else if (is_string($expr)) {
             return $this->check_string($expr, $xt);
-        } else {
-            foreach ($expr as $e) {
-                if (!(is_bool($e) ? $e : $this->check_string($e, $xt)))
-                    return false;
-            }
-            return true;
         }
+        foreach ($expr as $e) {
+            if (!(is_bool($e) ? $e : $this->check_string($e, $xt)))
+                return false;
+        }
+        return true;
     }
 
     /** @param ?object $xt
@@ -268,9 +271,8 @@ class XtParams {
             return true;
         } else if (is_bool($xt->allow_if)) {
             return $xt->allow_if;
-        } else {
-            return (new XtParams($conf, $user))->check($xt->allow_if, $xt);
         }
+        return (new XtParams($conf, $user))->check($xt->allow_if, $xt);
     }
 
     /** @param ?object $xt
@@ -278,9 +280,8 @@ class XtParams {
     static function allow_list($xt) {
         if ($xt && isset($xt->allow_if)) {
             return is_array($xt->allow_if) ? $xt->allow_if : [$xt->allow_if];
-        } else {
-            return [];
         }
+        return [];
     }
 
     /** @param array<string,list<object>> $map
@@ -301,31 +302,38 @@ class XtParams {
     }
 
     /** @param list<object> $list
+     * @param int $first
+     * @param int $last
      * @return ?object */
-    function search_list($list) {
-        $nlist = count($list);
-        if ($nlist > 1) {
-            usort($list, "Conf::xt_priority_compare");
-        }
-        for ($i = 0; $i < $nlist; ++$i) {
-            $xt = $list[$i];
-            while ($i + 1 < $nlist && ($xt->merge ?? false)) {
-                ++$i;
-                $overlay = $xt;
-                $xt = clone $list[$i];
-                foreach (get_object_vars($overlay) as $k => $v) {
+    function search_slice($list, $first, $last) {
+        $reqkey = $this->require_key;
+        while ($first < $last) {
+            $xt = $list[$first];
+            ++$first;
+            if ($reqkey !== null && !($xt->{$reqkey} ?? null)) {
+                continue;
+            }
+            while ($first < $last && ($xt->merge ?? false)) {
+                $nxt = $list[$first];
+                ++$first;
+                if ($reqkey !== null && !($nxt->{$reqkey} ?? null)) {
+                    continue;
+                }
+                // apply overlay ($xt) to new base ($nxt)
+                $nxt = clone $nxt;
+                foreach (get_object_vars($xt) as $k => $v) {
                     if ($k === "merge" || $k === "__source_order") {
                         // skip
-                    } else if ($v === null) {
-                        unset($xt->{$k});
-                    } else if (!property_exists($xt, $k)
+                    } else if (!property_exists($nxt, $k)
                                || !is_object($v)
-                               || !is_object($xt->{$k})) {
-                        $xt->{$k} = $v;
+                               || !is_object($nxt->{$k})) {
+                        $nxt->{$k} = $v;
                     } else {
-                        object_replace_recursive($xt->{$k}, $v);
+                        object_replace_recursive($nxt->{$k}, $v);
                     }
                 }
+                // replace base
+                $xt = $nxt;
             }
             if (isset($xt->deprecated) && $xt->deprecated) {
                 $name = $xt->name ?? "<unknown>";
@@ -337,6 +345,16 @@ class XtParams {
             }
         }
         return null;
+    }
+
+    /** @param list<object> $list
+     * @return ?object */
+    function search_list($list) {
+        $n = count($list);
+        if ($n > 1) {
+            usort($list, "Conf::xt_priority_compare");
+        }
+        return $this->search_slice($list, 0, $n);
     }
 
     /** @param list<object> $factories

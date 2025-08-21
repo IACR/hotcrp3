@@ -124,6 +124,21 @@
         "print_function": "Submissions_SettingParser::print_pcseeallpdf",
         "settings": ["submitted_document_early_visibility"]
     },
+    {
+        "name": "submissions/preferences", "order": 60,
+        "title": "Review preferences"
+    },
+    {
+        "name": "submissions/prefshuffle", "order": 65,
+        "print_function": "Preference_SettingParser::print_pref_shuffle",
+        "settings": ["preference_shuffle"]
+    },
+    {
+        "name": "submissions/preffuzz", "order": 70,
+        "separator_before": true,
+        "print_function": "Preference_SettingParser::print_pref_fuzz",
+        "settings": ["preference_fuzz", "preference_fuzz_enable", "preference_fuzz_amount"]
+    },
 
 
     {
@@ -231,7 +246,7 @@
             "review_identity_visibility_pc",
             "review_visibility_pc",
             "review_visibility_lead",
-            "comment_visibility_anonymous"
+            "comment_visibility_reviewer"
         ]
     },
     {
@@ -271,7 +286,7 @@
     },
     {
         "name": "reviewform/main", "order": 10,
-        "print_function": "ReviewForm_SettingParser::print",
+        "print_function": "*ReviewForm_SettingParser::print",
         "settings": ["rf"]
     },
     {   "name": "rfo", "alias": "reviewform"   },
@@ -399,8 +414,8 @@
     {
         "name": "decisions/author-exchange-comments", "order": 120,
         "separator_before": true,
-        "print_function": "ReviewVisibility_SettingParser::print_author_exchange_comments",
-        "settings": ["comment_allow_author"]
+        "print_function": "Comment_SettingParser::print_author_exchange_comments",
+        "settings": ["comment_author", "comment_author_initiate"]
     },
     {
         "name": "__crosscheck/review-visibility", "order": 800,

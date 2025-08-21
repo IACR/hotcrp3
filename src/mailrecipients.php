@@ -1,6 +1,6 @@
 <?php
 // mailrecipients.php -- HotCRP mail tool
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class MailRecipientClass {
     /** @var string */
@@ -66,6 +66,13 @@ class MailRecipients extends MessageSet {
         $this->rect = $this->recipts[0];
     }
 
+    /** @return \Generator<MessageItem> */
+    function decorated_message_list() {
+        foreach ($this->message_list() as $mi) {
+            yield Mailer::decorated_message($mi);
+        }
+    }
+
     private function dcounts() {
         if ($this->_dcounts === null) {
             if ($this->user->allow_administer_all()) {
@@ -119,7 +126,8 @@ class MailRecipients extends MessageSet {
     function default_messages() {
         $dm = [];
         foreach ($this->recipts as $rec) {
-            if ($rec->default_message && !in_array($rec->default_message, $dm))
+            if ($rec->default_message
+                && !in_array($rec->default_message, $dm, true))
                 $dm[] = $rec->default_message;
         }
         return $dm;
@@ -350,7 +358,7 @@ class MailRecipients extends MessageSet {
 
     /** @return bool */
     function is_authors() {
-        return in_array($this->rect->name, ["s", "unsub", "au"])
+        return in_array($this->rect->name, ["s", "unsub", "au"], true)
             || str_starts_with($this->rect->name, "dec:");
     }
 
@@ -402,7 +410,7 @@ class MailRecipients extends MessageSet {
             $options["finalized"] = true;
         } else if ($t === "unsub") {
             $options["unsub"] = $options["active"] = true;
-        } else if (in_array($t, ["dec:any", "dec:none", "dec:yes", "dec:no", "dec:maybe"])) {
+        } else if (in_array($t, ["dec:any", "dec:none", "dec:yes", "dec:no", "dec:maybe"], true)) {
             $options["finalized"] = $options[$t] = true;
         } else if (substr($t, 0, 4) === "dec:") {
             $options["finalized"] = true;

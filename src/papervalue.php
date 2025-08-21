@@ -1,15 +1,11 @@
 <?php
 // papervalue.php -- HotCRP helper class for paper options
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
-class PaperValue implements JsonSerializable {
+final class PaperValue implements JsonSerializable {
     /** @var PaperInfo
      * @readonly */
     public $prow;
-    /** @var int
-     * @deprecated
-     * @readonly */
-    public $id;
     /** @var PaperOption
      * @readonly */
     public $option;
@@ -32,7 +28,6 @@ class PaperValue implements JsonSerializable {
      * @suppress PhanDeprecatedProperty */
     function __construct($prow, PaperOption $o) { // XXX should be private
         $this->prow = $prow;
-        $this->id = $o->id;
         $this->option = $o;
     }
     /** @param PaperInfo $prow
@@ -187,11 +182,7 @@ class PaperValue implements JsonSerializable {
     function invalidate() {
         $this->prow->invalidate_options(true);
         $this->load_value_data();
-    }
-    /** @param string $method
-     * @deprecated */
-    function call($method, ...$args) {
-        return $this->option->$method($this, ...$args);
+        $this->_anno = null;
     }
 
     /** @param string $name
@@ -224,34 +215,43 @@ class PaperValue implements JsonSerializable {
         }
         return $this->_ms;
     }
-    /** @param MessageSet $ms */
-    function append_messages_to($ms) {
-        if ($this->_ms) {
-            $ms->append_set($this->_ms);
-        }
+    /** @param MessageItem $mi
+     * @return MessageItem */
+    function append_item($mi) {
+        return $this->message_set()->append_item($mi);
     }
     /** @param string $field
      * @param ?string $msg
-     * @param -5|-4|-3|-2|-1|0|1|2|3 $status */
+     * @param -5|-4|-3|-2|-1|0|1|2|3 $status
+     * @deprecated */
     function msg_at($field, $msg, $status) {
-        $this->message_set()->msg_at($field, $msg, $status);
+        return $this->append_item(new MessageItem($status, $field, $msg));
     }
     /** @param ?string $msg
-     * @param -5|-4|-3|-2|-1|0|1|2|3 $status */
+     * @param -5|-4|-3|-2|-1|0|1|2|3 $status
+     * @deprecated */
     function msg($msg, $status) {
-        $this->message_set()->msg_at($this->option->field_key(), $msg, $status);
+        return $this->append_item(new MessageItem($status, $this->option->field_key(), $msg));
     }
-    /** @param ?string $msg */
+    /** @param ?string $msg
+     * @return MessageItem */
     function estop($msg) {
-        $this->msg($msg, MessageSet::ESTOP);
+        return $this->append_item(MessageItem::estop_at($this->option->field_key(), $msg));
     }
-    /** @param ?string $msg */
+    /** @param ?string $msg
+     * @return MessageItem */
     function error($msg) {
-        $this->msg($msg, MessageSet::ERROR);
+        return $this->append_item(MessageItem::error_at($this->option->field_key(), $msg));
     }
-    /** @param ?string $msg */
+    /** @param ?string $msg
+     * @return MessageItem */
     function warning($msg) {
-        $this->msg($msg, MessageSet::WARNING);
+        return $this->append_item(MessageItem::warning_at($this->option->field_key(), $msg));
+    }
+    /** @param ?string $msg
+     * @return MessageItem */
+    function inform($msg) {
+        return $this->append_item(MessageItem::inform_at($this->option->field_key(), $msg));
     }
     /** @return int */
     function problem_status() {
@@ -264,6 +264,10 @@ class PaperValue implements JsonSerializable {
     /** @return list<MessageItem> */
     function message_list() {
         return $this->_ms ? $this->_ms->message_list() : [];
+    }
+    /** @return string */
+    function field_key() {
+        return $this->option->field_key();
     }
     #[\ReturnTypeWillChange]
     function jsonSerialize() {

@@ -1,6 +1,6 @@
 <?php
 // documentinfoset.php -- HotCRP document set
-// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class DocumentInfoSet_ZipInfo {
     /** @var ?int */
@@ -41,12 +41,16 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     private $docs = [];
     /** @var ?MessageSet */
     private $_ms;
+    /** @var int */
+    private $_message_timestamp = 1634070069; /* ❤️ Anne Dudfield */
     /** @var ?string */
     private $_filename;
     /** @var string */
     private $_mimetype = "application/zip";
-    /** @var ?string|false */
-    private $_tmpdir;
+    /** @var bool */
+    private $_have_tempdir = false;
+    /** @var ?string */
+    private $_tempdir;
     /** @var ?list<string> */
     private $_dirfn;
     /** @var ?string */
@@ -55,6 +59,8 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     private $_zipi;
     /** @var ?string */
     private $_signature;
+    /** @var ?string */
+    private $_signature_messages;
 
     /** @param ?string $filename */
     function __construct($filename = null) {
@@ -67,17 +73,17 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
         $this->_mimetype = $mimetype;
     }
 
-    /** @return bool */
+    /** @return ?DocumentInfo */
     function add(DocumentInfo $doc) {
         return $this->add_as($doc, $doc->filename ?? "");
     }
-    /** @return false */
+    /** @return null */
     private function _add_fail(DocumentInfo $doc, $fn) {
         error_log("{$this->conf->dbname}: failing to add #{$doc->paperStorageId} at $fn");
-        return false;
+        return null;
     }
     /** @param string $fn
-     * @return bool */
+     * @return ?DocumentInfo */
     function add_as(DocumentInfo $doc, $fn) {
         if ($this->_filename) { // might generate a .zip later; check filename
             assert(!$doc->has_error() && $fn !== "");
@@ -88,18 +94,19 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
             }
             while ($slash !== false) {
                 $dir = substr($fn, 0, $slash);
-                if (in_array($dir, $this->ufn)) {
+                if (in_array($dir, $this->ufn, true)) {
                     return $this->_add_fail($doc, $fn);
-                } else if (!in_array($dir, $this->_dirfn ?? [])) {
+                }
+                if (!in_array($dir, $this->_dirfn ?? [], true)) {
                     $this->_dirfn[] = $dir;
                 }
                 $slash = strpos($fn, "/", $slash + 1);
             }
-            if ($this->_dirfn !== null && in_array($fn, $this->_dirfn)) {
+            if ($this->_dirfn !== null && in_array($fn, $this->_dirfn, true)) {
                 return $this->_add_fail($doc, $fn);
             }
         }
-        while ($fn !== "" && in_array($fn, $this->ufn)) {
+        while ($fn !== "" && in_array($fn, $this->ufn, true)) {
             if (preg_match('/\A(.*\()(\d+)(\)(?:\.\w+|))\z/', $fn, $m)) {
                 $fn = $m[1] . ((int) $m[2] + 1) . $m[3];
             } else if (preg_match('/\A(.*?)(\.\w+|)\z/', $fn, $m) && $m[1] !== "") {
@@ -110,16 +117,15 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
         }
         $this->ufn[] = $fn;
         $this->docs[] = $doc->with_member_filename($fn);
-        return true;
+        $this->_signature = null;
+        return $doc;
     }
     /** @param string $text
      * @param string $fn
      * @param ?string $mimetype
-     * @param ?int $timestamp
-     * @return bool */
-    function add_string_as($text, $fn, $mimetype = null, $timestamp = null) {
+     * @return DocumentInfo */
+    function add_string_as($text, $fn, $mimetype = null) {
         $doc = DocumentInfo::make_content($this->conf, $text, $mimetype ?? "text/plain")
-            ->set_timestamp($timestamp ?? Conf::$now)
             ->set_filename($fn);
         return $this->add_as($doc, $fn);
     }
@@ -181,7 +187,7 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     function offsetExists($offset) {
         return is_int($offset)
             ? isset($this->docs[$offset])
-            : $offset !== "" && in_array($offset, $this->ufn);
+            : $offset !== "" && in_array($offset, $this->ufn, true);
     }
     #[\ReturnTypeWillChange]
     /** @param int|string $offset
@@ -201,9 +207,14 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
         throw new Exception("invalid DocumentInfoSet::offsetUnset");
     }
 
-    /** @return bool */
+    /** @return bool
+     * @deprecated */
     function has_error() {
         return $this->_ms && $this->_ms->has_error();
+    }
+    /** @return bool */
+    function has_message() {
+        return $this->_ms && $this->_ms->has_message();
     }
     /** @return MessageSet */
     function message_set() {
@@ -219,14 +230,23 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     function error($msg) {
         return $this->message_set()->error_at(null, $msg);
     }
-
-    /** @return string|false */
-    private function _tmpdir() {
-        if ($this->_tmpdir === null
-            && ($this->_tmpdir = tempdir()) === false) {
-            $this->error("<0>Could not create temporary directory");
+    /** @param int $timestamp */
+    function add_message_timestamp($timestamp) {
+        if ($timestamp > $this->_message_timestamp) {
+            $this->_message_timestamp = $timestamp;
+            $this->_signature = null;
         }
-        return $this->_tmpdir;
+    }
+
+    /** @return ?string */
+    private function _tempdir() {
+        if (!$this->_have_tempdir) {
+            $this->_have_tempdir = true;
+            if (!($this->_tempdir = tempdir())) {
+                $this->error("<0>Could not create temporary directory");
+            }
+        }
+        return $this->_tempdir;
     }
     private function _hotzip_progress() {
         // assign local headers
@@ -248,8 +268,10 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
                 $zi->compressed_length = $doc->size();
             }
             if ($doc->timestamp > 1) {
-                $dt = new DateTime("@" . (int) $doc->timestamp, $doc->conf->timezone());
-                if (($y = (int) $dt->format("Y")) > 1980) {
+                // NB despite timezone, `format` returns relative to UTC
+                $dt = new DateTimeImmutable("@" . (int) $doc->timestamp, $doc->conf->timezone());
+                if (($y = (int) $dt->format("Y")) > 1980
+                    && $y <= 2099) {
                     $zi->date = (int) $dt->format("j")
                         | ((int) $dt->format("n") << 5)
                         | (($y - 1980) << 9);
@@ -372,38 +394,49 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
             0                 // .ZIP file comment length
         );
     }
+
     /** @return int */
     private function _hotzip_filesize() {
         $nz = count($this->_zipi);
         assert($nz === count($this->docs) + 1);
         return $this->_zipi[$nz - 1]->central_end_offset();
     }
+
     private function _hotzip_make() {
         $this->_hotzip_progress();
-        if ($this->has_error()) {
-            $this->add_string_as($this->_ms->full_feedback_text(), "README-warnings.txt");
+        if ($this->_ms
+            && ($readme_txt = $this->_ms->full_feedback_text()) !== ""
+            && ($doc = $this->add_string_as($readme_txt, "README-warnings.txt"))) {
+            $doc->set_timestamp($this->_message_timestamp);
             $this->_hotzip_progress();
         }
         $this->_hotzip_final();
     }
+
     /** @return string */
     private function content_signature() {
-        if ($this->_signature === null) {
-            $s = count($this->docs) . "\n";
-            foreach ($this->docs as $doc) {
-                $s .= $doc->member_filename() . "\n" . $doc->text_hash() . "\n";
-            }
-            if ($this->has_error()) {
-                $s .= "README-warnings.txt\nsha2-" . hash("sha256", $this->_ms->full_feedback_text()) . "\n";
-            }
-            $this->_signature = "content.sha2-" . hash("sha256", $s);
+        $readme_txt = $this->_ms ? $this->_ms->full_feedback_text() : "";
+        if ($this->_signature !== null
+            && $this->_signature_messages === $readme_txt) {
+            return $this->_signature;
         }
+        $s = count($this->docs) . "\n";
+        foreach ($this->docs as $doc) {
+            $s .= "{$doc->member_filename()}\n{$doc->text_hash()} {$doc->size()} {$doc->timestamp}\n";
+        }
+        if ($readme_txt !== "") {
+            $hash = hash("sha256", $readme_txt);
+            $len = strlen($readme_txt);
+            $s .= "README-warnings.txt\nsha2-{$hash} {$len} {$this->_message_timestamp}\n";
+        }
+        $this->_signature = "content.sha2-" . hash("sha256", $s);
+        $this->_signature_messages = $readme_txt;
         return $this->_signature;
     }
 
     /** @return ?DocumentInfo */
     function make_zip_document() {
-        if (($dstore_tmp = Filer::docstore_tempdir($this->conf))) {
+        if (($dstore_tmp = $this->conf->docstore_tempdir())) {
             $this->_filestore = $dstore_tmp . $this->content_signature() . ".zip";
             // maybe zipfile with that signature already exists
             if (file_exists($this->_filestore)) {
@@ -416,11 +449,11 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
 
         // otherwise, need to create new .zip
         if (!$this->_filestore) {
-            if (!($tmpdir = $this->_tmpdir())) {
+            if (!($tempdir = $this->_tempdir())) {
                 $this->error("<0>Cannot create temporary directory");
                 return null;
             }
-            $this->_filestore = "{$tmpdir}/_hotcrp.zip";
+            $this->_filestore = "{$tempdir}_hotcrp.zip";
         }
 
         if (!($out = fopen("{$this->_filestore}~", "wb"))) {
@@ -476,7 +509,7 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
     /** @param resource $out
      * @param int $r0
      * @param int $r1 */
-    private function _write_range($out, $r0, $r1) {
+    function write_range($out, $r0, $r1) {
         $d0 = 0;
         while ($d0 !== count($this->docs)
                && $this->_zipi[$d0]->local_end_offset() <= $r0) {
@@ -516,18 +549,34 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
         }
     }
 
-    /** @param Downloader $dopt
-     * @return bool */
-    private function _download_directly($dopt) {
+    /** @return bool */
+    function prepare_download(Downloader $dopt) {
+        if (!$this->_filename) {
+            throw new Exception("trying to download blank-named DocumentInfoSet");
+        }
+
+        if (count($this->docs) === 1
+            && !$this->has_message()
+            && $dopt->single) {
+            $doc = $this->docs[0];
+            if ($doc->prepare_download($dopt)) {
+                return true;
+            }
+            foreach ($doc->message_list() as $mi) {
+                $this->message_set()->append_item($mi->with_landmark($doc->export_filename()));
+            }
+            return false;
+        }
+
         $dopt->etag = "\"" . $this->content_signature() . "\"";
-        if ($dopt->run_match()) {
+        if (!$dopt->check_match()) {
             return true;
         }
 
         $this->_hotzip_make();
-        $dopt->content_length = $this->_hotzip_filesize();
-        $dopt->mimetype = Mimetype::type_with_charset($this->_mimetype);
-        if ($dopt->run_range_check()) {
+        $dopt->set_content_length($this->_hotzip_filesize());
+        $dopt->set_mimetype(Mimetype::type_with_charset($this->_mimetype));
+        if (!$dopt->check_ranges()) {
             return true;
         }
 
@@ -536,47 +585,34 @@ class DocumentInfoSet implements ArrayAccess, IteratorAggregate, Countable {
             ini_set("zlib.output_compression", "0");
         }
         if ($dopt->range === null) {
-            $attachment = $dopt->attachment ?? !Mimetype::disposition_inline($this->_mimetype);
-            header("Content-Disposition: " . ($attachment ? "attachment" : "inline") . "; filename=" . mime_quote_string($this->_filename));
-            // reduce likelihood of XSS attacks in IE
-            header("X-Content-Type-Options: nosniff");
+            $dopt->set_filename($this->_filename);
         }
         if ($dopt->cacheable) {
-            header("Cache-Control: max-age=315576000, private");
-            header("Expires: " . gmdate("D, d M Y H:i:s", Conf::$now + 315576000) . " GMT");
+            $dopt->header("Cache-Control: max-age=315576000, private");
+            $dopt->header("Expires: " . gmdate("D, d M Y H:i:s", Conf::$now + 315576000) . " GMT");
         }
         if ($dopt->log_user && $dopt->range_overlaps(0, 4096)) {
             DocumentInfo::log_download_activity($this->as_list(), $dopt->log_user);
         }
-        $out = fopen("php://output", "wb");
-        foreach ($dopt->run_output_ranges() as $r) {
-            $this->_write_range($out, $r[0], $r[1]);
-        }
-        fclose($out);
+        $dopt->set_content_function([$this, "write_range"]);
         return true;
     }
 
     /** @param ?Downloader $dopt
      * @return bool */
-    function download($dopt = null) {
-        if (!$this->_filename) {
-            throw new Exception("trying to download blank-named DocumentInfoSet");
-        }
+    function emit($dopt = null) {
         $dopt = $dopt ?? new Downloader;
-        if (count($this->docs) === 1
-            && !$this->has_error()
-            && $dopt->single) {
-            $doc = $this->docs[0];
-            if ($doc->download($dopt)) {
-                return true;
-            } else {
-                foreach ($doc->message_list() as $mi) {
-                    $this->message_set()->append_item($mi->with_landmark($doc->export_filename()));
-                }
-                return false;
-            }
-        } else {
-            return $this->_download_directly($dopt);
+        if (!$this->prepare_download($dopt)) {
+            return false;
         }
+        $dopt->emit();
+        return true;
+    }
+
+    /** @param ?Downloader $dopt
+     * @return bool
+     * @deprecated */
+    function download($dopt = null) {
+        return $this->emit($dopt);
     }
 }

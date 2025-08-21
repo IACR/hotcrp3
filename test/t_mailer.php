@@ -1,6 +1,6 @@
 <?php
 // t_mailer.php -- HotCRP tests
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Mailer_Tester {
     /** @var Conf
@@ -17,11 +17,10 @@ class Mailer_Tester {
         }
         ob_start();
         try {
-            $ms = new MailSender($mr, $qreq);
+            $ms = new MailSender($mr, $qreq, 2);
             $ms->set_template($template);
             $ms->set_no_print(true)->set_send_all(true);
             $ms->prepare_sending_mailid();
-            $ms->set_phase(2);
             $ms->run();
         } catch (PageCompletion $unused) {
         }

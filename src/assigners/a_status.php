@@ -1,6 +1,6 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Status_Assignable extends Assignable {
     /** @var ?int */
@@ -17,12 +17,15 @@ class Status_Assignable extends Assignable {
      * @param ?string $withdraw_reason
      * @param ?bool $notify */
     function __construct($pid, $submitted = null, $withdrawn = null, $withdraw_reason = null, $notify = null) {
-        $this->type = "status";
         $this->pid = $pid;
         $this->_submitted = $submitted;
         $this->_withdrawn = $withdrawn;
         $this->_withdraw_reason = $withdraw_reason;
         $this->_notify = $notify;
+    }
+    /** @return string */
+    function type() {
+        return "status";
     }
     /** @return self */
     function fresh() {
@@ -30,30 +33,38 @@ class Status_Assignable extends Assignable {
     }
 }
 
-class Withdraw_PreapplyFunction implements AssignmentPreapplyFunction {
+class WithdrawVotesAssigner implements AssignmentPreapplyFunction {
     // When withdrawing a paper, remove voting tags so people don't have
     // phantom votes.
-    private $pid;
-    private $ltag;
-    function __construct($pid) {
-        $this->pid = $pid;
+    private $pids = [];
+    function __construct(AssignmentState $astate) {
+    }
+    function add_paper(PaperInfo $prow) {
+        $this->pids[] = $prow->paperId;
     }
     function preapply(AssignmentState $state) {
-        $res = $state->query_items(new Status_Assignable($this->pid));
-        if (!$res
-            || $res[0]["_withdrawn"] <= 0
-            || $res[0]->pre("_withdrawn") > 0) {
+        $wpids = [];
+        foreach ($this->pids as $pid) {
+            $res = $state->query_items(new Status_Assignable($pid));
+            if ($res
+                && $res[0]["_withdrawn"] > 0
+                && $res[0]->pre("_withdrawn") <= 0) {
+                $wpids[] = $pid;
+            }
+        }
+        if (empty($wpids)) {
             return;
         }
         $ltre = [];
         foreach ($state->conf->tags()->entries_having(TagInfo::TFM_VOTES) as $ti) {
             $ltre[] = $ti->tag_regex();
         }
-        $res = $state->query(new Tag_Assignable($this->pid, null));
         $tag_re = '{\A(?:\d+~|)(?:' . join("|", $ltre) . ')\z}i';
-        foreach ($res as $x) {
-            if (preg_match($tag_re, $x->ltag)) {
-                $state->add(new Tag_Assignable($this->pid, $x->ltag, null, null, true));
+        foreach ($wpids as $pid) {
+            foreach ($state->query(new Tag_Assignable($pid, null)) as $x) {
+                if (preg_match($tag_re, $x->ltag)) {
+                    $state->add(new Tag_Assignable($pid, $x->ltag, null, null, true));
+                }
             }
         }
     }
@@ -106,7 +117,7 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                 $res->_submitted = -$res->_submitted;
                 if ($state->conf->tags()->has(TagInfo::TFM_VOTES)) {
                     Tag_Assignable::load($state);
-                    $state->register_preapply_function("withdraw {$prow->paperId}", new Withdraw_PreapplyFunction($prow->paperId));
+                    $state->callable("WithdrawVotesAssigner")->add_paper($prow);
                 }
             }
             $r = $req["withdraw_reason"];
@@ -223,7 +234,7 @@ class Status_Assigner extends Assigner {
 
         // email reviewers
         foreach ($prow->reviewers_as_display() as $minic) {
-            if (!in_array($minic->contactId, $sent)
+            if (!in_array($minic->contactId, $sent, true)
                 && $minic->following_reviews($prow, CommentInfo::CT_TOPIC_PAPER)
                 && ($p = HotCRPMailer::prepare_to($minic, "@withdrawreviewer", $rest))) {
                 if (!$minic->can_view_review_identity($prow, null)) {
@@ -238,7 +249,7 @@ class Status_Assigner extends Assigner {
         if ($this->item->pre("_submitted") > 0
             && !$prow->submission_round()->time_submit(true)) {
             foreach ($prow->late_withdrawal_followers() as $minic) {
-                if (!in_array($minic->contactId, $sent)
+                if (!in_array($minic->contactId, $sent, true)
                     && ($p = HotCRPMailer::prepare_to($minic, $tmpl, $rest))) {
                     $preps[] = $p;
                     $sent[] = $minic->contactId;

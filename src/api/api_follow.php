@@ -1,5 +1,5 @@
 <?php
-// api/api_follow.php -- HotCRP paper-related API calls
+// api_follow.php -- HotCRP paper-related API calls
 // Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class Follow_API {
@@ -8,7 +8,7 @@ class Follow_API {
         $reviewer = APIHelpers::parse_reviewer_for($qreq->u ?? $qreq->reviewer, $user, $prow);
         $following = friendly_boolean($qreq->following);
         if ($following === null) {
-            return ["ok" => false, "error" => "Bad `following`"];
+            return JsonResult::make_parameter_error("following", "Expected boolean");
         }
         $bits = Contact::WATCH_REVIEW_EXPLICIT | ($following ? Contact::WATCH_REVIEW : 0);
         $user->conf->qe("insert into PaperWatch set paperId=?, contactId=?, watch=? on duplicate key update watch=(watch&~?)|?",

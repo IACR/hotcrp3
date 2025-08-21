@@ -26,8 +26,8 @@ use Phan\Config;
  */
 return (function () {
 $config = [
-    "minimum_target_php_version" => "7.0",
-    "target_php_version" => "8.2",
+    "minimum_target_php_version" => "7.2",
+    "target_php_version" => "8.4",
 
     // If true, missing properties will be created when
     // they are first seen. If false, we'll report an
@@ -85,6 +85,7 @@ $config = [
         Config::projectPath("index.php"),
         Config::projectPath("log.php"),
         Config::projectPath("mail.php"),
+        Config::projectPath("manageemail.php"),
         Config::projectPath("manualassign.php"),
         Config::projectPath("mergeaccounts.php"),
         Config::projectPath("newaccount.php"),
@@ -105,6 +106,10 @@ $config = [
         Config::projectPath("batch/downgradedb.php"),
         Config::projectPath("lib/collatorshim.php"),
         Config::projectPath("lib/polyfills.php")
+    ],
+
+    "exclude_analysis_directory_list" => [
+        Config::projectPath("test/oauth")
     ],
 
     "suppress_issue_types" => [

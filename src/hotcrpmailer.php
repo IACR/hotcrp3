@@ -295,24 +295,23 @@ class HotCRPMailer extends Mailer {
                 return ($rrow1 ?? $rrow0)->deadline_name();
             }
         }
-        if ($this->recipient && $this->recipient->isPC) {
-            $bestdl = $bestdln = null;
-            foreach ($this->conf->defined_rounds() as $i => $round_name) {
-                $dln = "pcrev_soft" . ($i ? "_{$i}" : "");
-                if (($dl = $this->conf->setting($dln))) {
-                    if (!$bestdl
-                        || ($bestdl < Conf::$now
-                            ? $dl < $bestdl || $dl >= Conf::$now
-                            : $dl >= Conf::$now && $dl < $bestdl)) {
-                        $bestdl = $dl;
-                        $bestdln = $dln;
-                    }
-                }
-            }
-            return $bestdln;
-        } else {
+        if (!$this->recipient || !$this->recipient->isPC) {
             return null;
         }
+        $bestdl = $bestdln = null;
+        foreach ($this->conf->defined_rounds() as $i => $round_name) {
+            $dln = "pcrev_soft" . ($i ? "_{$i}" : "");
+            if (($dl = $this->conf->setting($dln))) {
+                if (!$bestdl
+                    || ($bestdl < Conf::$now
+                        ? $dl < $bestdl || $dl >= Conf::$now
+                        : $dl >= Conf::$now && $dl < $bestdl)) {
+                    $bestdl = $dl;
+                    $bestdln = $dln;
+                }
+            }
+        }
+        return $bestdln;
     }
 
     function kw_deadline($args, $isbool, $uf) {
@@ -455,7 +454,7 @@ class HotCRPMailer extends Mailer {
         } else if ($value !== null) {
             return (string) $value;
         } else {
-            $this->warning_at($uf->input_string ?? null, "<0>Submission #{$this->row->paperId} has no #{$tag} tag");
+            $this->warning("<0>Submission #{$this->row->paperId} has no #{$tag} tag");
             return "(none)";
         }
     }
@@ -535,9 +534,9 @@ class HotCRPMailer extends Mailer {
 
     function handle_unexpanded_keyword($kw, $xref) {
         if ($kw === $this->_unexpanded_paper_keyword) {
-            return "<0>Keyword not expanded because this mail isn’t linked to submissions or reviews";
+            return "<0>‘{$xref}’ keyword ignored because this mail isn’t linked to submissions or reviews";
         } else if (preg_match('/\AAUTHORVIEWCAPABILITY/', $kw)) {
-            return "<0>Keyword not expanded because this mail isn’t meant for submission authors";
+            return "<0>‘{$xref}’ keyword ignored because this mail isn’t meant for submission authors";
         } else {
             return parent::handle_unexpanded_keyword($kw, $xref);
         }

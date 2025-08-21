@@ -1,6 +1,6 @@
 <?php
 // pages/p_signin.php -- HotCRP password reset partials
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Signin_Page {
     /** @var ?string */
@@ -90,25 +90,22 @@ class Signin_Page {
     }
 
     static function signin_request_success(Contact $user, Qrequest $qreq, $cs, $info)  {
-        if (!$info["ok"]) {
-            if (!empty($info["usec"])) {
-                UpdateSession::usec_add_list($qreq, $qreq->email, $info["usec"], 0);
-            }
-            return $info;
-        }
         return LoginHelper::login_complete($info, $qreq);
     }
 
     /** @param string $token
      * @return ?TokenInfo */
     static private function _find_reset_token(Conf $conf, $token) {
-        if ($token) {
-            $is_cdb = str_starts_with($token, "hcpw1");
-            if (($tok = TokenInfo::find($token, $conf, $is_cdb))
-                && $tok->is_active()
-                && $tok->capabilityType === TokenInfo::RESETPASSWORD) {
-                return $tok;
-            }
+        if (!$token) {
+            return null;
+        }
+        if (str_starts_with($token, "hcpw1")) {
+            $tok = TokenInfo::find_cdb($token, $conf);
+        } else {
+            $tok = TokenInfo::find($token, $conf);
+        }
+        if ($tok && $tok->is_active(TokenInfo::RESETPASSWORD)) {
+            return $tok;
         }
         return null;
     }
@@ -121,16 +118,15 @@ class Signin_Page {
             && ($capuser = $cap->user())
             && strcasecmp($capuser->email, trim($qreq->email)) === 0) {
             return $pw;
-        } else {
-            return false;
         }
+        return false;
     }
 
     /** @param ComponentSet $cs */
     static function print_signin_head(Contact $user, Qrequest $qreq, $cs) {
         $st = $user->conf->saved_messages_status();
         $qreq->print_header("Sign in", "home", ["action_bar" => "", "hide_title" => true, "body_class" => "body-signin"]);
-        $cs->push_print_cleanup("__footer");
+        $cs->print_on_leave("__footer");
     }
 
     /** @param string $page
@@ -160,8 +156,8 @@ class Signin_Page {
 
         $folded = $cs->root !== "signin" && !$qreq->signin;
         self::print_form_start_for($qreq, "signin", $folded);
-        if ($qreq->redirect) {
-            echo Ht::hidden("redirect", $qreq->redirect);
+        if (($redirect = $conf->qreq_redirect_url($qreq))) {
+            echo Ht::hidden("redirect", $redirect);
         }
         if ($folded) {
             echo Ht::unstash_script('hotcrp.fold("f-signin",false)');
@@ -180,7 +176,7 @@ class Signin_Page {
     }
 
     static function print_signin_form_accounts(Contact $user, Qrequest $qreq) {
-        if (($su = Contact::session_users($qreq))) {
+        if (($su = Contact::session_emails($qreq))) {
             $nav = $qreq->navigation();
             $links = [];
             foreach ($su as $i => $email) {
@@ -256,11 +252,18 @@ class Signin_Page {
 
     function print_signin_form_oauth(Contact $user, Qrequest $qreq) {
         $conf = $user->conf;
-        if (!$conf->opt("oAuthProviders") && !$conf->opt("oAuthTypes")) {
+        if (!$conf->opt("oAuthProviders")) {
             return;
         }
         $buttons = [];
-        $param = array_merge(["authtype" => null, "post" => $qreq->maybe_post_value()], $this->_oauth_hoturl_param ?? ["redirect" => $qreq->redirect]);
+        $param = ["authtype" => null, "post" => $qreq->maybe_post_value()];
+        if ($this->_oauth_hoturl_param) {
+            $param += $this->_oauth_hoturl_param;
+        } else {
+            $nav = $qreq->navigation();
+            $param["success_redirect"] = $qreq->redirect;
+            $param["failure_redirect"] = $conf->selfurl($qreq, ["signedout" => null], Conf::HOTURL_SITEREL | Conf::HOTURL_RAW);
+        }
         $top = "";
         foreach ($conf->oauth_providers() as $authdata) {
             if ($authdata->button_html && !($authdata->disabled ?? false)) {
@@ -305,7 +308,7 @@ class Signin_Page {
                 Ht::submit("cancel", "Cancel", ["class" => "uic js-no-signin", "formnovalidate" => true]),
                 '</div></form>';
         }
-        $cs->push_print_cleanup("__footer");
+        $cs->print_on_leave("__footer");
     }
 
 
@@ -386,7 +389,7 @@ class Signin_Page {
     /** @param ComponentSet $cs */
     static function print_newaccount_head(Contact $user, Qrequest $qreq, $cs) {
         $qreq->print_header("New account", "newaccount", ["action_bar" => "", "hide_title" => true, "body_class" => "body-signin"]);
-        $cs->push_print_cleanup("__footer");
+        $cs->print_on_leave("__footer");
         if (!$user->conf->allow_user_self_register()) {
             $user->conf->error_msg("<0>User self-registration is disabled on this site.");
             echo '<p class="mb-5">', Ht::link("Return home", $user->conf->hoturl("index")), '</p>';
@@ -444,7 +447,7 @@ class Signin_Page {
     }
     static function print_forgot_head(Contact $user, Qrequest $qreq, $cs) {
         $qreq->print_header("Forgot password", "resetpassword", ["action_bar" => "", "hide_title" => true, "body_class" => "body-signin"]);
-        $cs->push_print_cleanup("__footer");
+        $cs->print_on_leave("__footer");
         if ($user->conf->login_type()) {
             return $cs->print("forgotpassword/__externallogin");
         }
@@ -603,7 +606,7 @@ class Signin_Page {
     }
     static function print_reset_head(Contact $user, Qrequest $qreq, $cs) {
         $qreq->print_header("Reset password", "resetpassword", ["action_bar" => "", "hide_title" => true, "body_class" => "body-signin"]);
-        $cs->push_print_cleanup("__footer");
+        $cs->print_on_leave("__footer");
         if ($user->conf->login_type()) {
             return $cs->print("forgotpassword/__externallogin");
         }

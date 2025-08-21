@@ -119,6 +119,7 @@ h2.paptitle {
 .pspcard {
 	padding: 8px 16px;
 	border-bottom: 1px solid var(--brand-fg);
+	z-index: 0;
 }
 .pspcard-open {
 	padding-bottom: 4px;
@@ -222,7 +223,14 @@ td.pl.pl_title, td.pl.pl_text {
 	max-width: none;
 }
 .settings-xf-view, .settings-xf-edit {
-	padding: 6px 8px;
+	padding-top: 12px;
+	padding-bottom: 12px;
+}
+.settings-xf-viewport {
+	-webkit-mask-image: linear-gradient(to top, transparent 0, rgba(0, 0, 0, 0.25) 4px,
+		black 10px calc(100% - 16px), transparent calc(100% - 8px));
+	mask-image: linear-gradient(to top, transparent 0, rgba(0, 0, 0, 0.25) 4px,
+		black 10px calc(100% - 16px), transparent calc(100% - 8px));
 }
 .settings-json-panels {
 	grid-template-columns: 100% 0%;
@@ -234,7 +242,7 @@ td.pl.pl_title, td.pl.pl_text {
 	display: none;
 }
 .msg,
-.w-text, .w-entry-text,
+.w-text, .w-entry-text, .form-outline-section.w-text,
 .feedback, .feedback-list, .field-d,
 .revtext.format0, .cmttext.format0, .revtext .format0, .cmttext .format0,
 .overlong-expander {
@@ -255,5 +263,11 @@ td.pl.pl_title, td.pl.pl_text {
 }
 .plet {
 	min-width: 5rem;
+}
+}
+
+@media (max-width: 456px) {
+.minw-480 {
+	min-width: 100%;
 }
 }

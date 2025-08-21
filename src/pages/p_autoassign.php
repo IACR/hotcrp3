@@ -15,8 +15,10 @@ class Autoassign_Page {
     public $ms;
     /** @var string */
     public $jobid;
+    /** @var string */
+    private $_pcsel_sep;
     /** @var bool */
-    private $detached = false;
+    private $_aset_ok;
 
     function __construct(Contact $user, Qrequest $qreq) {
         assert($user->is_manager());
@@ -47,7 +49,7 @@ class Autoassign_Page {
             $qreq->t = "all";
         }
         $limits = PaperSearch::viewable_manager_limits($this->user);
-        if (!isset($qreq->t) || !in_array($qreq->t, $limits)) {
+        if (!isset($qreq->t) || !in_array($qreq->t, $limits, true)) {
             $qreq->t = $limits[0];
         }
         if (!isset($qreq->q) || trim($qreq->q) === "(All)") {
@@ -118,8 +120,8 @@ class Autoassign_Page {
             for ($i = 1; isset($qreq["bpa{$i}"]); ++$i) {
                 if ($qreq["bpa{$i}"]
                     && $qreq["bpb{$i}"]
-                    && ($pca = $this->conf->pc_member_by_email($qreq["bpa$i"]))
-                    && ($pcb = $this->conf->pc_member_by_email($qreq["bpb$i"]))) {
+                    && ($pca = $this->conf->pc_member_by_email($qreq["bpa{$i}"]))
+                    && ($pcb = $this->conf->pc_member_by_email($qreq["bpb{$i}"]))) {
                     $x[] = $pca->contactId;
                     $x[] = $pcb->contactId;
                 }
@@ -159,7 +161,7 @@ class Autoassign_Page {
         $x["a"] = $this->qreq->a ?? "review";
         $pfx = $x["a"] . ":";
         foreach ($this->qreq as $k => $v) {
-            if (in_array($k, ["q", "t", "a", "badpairs"])
+            if (in_array($k, ["q", "t", "a", "badpairs"], true)
                 || str_starts_with($k, "pcc")
                 || (str_starts_with($k, "bp")
                     && $v !== "none")
@@ -273,14 +275,14 @@ class Autoassign_Page {
 
     private function print_bad_pairs() {
         echo '<div class="g"></div><div class="relative"><table id="bptable"><tbody>', "\n";
-        for ($i = 1; $i == 1 || isset($this->qreq["bpa{$i}"]); ++$i) {
-            echo '    <tr><td class="entry nw">';
-            if ($i == 1) {
+        for ($i = 1; $i === 1 || isset($this->qreq["bpa{$i}"]); ++$i) {
+            echo '    <tr><td class="rxcaption nw">';
+            if ($i === 1) {
                 echo '<label class="d-inline-block checki"><span class="checkc">',
                     Ht::checkbox("badpairs", 1, isset($this->qreq["badpairs"])),
-                    '</span>Don’t assign</label> &nbsp;';
+                    '</span>Don’t assign</label>';
             } else {
-                echo "or &nbsp;";
+                echo "or";
             }
             echo '</td><td class="lentry">', $this->bp_selector($i, "a"),
                 " &nbsp;and&nbsp; ", $this->bp_selector($i, "b");
@@ -291,6 +293,14 @@ class Autoassign_Page {
         }
         echo "</tbody></table></div></div>\n";
         $this->conf->stash_hotcrp_pc($this->user);
+    }
+
+    private function print_pc_selection_link($html, $uids) {
+        if (empty($uids)) {
+            return;
+        }
+        echo $this->_pcsel_sep, Ht::button($html, ["class" => "link ui js-pcsel", "data-uids" => join(" ", $uids)]);
+        $this->_pcsel_sep = ", ";
     }
 
     private function print() {
@@ -320,7 +330,7 @@ class Autoassign_Page {
           <dt>', review_type_icon(REVIEW_META), ' Metareview</dt><dd>Can view all other reviews before completing their own</dd></dl>
         </div></div>', "\n";
         echo Ht::unstash_script("\$(\"#autoassignform\").awaken()"),
-            Ht::feedback_msg($this->ms);
+            Ht::fmt_feedback_msg($this->conf, $this->ms);
 
 
         // paper selection
@@ -374,40 +384,42 @@ class Autoassign_Page {
                 'Use enabled PC members</label></div>';
         }
 
-        echo '<div class="js-radio-focus checki"><label>',
-            '<span class="checkc">', Ht::radio("pctyp", "sel", $qreq->pctyp === "sel"), '</span>',
+        $pclist = [];
+        foreach ($conf->pc_members() as $pc) {
+            $pclist["all"][] = $pc->contactId;
+            if (!$pc->is_dormant()) {
+                $pclist["enabled"][] = $pc->contactId;
+            }
+            foreach (Tagger::split_unpack(strtolower($pc->viewable_tags($this->user))) as $tv) {
+                $pclist[$tv[0]][] = $pc->contactId;
+            }
+        }
+
+        echo '<div class="js-radio-focus js-pcsel-container checki"><label>',
+            '<span class="checkc">', Ht::radio("pctyp", "sel", $qreq->pctyp === "sel", ["class" => "want-pcsel"]), '</span>',
             'Use selected PC members:</label>',
             " &nbsp; (select ";
-        $pctyp_sel = [["all", "all"], ["none", "none"]];
+        $this->_pcsel_sep = "";
+        $this->print_pc_selection_link("all", $pclist["all"]);
+        $this->print_pc_selection_link("none", []);
         if ($this->conf->has_disabled_pc_members()) {
-            $pctyp_sel[] = ["enabled", "enabled"];
+            $this->print_pc_selection_link("enabled", $pclist["enabled"]);
         }
-        $tagsjson = [];
-        foreach ($conf->pc_members() as $pc) {
-            $tagsjson[$pc->contactId] = strtolower($pc->viewable_tags($this->user))
-                . ($pc->is_dormant() ? "" : " enabled#0");
-        }
-        Ht::stash_script("var hotcrp_pc_tags=" . json_encode($tagsjson) . ";");
         foreach ($conf->viewable_user_tags($this->user) as $pctag) {
             if ($pctag !== "pc")
-                $pctyp_sel[] = [$pctag, "#$pctag"];
+                $this->print_pc_selection_link("#{$pctag}", $pclist[strtolower($pctag)] ?? []);
         }
-        $pctyp_sel[] = ["__flip__", "flip"];
-        $sep = "";
-        foreach ($pctyp_sel as $pctyp) {
-            echo $sep, "<a class=\"ui js-pcsel-tag\" href=\"#pc_", $pctyp[0], "\">", $pctyp[1], "</a>";
-            $sep = ", ";
-        }
+        $this->print_pc_selection_link("flip", ["flip"]);
         echo ")";
-        Ht::stash_script('$(function(){$("input.js-pcsel-tag").first().trigger("change")});');
+        Ht::stash_script('$(function(){$("input.js-pcsel").first().trigger("change")});');
 
         $summary = [];
         $nrev = AssignmentCountSet::load($this->user, AssignmentCountSet::HAS_REVIEW);
         foreach ($conf->pc_members() as $id => $p) {
             $t = '<div class="ctelt"><label class="checki ctelti"><span class="checkc">'
-                . Ht::checkbox("pcc{$id}", 1, isset($qreq["pcc{$id}"]), [
+                . Ht::checkbox("pcc{$id}", 1, friendly_boolean($qreq["pcc{$id}"]), [
                     "id" => "pcc{$id}", "data-range-type" => "pcc",
-                    "class" => "uic js-range-click js-pcsel-tag"
+                    "class" => "uic js-range-click js-pcsel"
                 ]) . '</span>' . $this->user->reviewer_html_for($p)
                 . $nrev->unparse_counts_for($p)
                 . "</label></div>";
@@ -461,23 +473,15 @@ class Autoassign_Page {
     }
 
 
-    function detach() {
-        // The Autoassigner_Batch is about to run the autoassigner;
-        // we should arrange a redirect.
-        if (PHP_SAPI === "fpm-fcgi") {
-            $nav = $this->qreq->navigation();
-            $url = $nav->resolve($this->conf->hoturl_raw("autoassign", $this->qreq_parameters()));
-            header("Location: {$url}");
-            $this->qreq->qsession()->commit();
-            fastcgi_finish_request();
-            $this->detached = true;
-        }
+    function redirect_uri() {
+        $nav = $this->qreq->navigation();
+        return $nav->resolve($this->conf->hoturl_raw("autoassign", $this->qreq_parameters()));
     }
 
     function start_job() {
         // prepare arguments for batch autoassigner
         $qreq = $this->qreq;
-        $argv = ["batch/autoassign", "-q" . $this->ssel->unparse_search(), "-t" . $qreq->t];
+        $argv = ["-q" . $this->ssel->unparse_search(), "-t" . $qreq->t];
 
         if ($qreq->pctyp === "sel") {
             $pcsel = [];
@@ -521,21 +525,20 @@ class Autoassign_Page {
             $argmap->$k1 = $k;
         }
 
-        $tok = Job_Capability::make($this->user, "batch/autoassign", $argv)
-            ->set_input("argmap", $argmap);
-        $this->jobid = $tok->create();
+        $tok = Job_Capability::make($this->user, "Autoassign", ["-je", "-D"])
+            ->set_input("assign_argv", $argv)
+            ->set_input("argmap", $argmap)
+            ->insert();
+        $this->jobid = $tok->salt;
         assert($this->jobid !== null);
 
-        $getopt = Autoassign_Batch::make_getopt();
-        $arg = $getopt->parse(["batch/autoassign", "-j{$this->jobid}", "-d"]);
-        try {
-            (new Autoassign_Batch($this->conf, $arg, $getopt, [$this, "detach"]))->run();
-        } catch (CommandLineException $ex) {
-        }
+        $s = $tok->run_live($this->qreq, [$this, "redirect_uri"]);
 
         // Autoassign_Batch has completed its work.
-        if ($this->detached) {
-            exit();
+        if ($s === "forked") {
+            throw new Redirection($this->redirect_uri());
+        } else if ($s === "detached") {
+            exit(0);
         }
         $tok->load_data();
         if ($tok->data("exit_status") === 0) {
@@ -561,32 +564,31 @@ class Autoassign_Page {
     }
 
 
+    /** @return never */
     function run_try_job() {
-        try {
-            $tok = Job_Capability::find($this->qreq->job, $this->conf, "batch/autoassign", true);
-        } catch (CommandLineException $ex) {
-            $tok = null;
-        }
-        if ($tok && $tok->is_active()) {
+        $tok = Job_Capability::find($this->qreq->job, $this->conf);
+        if ($tok
+            && $tok->is_batch_class("Autoassign")
+            && $tok->is_active()) {
             $this->run_job($tok);
-        } else {
-            http_response_code($tok ? 409 : 404);
-            $this->qreq->print_header("Assignments", "autoassign", [
-                "subtitle" => "Automatic",
-                "body_class" => "paper-error"
-            ]);
-            if ($tok) {
-                $m = "This assignment has already been committed.";
-            } else {
-                $m = "Expired or nonexistent autoassignment job.";
-            }
-            $this->conf->error_msg("<5>{$m} <a href=\"" . $this->conf->selfurl($this->qreq, ["a" => $this->qreq->a]) . "\">Try again</a>");
-            $this->qreq->print_footer();
-            exit;
         }
+        http_response_code($tok ? 409 : 404);
+        $this->qreq->print_header("Assignments", "autoassign", [
+            "subtitle" => "Automatic",
+            "body_class" => "paper-error"
+        ]);
+        if ($tok && $tok->is_batch_class("Autoassign")) {
+            $m = "This assignment has already been committed.";
+        } else {
+            $m = "Expired or nonexistent autoassignment job.";
+        }
+        $this->conf->error_msg("<5>{$m} <a href=\"" . $this->conf->selfurl($this->qreq, ["a" => $this->qreq->a]) . "\">Try again</a>");
+        $this->qreq->print_footer();
+        exit(0);
     }
 
-    function run_job(TokenInfo $tok) {
+    /** @return never */
+    function run_job(Job_Capability $tok) {
         $qreq = $this->qreq;
         $this->jobid = $tok->salt;
 
@@ -635,51 +637,59 @@ class Autoassign_Page {
         $asetcolumn = $this->unparse_tentative_assignment($tok);
         gc_collect_cycles();
         Assignment_PaperColumn::print_unparse_display($asetcolumn);
-        echo '<div class="aab aabig btnp">',
-            Ht::submit("submit", "Apply changes", ["class" => "btn-primary"]),
-            Ht::submit("download", "Download assignment file"),
+        echo '<div class="aab aabig btnp">';
+        if ($this->_aset_ok) {
+            echo Ht::submit("submit", "Apply changes", ["class" => "btn-primary"]),
+                Ht::submit("reassign", "Recompute assignment", ["class" => "btn-danger", "hidden" => true]);
+        } else {
+            echo Ht::submit("reassign", "Recompute assignment", ["class" => "btn-primary"]);
+        }
+        echo Ht::submit("download", "Download assignment file"),
             Ht::submit("cancel", "Cancel"),
             '</div></form>';
         $qreq->print_footer();
-        exit;
+        exit(0);
     }
 
+    /** @return never */
     private function handle_in_progress(TokenInfo $tok) {
         if ($tok->timeUsed < Conf::$now - 40) {
             $this->jobid = null;
             $this->ms->error_at(null, "<5><strong>Assignment failure</strong>");
             $this->ms->inform_at(null, "<0>The autoassigner appears to have failed. This can happen if it runs out of memory or times out. You may want to retry, or to change the assignment parameters; for example, consider assigning a subset of submissions first.");
             echo '<h3 class="form-h">Preparing assignment</h3>',
-                Ht::feedback_msg($this->ms),
+                Ht::fmt_feedback_msg($this->conf, $this->ms),
                 '<div class="aab aabig btnp">',
                 Ht::link("Revise assignment", $this->conf->selfurl($this->qreq, $this->qreq_parameters()), ["class" => "btn btn-primary"]),
                 '</div>';
         } else {
             echo '<div id="propass" class="propass">',
                 '<h3 class="form-h">Preparing assignment</h3>';
-            echo Ht::feedback_msg($this->ms);
+            echo Ht::fmt_feedback_msg($this->conf, $this->ms);
             if (($s = $tok->data("progress"))) {
-                echo '<p><strong>Status:</strong> ', htmlspecialchars($s), '</p>';
+                echo '<p class="is-job-progress"><strong>Status:</strong> ', htmlspecialchars($s), '</p>';
             }
             echo '</div>',
                 Ht::unstash_script("hotcrp.monitor_autoassignment(" . json_encode_browser($this->jobid) . ")");
         }
         $this->qreq->print_footer();
-        exit;
+        exit(0);
     }
 
+    /** @return never */
     private function handle_empty_assignment(TokenInfo $tok) {
         $this->ms->inform_at(null, "<0>Your assignment parameters are already satisfied, or I was unable to make any assignments given your constraints. You may want to check the parameters and try again.");
         $this->jobid = null;
         echo '<h3 class="form-h">Proposed assignment</h3>',
-            Ht::feedback_msg($this->ms),
+            Ht::fmt_feedback_msg($this->conf, $this->ms),
             '<div class="aab aabig btnp">',
             Ht::link("Revise assignment", $this->conf->selfurl($this->qreq, $this->qreq_parameters()), ["class" => "btn btn-primary"]),
             '</div>';
         $this->qreq->print_footer();
-        exit;
+        exit(0);
     }
 
+    /** @return never */
     private function handle_download_assignment(TokenInfo $tok) {
         $aset = new AssignmentSet($this->user);
         $aset->set_override_conflicts(true);
@@ -688,15 +698,18 @@ class Autoassign_Page {
         $csvg = $this->conf->make_csvg("assignments");
         $aset->make_acsv()->unparse_into($csvg);
         $csvg->sort(SORT_NATURAL)->emit();
+        exit(0);
     }
 
+    /** @return never */
     private function handle_execute(TokenInfo $tok) {
         $tok->set_invalid()->update();
         $aset = new AssignmentSet($this->user);
         $aset->set_override_conflicts(true);
         $aset->enable_papers($this->ssel->selection());
         $aset->parse($tok->outputData);
-        $aset->execute(true);
+        $aset->execute();
+        $aset->feedback_msg(AssignmentSet::FEEDBACK_ASSIGN);
         $this->jobid = null;
         $this->conf->redirect_self($this->qreq, $this->qreq_parameters());
     }
@@ -706,6 +719,7 @@ class Autoassign_Page {
         $aset = new AssignmentSet($this->user);
         $aset->set_override_conflicts(true);
         $aset->set_search_type($this->qreq->t);
+        $aset->set_confirm_potential_conflicts(true);
         $aset->parse($tok->outputData);
         $tok->unload_output();
 
@@ -718,16 +732,17 @@ class Autoassign_Page {
 
         $atype = $aset->type_description();
         echo '<h3 class="form-h">Proposed ', $atype ? "{$atype} " : "", 'assignment</h3>';
-        echo Ht::feedback_msg($this->ms);
-        $aset->report_errors();
-        $this->conf->feedback_msg(
-            new MessageItem(null, "Select “Apply changes” to make the checked assignments.", MessageSet::MARKED_NOTE),
-            MessageItem::inform("Reviewer preferences, if any, are shown as “P#”.")
-        );
+        echo Ht::fmt_feedback_msg($this->conf, $this->ms);
+        $aset->feedback_msg(AssignmentSet::FEEDBACK_PROPOSE);
+        if ($aset->has_error()) {
+            echo '<p>Select “Recompute assignment” to try to create a new assignment without errors.</p>';
+        } else {
+            echo '<p class="assignment-summary">Select “Apply changes” below to make the checked assignments.</p>',
+                '<p class="if-assign-potential-conflict" hidden><span class="urgent-note-mark"></span> You’ve confirmed conflicts and must recompute the assignment. Select “Recompute assignment” below.</p>';
+        }
+        $this->_aset_ok = !$aset->has_error();
         return $aset->unparse_paper_column();
     }
-
-
 
 
 /*
@@ -797,11 +812,14 @@ class Autoassign_Page {
 
     function run() {
         // load job
+        if (isset($this->qreq->reassign) || isset($this->qreq->cancel)) {
+            unset($this->qreq->job);
+        }
         if ($this->qreq->job) {
             $this->run_try_job();
         } else if (isset($this->qreq->a)
                    && isset($this->qreq->pctyp)
-                   && isset($this->qreq->assign)
+                   && (isset($this->qreq->assign) || isset($this->qreq->reassign))
                    && $this->qreq->valid_post()) {
             $this->start_job();
         }

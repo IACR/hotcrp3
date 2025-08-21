@@ -1,6 +1,6 @@
 <?php
 // listactions/la_getdocument.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class GetDocument_ListAction extends ListAction {
     private $dt;
@@ -11,8 +11,9 @@ class GetDocument_ListAction extends ListAction {
         return (object) [
             "name" => "get/" . $opt->dtype_name(),
             "get" => true,
+            "allow_api" => true,
             "dtype" => $opt->id,
-            "title" => "Documents/" . $opt->plural_title(),
+            "title" => "Documents/" . $opt->title(),
             "order" => $opt->page_order(),
             "display_if" => "listhas:" . $opt->field_key(),
             "data-bulkwarn" => $user->needs_some_bulk_download_warning() ? "" : null,
@@ -39,28 +40,23 @@ class GetDocument_ListAction extends ListAction {
                     $docset->add_as($doc, $doc->export_filename());
                 }
             } else {
-                $docset->message_set()->msg_at(null, "<0>#{$row->paperId} has no ‘" . $opt->title() . "’ documents", MessageSet::WARNING_NOTE);
+                $docset->message_set()->append_item(MessageItem::warning_note("<0>#{$row->paperId} has no ‘" . $opt->title() . "’ documents"));
             }
         }
         $user->set_overrides($old_overrides);
         if ($docset->is_empty()) {
-            $user->conf->feedback_msg(
-                new MessageItem(null, "Nothing to download", MessageSet::MARKED_NOTE),
-                $docset->message_list()
-            );
-        } else {
-            $qreq->qsession()->commit();
-            $dopt = Downloader::make_server_request();
-            $dopt->attachment = true;
-            $dopt->single = true;
-            $dopt->log_user = $user;
-            if ($docset->download($dopt)) {
-                exit;
-            } else {
-                $user->conf->feedback_msg($docset->message_list());
-            }
+            return JsonResult::make_message_list($docset->message_set(),
+                MessageItem::marked_note("<0>Nothing to download"));
         }
-        // XXX how to return errors?
-        return null;
+        $qreq->qsession()->commit();
+        $dopt = new Downloader;
+        $dopt->parse_qreq($qreq);
+        $dopt->set_attachment(true);
+        $dopt->single = true;
+        $dopt->log_user = $user;
+        if ($docset->prepare_download($dopt)) {
+            return $dopt;
+        }
+        return JsonResult::make_message_list(400, $docset->message_list());
     }
 }

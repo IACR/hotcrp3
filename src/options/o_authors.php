@@ -1,6 +1,6 @@
 <?php
 // o_authors.php -- HotCRP helper class for authors intrinsic
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Authors_PaperOption extends PaperOption {
     /** @var int */
@@ -24,96 +24,131 @@ class Authors_PaperOption extends PaperOption {
         $au = [];
         foreach (PaperInfo::parse_author_list($ov->data() ?? "") as $auth) {
             $au[] = $j = (object) $auth->unparse_nea_json();
-            if ($auth->email !== "" && in_array(strtolower($auth->email), $lemails)) {
+            if ($auth->email !== ""
+                && in_array(strtolower($auth->email), $lemails, true)) {
                 $j->contact = true;
             }
         }
         return $au;
     }
+
     function value_check(PaperValue $ov, Contact $user) {
         $aulist = $this->author_list($ov);
         $nreal = 0;
+        $lemails = [];
         foreach ($aulist as $auth) {
             $nreal += $auth->is_empty() ? 0 : 1;
+            $lemails[] = strtolower($auth->email);
         }
-        if ($nreal === 0 && !$ov->prow->allow_absent()) {
-            $ov->estop($this->conf->_("<0>Entry required"));
-            $ov->msg_at("authors:1", null, MessageSet::ERROR);
+        if ($nreal === 0) {
+            if (!$ov->prow->allow_absent()) {
+                $ov->estop($this->conf->_("<0>Entry required"));
+                $ov->append_item(MessageItem::error_at("authors:1"));
+            }
+            return;
         }
         if ($this->max_count > 0 && $nreal > $this->max_count) {
             $ov->estop($this->conf->_("<0>A {submission} may have at most {max} authors", new FmtArg("max", $this->max_count)));
         }
 
-        $msg1 = $msg2 = false;
-        foreach ($aulist as $n => $auth) {
-            if (strpos($auth->email, "@") === false
-                && strpos($auth->affiliation, "@") !== false) {
-                $msg1 = true;
-                $ov->msg_at("authors:" . ($n + 1), null, MessageSet::WARNING);
-            } else if ($auth->firstName === ""
-                       && $auth->lastName === ""
-                       && $auth->email === ""
-                       && $auth->affiliation !== "") {
-                $msg2 = true;
-                $ov->msg_at("authors:" . ($n + 1), null, MessageSet::WARNING);
-            } else if ($auth->email !== ""
-                       && !validate_email($auth->email)
-                       && !$ov->prow->author_by_email($auth->email)) {
-                $ov->estop(null);
-                $ov->msg_at("authors:" . ($n + 1), "<0>Invalid email address ‘{$auth->email}’", MessageSet::ESTOP);
-            }
+        $req_orcid = $this->conf->opt("requireOrcid") ?? 0;
+        if ($req_orcid === 2
+            && ($ov->prow->outcome_sign <= 0
+                || !$ov->prow->can_author_view_decision())) {
+            $req_orcid = 0;
         }
-        if ($msg1) {
-            $ov->warning("<0>You may have entered an email address in the wrong place. The first author field is for email, the second for name, and the third for affiliation");
-        }
-        if ($msg2) {
-            $ov->warning("<0>Please enter a name and optional email address for every author");
-        }
-    }
-    function value_save(PaperValue $ov, PaperStatus $ps) {
-        // set property
-        $authlist = $this->author_list($ov);
-        $v = "";
-        $emails = [];
-        foreach ($authlist as $auth) {
-            if (!$auth->is_empty()) {
-                $v .= ($v === "" ? "" : "\n") . $auth->unparse_tabbed();
-            }
-            $emails[] = $auth->email;
-        }
-        if ($v === $ov->prow->authorInformation) {
-            return true;
-        }
-        $ps->change_at($this);
-        $ov->prow->set_prop("authorInformation", $v);
-
-        // set conflicts
-        $ps->clear_conflict_values(CONFLICT_AUTHOR);
-        $pemails = $this->conf->resolve_primary_emails($emails);
-        foreach ($authlist as $i => $auth) {
-            if ($auth->email === "") {
+        $msg_bademail = $msg_missing = $msg_dupemail = false;
+        $msg_orcid = [];
+        $n = 0;
+        foreach ($aulist as $auth) {
+            ++$n;
+            if ($auth->is_empty()) {
                 continue;
             }
-            if (strcasecmp($auth->email, $pemails[$i]) !== 0) {
-                $ps->update_conflict_value($auth, CONFLICT_AUTHOR, CONFLICT_AUTHOR);
-                $auth = clone $auth;
-                $auth->email = $pemails[$i];
+            if ($auth->firstName === ""
+                && $auth->lastName === ""
+                && $auth->email === ""
+                && $auth->affiliation !== "") {
+                $msg_missing = true;
+                $ov->append_item(MessageItem::warning_at("authors:{$n}"));
+                continue;
             }
-            $cflags = CONFLICT_AUTHOR
-                | ($ov->anno("contact:{$auth->email}") ? CONFLICT_CONTACTAUTHOR : 0);
-            $ps->update_conflict_value($auth, $cflags, $cflags);
+            if (strpos($auth->email, "@") === false
+                && strpos($auth->affiliation, "@") !== false) {
+                $msg_bademail = true;
+                $ov->append_item(MessageItem::warning_at("authors:{$n}"));
+            }
+            if ($auth->email !== ""
+                && !validate_email($auth->email)
+                && !$ov->prow->author_by_email($auth->email)) {
+                $ov->estop(null);
+                $ov->append_item(MessageItem::estop_at("authors:{$n}", "<0>Invalid email address ‘{$auth->email}’"));
+                continue;
+            }
+            if ($req_orcid > 0) {
+                if ($auth->email === "") {
+                    $msg_missing = true;
+                    $ov->append_item(MessageItem::warning_at("authors:{$n}:email"));
+                } else if (!($u = $this->conf->user_by_email($auth->email))
+                           || !$u->confirmed_orcid()) {
+                    $msg_orcid[] = $auth->email;
+                    $ov->append_item(MessageItem::warning_at("authors:{$n}"));
+                }
+            }
+            if ($auth->email !== ""
+                && ($n2 = array_search(strtolower($auth->email), $lemails)) !== $n - 1) {
+                $msg_dupemail = true;
+                $ov->append_item(MessageItem::warning_at("authors:{$n}:email"));
+                $ov->append_item(MessageItem::warning_at("authors:" . ($n2 + 1) . ":email"));
+            }
         }
-        $ps->checkpoint_conflict_values();
+
+        if ($msg_missing) {
+            if ($req_orcid > 0) {
+                $ov->warning("<0>Please enter a name and email address for every author");
+            } else {
+                $ov->warning("<0>Please enter a name and optional email address for every author");
+            }
+        }
+        if ($msg_bademail) {
+            $ov->warning("<0>You may have entered an email address in the wrong place. The first author field is for email, the second for name, and the third for affiliation");
+        }
+        if ($msg_dupemail) {
+            $ov->warning("<0>The same email address has been used for different authors. This is usually an error");
+        }
+        if ($msg_orcid) {
+            $ov->warning($this->conf->_("<5>Some authors have not configured their <a href=\"https://orcid.org\">ORCID iDs</a>"));
+            $ov->inform($this->conf->_("<0>This site requests that authors provide ORCID iDs. Please ask {0:list} to sign in and update their profiles.", new FmtArg(0, $msg_orcid, 0)));
+        }
+    }
+
+    function value_save(PaperValue $ov, PaperStatus $ps) {
+        // construct property
+        $authlist = $this->author_list($ov);
+        $d = "";
+        foreach ($authlist as $auth) {
+            if (!$auth->is_empty()) {
+                $d .= ($d === "" ? "" : "\n") . $auth->unparse_tabbed();
+            }
+        }
+        // apply change
+        if ($d !== $ov->prow->base_option($this->id)->data()) {
+            $ps->change_at($this);
+            $ov->prow->set_prop("authorInformation", $d);
+            $this->value_save_conflict_values($ov, $ps);
+        }
         return true;
     }
-    static private function translate_qreq(Qrequest $qreq) {
-        $n = 1;
-        while (isset($qreq["authors:email_{$n}"]) || isset($qreq["auemail{$n}"])) {
-            $qreq["authors:{$n}:email"] = $qreq["authors:email_{$n}"] ?? $qreq["auemail{$n}"];
-            $qreq["authors:{$n}:name"] = $qreq["authors:name_{$n}"] ?? $qreq["auname{$n}"];
-            $qreq["authors:{$n}:affiliation"] = $qreq["authors:affiliation_{$n}"] ?? $qreq["auaff{$n}"];
-            ++$n;
+    function value_save_conflict_values(PaperValue $ov, PaperStatus $ps) {
+        $ps->clear_conflict_values(CONFLICT_AUTHOR);
+        foreach ($this->author_list($ov) as $i => $auth) {
+            if ($auth->email !== "") {
+                $cflags = CONFLICT_AUTHOR
+                    | ($ov->anno("contact:{$auth->email}") ? CONFLICT_CONTACTAUTHOR : 0);
+                $ps->update_conflict_value($auth, $cflags, $cflags);
+            }
         }
+        $ps->checkpoint_conflict_values();
     }
     static private function expand_author(Author $au, PaperInfo $prow) {
         if ($au->email !== ""
@@ -128,9 +163,6 @@ class Authors_PaperOption extends PaperOption {
         }
     }
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
-        if (!isset($qreq["authors:1:email"])) {
-            self::translate_qreq($qreq);
-        }
         $v = [];
         $auth = new Author;
         for ($n = 1; true; ++$n) {
@@ -166,12 +198,12 @@ class Authors_PaperOption extends PaperOption {
         return PaperValue::make($prow, $this, 1, join("\n", $v));
     }
     function parse_json(PaperInfo $prow, $j) {
-        if (!is_array($j) || is_associative_array($j)) {
+        if (!is_array($j) || !array_is_list($j)) {
             return PaperValue::make_estop($prow, $this, "<0>Validation error");
         }
         $v = $cemail = [];
         foreach ($j as $i => $auj) {
-            if (is_object($auj) || is_associative_array($auj)) {
+            if (is_object($auj) || (is_array($auj) && !array_is_list($auj))) {
                 $auth = Author::make_keyed($auj);
                 $contact = $auj->contact ?? null;
             } else if (is_string($auj)) {
@@ -214,6 +246,9 @@ class Authors_PaperOption extends PaperOption {
         }
         if ($val !== $auval) {
             $js["data-default-value"] = $auval;
+            if ($component !== "email" && $pt->prow->is_new()) {
+                $js["data-populated-value"] = $val;
+            }
         }
         return Ht::entry("authors:{$n}:{$component}", $val, $js);
     }
@@ -223,8 +258,8 @@ class Authors_PaperOption extends PaperOption {
         if ($n === 1
             && !$au
             && !$pt->user->can_administer($pt->prow)
-            && (!$reqau || $reqau->nea_equals($pt->user))) {
-            $reqau = new Author($pt->user);
+            && (!$reqau || $reqau->nea_equals($pt->user->populated_user()))) {
+            $reqau = new Author($pt->user->populated_user());
             $ignore_diff = true;
         }
 
@@ -244,8 +279,14 @@ class Authors_PaperOption extends PaperOption {
             '</div></div>';
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        $sb = $this->conf->submission_blindness();
         $title = $pt->edit_title_html($this);
+        $sb = $this->conf->submission_blindness();
+        if ($sb !== Conf::BLIND_NEVER
+            && $pt->prow->outcome_sign > 0
+            && !$this->conf->setting("seedec_hideau")
+            && $pt->prow->can_author_view_decision()) {
+            $sb = Conf::BLIND_NEVER;
+        }
         if ($sb === Conf::BLIND_ALWAYS) {
             $title .= ' <span class="n">(anonymous)</span>';
         } else if ($sb === Conf::BLIND_UNTILREVIEW) {
@@ -315,6 +356,13 @@ class Authors_PaperOption extends PaperOption {
         }
     }
 
+    function jsonSerialize() {
+        $j = parent::jsonSerialize();
+        if ($this->max_count > 0) {
+            $j->max = $this->max_count;
+        }
+        return $j;
+    }
     function export_setting() {
         $sfs = parent::export_setting();
         $sfs->max = $this->max_count;

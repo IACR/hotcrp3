@@ -14,7 +14,11 @@
     {   "name": "__profilemenu/settings", "order": 450, "allow_if": "chair", "print_function": "*Conf::print_profilemenu_item", "separator_group": "overall"   },
     {   "name": "__profilemenu/users", "order": 460, "allow_if": "chair", "print_function": "*Conf::print_profilemenu_item", "separator_group": "overall"   },
     {   "name": "__profilemenu/assignments", "order": 470, "allow_if": "chair", "print_function": "*Conf::print_profilemenu_item", "separator_group": "overall"   },
-    {   "name": "__profilemenu/signout", "order": 500, "allow_if": "!empty", "print_function": "*Conf::print_profilemenu_item", "separator_group": "close"   },
+    {   "name": "__profilemenu/signout", "order": 500, "allow_if": "email", "print_function": "*Conf::print_profilemenu_item", "separator_group": "close"   },
+
+    {   "name": "__profilecheck/name", "order": 1, "function": "Contact::profilecheck_name"   },
+    {   "name": "__profilecheck/affiliation", "order": 2, "function": "Contact::profilecheck_affiliation"   },
+    {   "name": "__profilecheck/pc", "order": 100, "function": "Contact::profilecheck_pc", "allow_if": "pc_member"   },
 
 
     {   "name": "index", "alias": "home"   },
@@ -92,11 +96,12 @@
         "allow_if": "conf.time_all_author_view_decision",
         "print_function": "Home_Page::print_info_accepted"
     },
+    [   "home/sidebar/info/help", 100, "Home_Page::print_info_help"   ],
 
 
     [   "home/main/message", 1100, "*Home_Page::print_message"   ],
     {
-        "name": "home/main/welcome", "order": 1200, "allow_if": "!pc",
+        "name": "home/main/welcome", "order": 1200, "allow_if": "!admin",
         "print_function": "*Home_Page::print_welcome"
     },
     [   "home/main/signin", 3000, "*Home_Page::print_signin"   ],
@@ -217,10 +222,10 @@
     [   "graph/reviewerlameness", false, "graph/procrastination"    ],
 
 
-    {   "name": "authorize", "print_function": "*Authorize_Page::go", "allow_disabled": true   },
-    [   "authorize/form/title", 1, "*Authorize_Page::print_form_title"   ],
-    [   "authorize/form/main", 15, "*Authorize_Page::print_form_main"   ],
-    [   "authorize/form/annotation", 2000, "*Authorize_Page::print_form_annotation"   ],
+    {   "name": "authorize", "print_function": "*HotCRP\\Authorize_Page::go", "allow_disabled": true   },
+    [   "authorize/form/title", 1, "*HotCRP\\Authorize_Page::print_form_title"   ],
+    [   "authorize/form/main", 15, "*HotCRP\\Authorize_Page::print_form_main"   ],
+    [   "authorize/form/annotation", 2000, "*HotCRP\\Authorize_Page::print_form_annotation"   ],
     [   "authorize/other/local", 15, "signin/form/local"   ],
     [   "authorize/other/oauth", 1000, "signin/form/oauth"   ],
 
@@ -237,9 +242,10 @@
     {   "name": "help", "print_function": "Help_Page::go"   },
     {   "name": "log", "print_function": "Log_Page::go"   },
     {   "name": "mail", "print_function": "Mail_Page::go"   },
+    {   "name": "manageemail", "print_function": "ManageEmail_Page::go"   },
     {   "name": "manualassign", "print_function": "ManualAssign_Page::go"   },
-    {   "name": "mergeaccounts", "print_function": "MergeAccounts_Page::go"   },
-    {   "name": "oauth", "print_function": "OAuth_Page::go", "allow_disabled": true   },
+    {   "name": "mergeaccounts", "print_function": "ManageEmail_Page::go_merge"   },
+    {   "name": "oauth", "print_function": "HotCRP\\OAuth_Page::go", "allow_disabled": true   },
     {   "name": "offline", "print_function": "Offline_Page::go"   },
     {   "name": "paper", "print_function": "Paper_Page::go"   },
     {   "name": "profile", "print_function": "Profile_Page::go"   },

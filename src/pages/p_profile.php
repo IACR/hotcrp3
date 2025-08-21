@@ -1,6 +1,6 @@
 <?php
 // pages/p_profile.php -- HotCRP profile management page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Profile_Page {
     /** @var Conf
@@ -29,8 +29,7 @@ class Profile_Page {
 
         $this->user = $viewer;
         $this->ustatus = new UserStatus($viewer);
-        $this->ustatus->set_user($viewer);
-        $this->ustatus->qreq = $qreq;
+        $this->ustatus->set_qreq($qreq);
     }
 
 
@@ -79,9 +78,8 @@ class Profile_Page {
 
         if ($user->contactId > 0 && $user->contactId === $this->viewer->contactId) {
             return $this->viewer;
-        } else {
-            return $user;
         }
+        return $user;
     }
 
     private function find_user() {
@@ -90,9 +88,9 @@ class Profile_Page {
             $this->qreq->u = $this->qreq->user ? : $this->qreq->contact;
         }
         if (($p = $this->qreq->path_component(0)) !== null) {
-            if (in_array($p, ["", "me", "self", "new", "bulk"])
+            if (in_array($p, ["", "me", "self", "new", "bulk"], true)
                 || strpos($p, "@") !== false
-                || !$this->ustatus->cs()->canonical_group($p)) {
+                || !$this->ustatus->cs()->might_exist($p)) {
                 if ($this->qreq->u === null) {
                     $this->qreq->u = urldecode($p);
                 }
@@ -128,6 +126,7 @@ class Profile_Page {
             && !$user->lastName
             && !$user->affiliation
             && !$this->qreq->is_post()) {
+            /* XXX this code is dead */
             $result = $this->conf->qe_raw("select Paper.paperId, authorInformation from Paper join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId={$user->contactId} and PaperConflict.conflictType>=" . CONFLICT_AUTHOR . ")");
             while (($prow = PaperInfo::fetch($result, $this->viewer))) {
                 foreach ($prow->author_list() as $au) {
@@ -148,46 +147,46 @@ class Profile_Page {
             Dbl::free($result);
         }
 
-        // apply user to UserStatus
         $this->user = $user;
-        $this->ustatus->set_user($user);
     }
 
 
     /** @param UserStatus $ustatus
-     * @param ?Contact $acct
      * @return ?Contact */
-    private function save_user($ustatus, $acct) {
+    private function save_user($ustatus) {
         // check for missing fields
         UserStatus::normalize_name($ustatus->jval);
-        if (!$acct && !isset($ustatus->jval->email)) {
+        $acct = $ustatus->user;
+        $uemail = $ustatus->jval->email ?? null;
+        if (!$acct && !$uemail) {
             $ustatus->error_at("email", "<0>Email address required");
             return null;
         }
 
         // check email
-        if (!$acct || strcasecmp($ustatus->jval->email, $acct->email)) {
+        if (!$acct || ($uemail && strcasecmp($uemail, $acct->email) !== 0)) {
+            /* XXX this code is all dead */
             if ($acct && $acct->security_locked()) {
                 $ustatus->error_at("email", "<0>This account’s security settings are locked, so you can’t change its email address");
                 return null;
-            } else if (($new_acct = $this->conf->fresh_user_by_email($ustatus->jval->email))) {
+            } else if (($new_acct = $this->conf->fresh_user_by_email($uemail))) {
                 if (!$acct) {
                     $ustatus->jval->id = $new_acct->contactId;
                 } else {
-                    $ustatus->error_at("email", "<0>Email address ‘{$ustatus->jval->email}’ is already in use");
-                    $ustatus->msg_at("email", "<5>You may want to <a href=\"" . $this->conf->hoturl("mergeaccounts") . "\">merge these accounts</a>.", MessageSet::INFORM);
+                    $ustatus->error_at("email", "<0>Email address ‘{$uemail}’ is already in use");
+                    $ustatus->inform_at("email", "<5>You may want to <a href=\"" . $this->conf->hoturl("manageemail") . "\">link these accounts</a>.");
                     return null;
                 }
             } else if ($this->conf->external_login()) {
-                if ($ustatus->jval->email === "") {
+                if ($uemail === "") {
                     $ustatus->error_at("email", "<0>Username required");
                     return null;
                 }
-            } else if ($ustatus->jval->email === "") {
+            } else if ($uemail === "") {
                 $ustatus->error_at("email", "<0>Email address required");
                 return null;
-            } else if (!validate_email($ustatus->jval->email)) {
-                $ustatus->error_at("email", "<0>Invalid email address ‘{$ustatus->jval->email}’");
+            } else if (!validate_email($uemail)) {
+                $ustatus->error_at("email", "<0>Invalid email address ‘{$uemail}’");
                 return null;
             } else if ($acct && !$acct->has_account_here()) {
                 $ustatus->error_at("email", "<0>Your current account is only active on other HotCRP.com sites. Due to a server limitation, you can’t change your email until activating your account on this site.");
@@ -196,14 +195,15 @@ class Profile_Page {
             if ($acct && (!$ustatus->viewer->privChair || $acct === $ustatus->viewer)) {
                 assert($acct->contactId > 0);
                 $old_preferredEmail = $acct->preferredEmail;
-                $acct->preferredEmail = $ustatus->jval->email;
+                $acct->preferredEmail = $uemail;
                 $capability = new TokenInfo($this->conf, TokenInfo::CHANGEEMAIL);
                 $capability->set_user($acct)
                     ->set_token_pattern("hcce[20]")
                     ->set_expires_after(259200)
-                    ->assign_data(["oldemail" => $acct->email, "uemail" => $ustatus->jval->email]);
-                if (($token = $capability->create())) {
-                    $rest = ["capability_token" => $token, "sensitive" => true];
+                    ->assign_data(["oldemail" => $acct->email, "uemail" => $uemail])
+                    ->insert();
+                if ($capability->stored()) {
+                    $rest = ["capability_token" => $capability->salt, "sensitive" => true];
                     $mailer = new HotCRPMailer($this->conf, $acct, $rest);
                     $prep = $mailer->prepare("@changeemail", $rest);
                 } else {
@@ -211,10 +211,10 @@ class Profile_Page {
                 }
                 if ($prep->can_send()) {
                     $prep->send();
-                    $ustatus->msg_at("email_confirm", "<0>Confirmation email sent to {$ustatus->jval->email}", MessageSet::MARKED_NOTE);
+                    $ustatus->append_item(MessageItem::marked_note_at("email_confirm", "<0>Confirmation email sent to {$uemail}"));
                     $ustatus->inform_at("email_confirm", "<0>Follow the instructions in the confirmation email to complete the process of changing your email address.");
                 } else {
-                    $ustatus->error_at("email", "<0>Email change not saved: confirmation email cannot be sent to {$ustatus->jval->email} at the moment");
+                    $ustatus->error_at("email", "<0>Email change not saved: confirmation email cannot be sent to {$uemail} at the moment");
                 }
                 // Save changes *except* for new email, by restoring old email.
                 $ustatus->jval->email = $acct->email;
@@ -223,14 +223,18 @@ class Profile_Page {
         }
 
         // save account
-        return $ustatus->save_user($ustatus->jval, $acct);
+        return $ustatus->execute_update() ? $ustatus->user : null;
     }
 
 
     /** @return \Generator<MessageItem> */
-    private function decorated_message_list(MessageSet $msx, UserStatus $us = null) {
+    private function decorated_message_list(MessageSet $msx, ?UserStatus $us = null) {
         $ms = new MessageSet(MessageSet::IGNORE_DUPS_FIELD);
         foreach ($msx->message_list() as $mi) {
+            if (($mi->field ?? "") !== ""
+                && str_ends_with($mi->field, ":context")) {
+                continue;
+            }
             if ($us
                 && $mi->field
                 && ($l = $us->field_label($mi->field))
@@ -246,11 +250,15 @@ class Profile_Page {
         }
     }
 
+    /** @return MessageItem */
+    private function linked_secondary_warning_note(UserStatus $ustatus, Contact $user) {
+        return MessageItem::warning_note("<5>" . htmlspecialchars($ustatus->linked_secondary) . " is linked to primary account " . Ht::link(htmlspecialchars($user->email), $this->conf->hoturl("profile", ["u" => $user->email])));
+    }
+
     /** @param string $text
      * @param string $filename */
     private function save_bulk($text, $filename) {
         $text = cleannl(convert_to_utf8($text));
-        $filename = $filename ? htmlspecialchars($filename) . ":" : "line ";
         $ms = new MessageSet;
         $success = $nochanges = $notified = [];
 
@@ -268,17 +276,16 @@ class Profile_Page {
         }
 
         $csv = new CsvParser($text);
-        $csv->set_filename($filename);
-        $csv->set_comment_chars("#%");
-        if (($line = $csv->next_list())) {
+        $csv->set_filename($filename ? "{$filename}:" : "line ");
+        $csv->add_comment_prefix("#")->add_comment_prefix("%");
+        if (($line = $csv->peek_list())) {
             if (preg_grep('/\A(?:email|user)\z/i', $line)) {
                 $csv->set_header($line);
+                $csv->next_list();
             } else if (count($line) == 1) {
                 $csv->set_header(["user"]);
-                $csv->unshift($line);
             } else {
                 // interpolate a likely header
-                $csv->unshift($line);
                 $hdr = [];
                 for ($i = 0; $i < count($line); ++$i) {
                     if (validate_email($line[$i])
@@ -305,23 +312,27 @@ class Profile_Page {
 
         $ustatus = new UserStatus($this->viewer);
         $ustatus->no_deprivilege_self = true;
-        $ustatus->update_profile_if_empty = !$this->qreq->bulkoverride;
+        if (!$this->qreq->bulkoverride) {
+            $ustatus->set_if_empty(UserStatus::IF_EMPTY_PROFILE);
+        }
+        $ustatus->set_follow_primary(true);
         $ustatus->add_csv_synonyms($csv);
 
         while (($line = $csv->next_row())) {
-            $ustatus->set_user(Contact::make_placeholder($this->conf));
             $ustatus->clear_messages();
-            $ustatus->jval = (object) ["id" => null];
+            $ustatus->start_update();
             $ustatus->csvreq = $line;
             $ustatus->parse_csv_group("");
-            $ustatus->notify = friendly_boolean($line["notify"]) ?? true;
-            $saved_user = $this->save_user($ustatus, null);
+            $ustatus->set_notify(friendly_boolean($line["notify"]) ?? true);
+            $saved_user = $this->save_user($ustatus);
             if ($saved_user) {
                 $url = $this->conf->hoturl("profile", "u=" . urlencode($saved_user->email));
                 $link = "<a class=\"nb\" href=\"{$url}\">" . $saved_user->name_h(NAME_E) . "</a>";
+                if ($ustatus->linked_secondary) {
+                    $ms->append_item($this->linked_secondary_warning_note($ustatus, $saved_user));
+                }
                 if ($ustatus->notified) {
                     $notified[] = $link;
-                    $success[] = $link;
                 } else if (!empty($ustatus->diffs)) {
                     $success[] = $link;
                 } else {
@@ -342,21 +353,23 @@ class Profile_Page {
         if (!empty($ustatus->unknown_topics)) {
             $ms->warning_at(null, $this->conf->_("<0>Unknown topics ignored ({:list})", array_keys($ustatus->unknown_topics)));
         }
-        $mpos = 0;
-        if (!empty($success)) {
-            $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Saved accounts {:list}", $success)));
-        } else if ($ms->has_error()) {
-            $ms->splice_item($mpos++, MessageItem::error($this->conf->_("<0>Changes not saved; please correct these errors and try again")));
-        }
+        $ml1 = $ml2 = [];
         if (!empty($notified)) {
-            $ms->splice_item($mpos++, MessageItem::success($this->conf->_("<5>Activated accounts and sent mail to {:list}", $notified)));
+            $ml2[] = MessageItem::success($this->conf->_("<5>Accounts {:list} saved and notified", $notified));
         }
-        if (!empty($nochanges)) {
-            $ms->splice_item($mpos++, new MessageItem(null, $this->conf->_("<5>No changes to accounts {:list}", $nochanges), MessageSet::WARNING_NOTE));
-        } else if (!$ms->has_message()) {
-            $ms->splice_item($mpos++, new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
+        if (!empty($success)) {
+            $ml2[] = MessageItem::success($this->conf->_("<5>Accounts {:list} saved", $success));
         }
-        $this->conf->feedback_msg($this->decorated_message_list($ms));
+        if (empty($notified) && empty($success) && $ms->has_error()) {
+            $ml1[] = MessageItem::error($this->conf->_("<0>Changes not saved; please correct these errors and try again"));
+        }
+        if ((!empty($notified) || !empty($success)) && !empty($nochanges)) {
+            $ml2[] = MessageItem::warning_note($this->conf->_("<5>No changes to accounts {:list}", $nochanges));
+        }
+        if (empty($ml1) && empty($ml2) && !$ms->has_message()) {
+            $ml1[] = MessageItem::warning_note("<0>No changes");
+        }
+        $this->conf->feedback_msg($ml1, $this->decorated_message_list($ms), $ml2);
         return !$ms->has_error();
     }
 
@@ -365,33 +378,37 @@ class Profile_Page {
         assert($this->user->is_empty() === ($this->page_type !== 0));
 
         // prepare UserStatus
-        $this->ustatus->set_user($this->user);
-        $this->ustatus->jval = (object) ["id" => $this->user->has_account_here() ? $this->user->contactId : "new"];
+        $this->ustatus->start_update();
         $this->ustatus->no_deprivilege_self = true;
-        if ($this->page_type !== 0) {
-            $this->ustatus->update_profile_if_empty = true;
-            $this->ustatus->update_pc_if_empty = true;
-            $this->ustatus->notify = true;
+        if ($this->page_type === 0) {
+            $this->ustatus->set_user($this->user);
+        } else {
+            $this->ustatus->set_if_empty(UserStatus::IF_EMPTY_MOST);
+            $this->ustatus->set_notify(true);
+            $this->ustatus->set_follow_primary(true);
         }
 
         // parse request
         $this->ustatus->request_group("");
 
         // save request
-        $saved_user = $this->save_user($this->ustatus, $this->page_type !== 0 ? null : $this->user);
+        $saved_user = $this->save_user($this->ustatus);
 
         // report messages
+        $ml = [];
         $purl = $this->conf->hoturl("profile", ["u" => $saved_user ? $saved_user->email : null]);
         if ($this->ustatus->has_error()) {
-            $this->ustatus->prepend_msg("<0>Changes not saved; please correct the highlighted errors and try again", 2);
+            $ml[] = MessageItem::error("<0>Changes not saved; please correct the highlighted errors and try again");
         } else if ($this->ustatus->created && $this->ustatus->notified) {
-            $this->ustatus->prepend_msg("<5>Account " . Ht::link($saved_user->name_h(NAME_E), $purl) . " created and notified", MessageSet::SUCCESS);
+            $ml[] = MessageItem::success("<5>Account " . Ht::link($saved_user->name_h(NAME_E), $purl) . " created and notified");
         } else if ($this->ustatus->created) {
-            $this->ustatus->prepend_msg("<5>Account " . Ht::link($saved_user->name_h(NAME_E), $purl) . " created, but not notified", MessageSet::SUCCESS);
+            $ml[] = MessageItem::success("<5>Account " . Ht::link($saved_user->name_h(NAME_E), $purl) . " created, but not notified");
         } else {
-            $pos = 0;
+            if ($this->ustatus->linked_secondary) {
+                $ml[] = $this->linked_secondary_warning_note($this->ustatus, $saved_user);
+            }
             if ($this->page_type !== 0) {
-                $this->ustatus->splice_msg($pos++, "<5>User " . Ht::link($saved_user->name_h(NAME_E), $purl) . " already had an account on this site", MessageSet::WARNING_NOTE);
+                $ml[] = MessageItem::warning_note("<5>User " . Ht::link($saved_user->name_h(NAME_E), $purl) . " already had an account on this site");
             }
             if ($this->page_type !== 0 || $this->user !== $this->viewer) {
                 $diffs = " to " . commajoin(array_keys($this->ustatus->diffs));
@@ -400,15 +417,15 @@ class Profile_Page {
             }
             if (empty($this->ustatus->diffs)) {
                 if (!$this->ustatus->has_message_at("email_confirm")) {
-                    $this->ustatus->splice_msg($pos++, "<0>No changes", MessageSet::WARNING_NOTE);
+                    $ml[] = MessageItem::warning_note("<0>No changes");
                 }
             } else if ($this->ustatus->notified) {
-                $this->ustatus->splice_msg($pos++, "<0>Changes saved{$diffs} and user notified", MessageSet::SUCCESS);
+                $ml[] = MessageItem::success("<0>Changes saved{$diffs} and user notified");
             } else {
-                $this->ustatus->splice_msg($pos++, "<0>Changes saved{$diffs}", MessageSet::SUCCESS);
+                $ml[] = MessageItem::success("<0>Changes saved{$diffs}");
             }
         }
-        $this->conf->feedback_msg($this->decorated_message_list($this->ustatus, $this->ustatus));
+        $this->conf->feedback_msg($ml, $this->decorated_message_list($this->ustatus, $this->ustatus));
 
         // exit on error
         if ($this->ustatus->has_error()) {
@@ -418,37 +435,36 @@ class Profile_Page {
         // redirect on success
         if (isset($this->qreq->redirect)) {
             $this->conf->redirect();
-        } else {
-            $xcj = [];
-            if ($this->page_type !== 0) {
-                $roles = $this->ustatus->jval->roles ?? [];
-                if (in_array("chair", $roles)) {
-                    $xcj["pctype"] = "chair";
-                } else if (in_array("pc", $roles)) {
-                    $xcj["pctype"] = "pc";
-                } else {
-                    $xcj["pctype"] = "none";
-                }
-                if (in_array("sysadmin", $roles)) {
-                    $xcj["ass"] = 1;
-                }
-                $xcj["contactTags"] = join(" ", $this->ustatus->jval->tags ?? []);
-            }
-            if ($this->ustatus->has_problem()) {
-                $xcj["warning_fields"] = $this->ustatus->problem_fields();
-            }
-            $this->qreq->set_csession("profile_redirect", $xcj);
-            if ($this->user !== $this->viewer && $this->page_type === 0) {
-                $this->conf->redirect_self($this->qreq, ["u" => $this->user->email]);
+        }
+        $xcj = [];
+        if ($this->page_type !== 0) {
+            $roles = $this->ustatus->jval->roles ?? [];
+            if (in_array("chair", $roles, true)) {
+                $xcj["pctype"] = "chair";
+            } else if (in_array("pc", $roles, true)) {
+                $xcj["pctype"] = "pc";
             } else {
-                $this->conf->redirect_self($this->qreq);
+                $xcj["pctype"] = "none";
             }
+            if (in_array("sysadmin", $roles, true)) {
+                $xcj["ass"] = 1;
+            }
+            $xcj["contactTags"] = join(" ", $this->ustatus->jval->tags ?? []);
+        }
+        if ($this->ustatus->has_problem()) {
+            $xcj["warning_fields"] = $this->ustatus->problem_fields();
+        }
+        $this->qreq->set_csession("profile_redirect", $xcj);
+        if ($this->user !== $this->viewer && $this->page_type === 0) {
+            $this->conf->redirect_self($this->qreq, ["u" => $this->user->email]);
+        } else {
+            $this->conf->redirect_self($this->qreq);
         }
     }
 
     private function handle_save_bulk() {
         if ($this->qreq->has_file("bulk")) {
-            $text = $this->qreq->file_contents("bulk");
+            $text = $this->qreq->file_content("bulk");
             if ($text === false) {
                 $this->conf->error_msg("<0>Internal error: cannot read uploaded file");
                 return;
@@ -463,52 +479,116 @@ class Profile_Page {
                 $this->conf->redirect_self($this->qreq);
             }
         } else {
-            $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
+            $this->conf->feedback_msg(MessageItem::warning_note("<0>No changes"));
         }
     }
 
-    private function handle_delete() {
+    private function check_delete() {
         if (!$this->viewer->privChair) {
             $this->conf->error_msg("<0>Only administrators can delete accounts");
-        } else if ($this->user === $this->viewer) {
-            $this->conf->error_msg("<0>You can’t delete your own account");
-        } else if (!$this->user->has_account_here()) {
-            $this->conf->feedback_msg(new MessageItem(null, "<0>This user’s account is not active on this site", MessageSet::MARKED_NOTE));
-        } else if ($this->user->security_locked_here()) {
-            $this->conf->error_msg("<0>This account is locked and can’t be deleted");
-        } else if (($tracks = UserStatus::user_paper_info($this->conf, $this->user->contactId))
-                   && !empty($tracks->soleAuthor)) {
-            $this->conf->feedback_msg([
-                MessageItem::error("<5>This account can’t be deleted because it is sole contact for " . UserStatus::render_paper_link($this->conf, $tracks->soleAuthor)),
-                MessageItem::inform("<0>You will be able to delete the account after deleting those papers or adding additional paper contacts.")
-            ]);
-        } else {
-            $this->conf->q("insert into DeletedContactInfo set contactId=?, firstName=?, lastName=?, unaccentedName=?, email=?, affiliation=?", $this->user->contactId, $this->user->firstName, $this->user->lastName, $this->user->unaccentedName, $this->user->email, $this->user->affiliation);
-            foreach (["ContactInfo", "PaperComment", "PaperConflict", "PaperReview",
-                      "PaperReviewPreference", "PaperReviewRefused", "PaperWatch",
-                      "ReviewRating", "TopicInterest"] as $table) {
-                $this->conf->qe_raw("delete from $table where contactId={$this->user->contactId}");
-            }
-            // delete twiddle tags
-            $assigner = new AssignmentSet($this->viewer);
-            $assigner->set_override_conflicts(true);
-            $assigner->parse("paper,tag\nall,{$this->user->contactId}~all#clear\n");
-            $assigner->execute();
-            // clear caches
-            if ($this->user->isPC || $this->user->privChair) {
-                $this->conf->invalidate_caches(["pc" => true]);
-            }
-            // done
-            $this->conf->success_msg("<0>Account {$this->user->email} deleted");
-            $this->viewer->log_activity_for($this->user, "Account deleted {$this->user->email}");
-            $this->conf->redirect_hoturl("users", "t=all");
+            return false;
         }
+        if ($this->user === $this->viewer) {
+            $this->conf->error_msg("<0>You can’t delete your own account");
+            return false;
+        }
+        if ($this->user->is_anonymous_user()) {
+            $this->conf->error_msg("<0>Account {} cannot be deleted", $this->user->email);
+            return false;
+        }
+        if (!$this->user->has_account_here()) {
+            $this->conf->feedback_msg(MessageItem::marked_note("<0>Account {} is not active on this site", $this->user->email));
+            return false;
+        }
+        if ($this->user->security_locked_here()) {
+            $this->conf->error_msg("<0>Account {} is locked and can’t be deleted", $this->user->email);
+            return false;
+        }
+        if (($this->user->cflags & Contact::CF_PRIMARY) !== 0) {
+            $links = Dbl::fetch_first_columns($this->conf->dblink,
+                "select email from ContactInfo join ContactPrimary using (contactId)
+                where ContactPrimary.primaryContactId=?", $this->user->contactId);
+            if (!empty($links)) {
+                $this->conf->feedback_msg(
+                    MessageItem::error("<0>Account {} can’t be deleted because it has linked accounts", $this->user->email),
+                    MessageItem::inform("<0>You will be able to delete the account after deleting {:list}.", $links)
+                );
+                return false;
+            }
+        }
+        if (($tracks = UserStatus::user_paper_info($this->conf, $this->user->contactId))
+            && !empty($tracks->soleAuthor)) {
+            $this->conf->feedback_msg(
+                MessageItem::error("<5>Account {} can’t be deleted because it is sole contact for " . UserStatus::render_paper_link($this->conf, $tracks->soleAuthor), new FmtArg(0, $this->user->email, 0)),
+                MessageItem::inform("<0>You will be able to delete the account after deleting those papers or adding additional paper contacts.")
+            );
+            return false;
+        }
+        return true;
+    }
+
+    private function handle_delete() {
+        if (!$this->check_delete()) {
+            return;
+        }
+        // insert deletion marker
+        $this->conf->qe("insert into DeletedContactInfo set contactId=?, firstName=?, lastName=?, unaccentedName=?, email=?, affiliation=?", $this->user->contactId, $this->user->firstName, $this->user->lastName, $this->user->unaccentedName, $this->user->email, $this->user->affiliation);
+        // remove roles (and update contactdb)
+        if (($this->user->roles & Contact::ROLE_DBMASK) !== 0) {
+            $this->user->save_roles(0, $this->viewer);
+        }
+        // unlink from primary
+        if ($this->user->primaryContactId > 0) {
+            (new ContactPrimary($this->viewer))->link($this->user, null);
+        }
+        // load paper set for reviews and comments
+        $prows = $this->conf->paper_set([
+            "where" => "paperId in (select paperId from PaperReview where contactId={$this->user->contactId} union select paperId from PaperComment where contactId={$this->user->contactId})"
+        ]);
+        // delete reviews (needs to be logged, might update other information)
+        $result = $this->conf->qe("select * from PaperReview where contactId=?", $this->user->contactId);
+        while (($rrow = ReviewInfo::fetch($result, $prows, $this->conf))) {
+            $rrow->delete($this->viewer, ["no_autosearch" => true]);
+        }
+        Dbl::free($result);
+        // delete comments (needs to be logged)
+        $result = $this->conf->qe("select * from PaperComment where contactId=?", $this->user->contactId);
+        while (($crow = CommentInfo::fetch($result, $prows, $this->conf))) {
+            $crow->delete($this->viewer, ["no_autosearch" => true]);
+        }
+        Dbl::free($result);
+        // delete from other tables database
+        foreach (["PaperConflict", "PaperWatch",
+                  "PaperReviewPreference", "PaperReviewRefused", "ReviewRating",
+                  "TopicInterest", "ContactInfo"] as $table) {
+            $this->conf->qe_raw("delete from {$table} where contactId={$this->user->contactId}");
+        }
+        // delete twiddle tags
+        $assigner = new AssignmentSet($this->viewer);
+        $assigner->set_override_conflicts(true);
+        $assigner->parse("paper,tag\nall,{$this->user->contactId}~all#clear\n");
+        $assigner->execute();
+        // automatic tags may have changed
+        $this->conf->update_automatic_tags();
+        // clear caches
+        if ($this->user->isPC || $this->user->privChair) {
+            $this->conf->invalidate_caches(["pc" => true]);
+        }
+        // done
+        $this->conf->success_msg("<0>Account {} deleted", $this->user->email);
+        $this->viewer->log_activity_for($this->user, "Account deleted {$this->user->email}");
+        $this->conf->redirect_hoturl("users", "t=all");
     }
 
     function handle_request() {
         $this->find_user();
         if ($this->qreq->cancel) {
             $this->conf->redirect_self($this->qreq);
+        } else if ($this->qreq->reauth
+                   && $this->qreq->valid_post()) {
+            if (!$this->ustatus->has_error()) {
+                $this->conf->redirect_self($this->qreq);
+            }
         } else if ($this->qreq->savebulk
                    && $this->page_type !== 0
                    && $this->qreq->valid_post()) {
@@ -516,10 +596,6 @@ class Profile_Page {
         } else if ($this->qreq->save
                    && $this->qreq->valid_post()) {
             $this->handle_save();
-        } else if ($this->qreq->merge
-                   && $this->page_type === 0
-                   && $this->user === $this->viewer) {
-            $this->conf->redirect_hoturl("mergeaccounts");
         } else if ($this->qreq->delete
                    && $this->qreq->valid_post()) {
             $this->handle_delete();
@@ -553,7 +629,7 @@ class Profile_Page {
         if ($this->viewer->privChair
             && $this->page_type !== 0
             && empty($this->ustatus->jval->roles)) {
-            if (in_array($this->qreq->role, ["pc", "chair"])) {
+            if (in_array($this->qreq->role, ["pc", "chair"], true)) {
                 $this->qreq->pctype = $this->qreq->role;
             } else if ($this->qreq->role === "sysadmin") {
                 $this->qreq->ass = "1";
@@ -570,8 +646,12 @@ class Profile_Page {
 
     function print() {
         // canonicalize topic
+        $this->ustatus->set_user($this->user);
+        $reqtopic = $this->qreq->t ? : "main";
         if ($this->page_type === 0
-            && ($g = $this->ustatus->cs()->canonical_group($this->qreq->t ? : "main"))) {
+            && $reqtopic !== "main"
+            && !str_starts_with($reqtopic, "__")
+            && ($g = $this->ustatus->cs()->canonical_group($reqtopic))) {
             $this->topic = $g;
         } else {
             $this->topic = "main";
@@ -664,6 +744,18 @@ class Profile_Page {
             $first = $this->viewer->privChair;
             $cs = $this->ustatus->cs();
             foreach ($cs->members("", "title") as $gj) {
+                $disabled = false;
+                if (isset($gj->display_if)) {
+                    $disp = $gj->display_if;
+                    if (is_string($disp) && $disp !== "dim") {
+                        $disp = $cs->call_function($gj, $disp);
+                    }
+                    if (!$disp) {
+                        continue;
+                    } else if ($disp === "dim") {
+                        $disabled = true;
+                    }
+                }
                 echo '<li class="leftmenu-item',
                     $gj->name === $this->topic ? ' active' : ' ui js-click-child',
                     $first ? ' leftmenu-item-gap4' : '', '">';
@@ -672,8 +764,7 @@ class Profile_Page {
                     echo $title;
                 } else {
                     $aextra = [];
-                    if (isset($gj->dim_group_if)
-                        && $cs->xtp->check($gj->dim_group_if, $gj)) {
+                    if ($disabled) {
                         $aextra["class"] = "dim";
                     }
                     echo Ht::link($title, $this->conf->selfurl($this->qreq, ["t" => $gj->name]), $aextra);
@@ -738,19 +829,29 @@ class Profile_Page {
         if ($this->page_type === 2) {
             $this->ustatus->print_members("__bulk");
         } else {
-            $this->ustatus->cs()->print_body_members($this->topic);
-            if ($this->ustatus->inputs_printed()) {
-                $this->ustatus->print_actions();
-            }
+            $this->print_topic();
             echo "</div>"; // foldaccount
         }
 
-        echo "</main></form>";
+        echo "</main></form>",
+            // include #f-reauth in case we need to reauthenticate
+            '<form id="f-reauth" class="ui-submit js-reauth"></form>';
 
         if ($this->page_type === 0) {
             Ht::stash_script('$("#f-profile").awaken()');
         }
         $this->qreq->print_footer();
+    }
+
+    private function print_topic() {
+        $this->ustatus->cs()->print_body_members($this->topic);
+        if (!$this->ustatus->inputs_printed()
+            || (!$this->ustatus->has_recent_authentication()
+                && ($gj = $this->ustatus->cs()->get($this->topic))
+                && ($gj->request_recent_authentication ?? false))) {
+            return;
+        }
+        $this->ustatus->print_actions();
     }
 
 

@@ -23,17 +23,17 @@ class Mail_Page {
 
         // set list of searchable paper collections
         if ($viewer->privChair) {
-            $this->search_topt["s"] = PaperSearch::$search_type_names["s"];
+            $this->search_topt["s"] = PaperSearch::limit_description($this->conf, "s");
             if ($this->conf->has_any_accepted()) {
-                $this->search_topt["accepted"] = PaperSearch::$search_type_names["accepted"];
+                $this->search_topt["accepted"] = PaperSearch::limit_description($this->conf, "accepted");
             }
-            $this->search_topt["unsub"] = "Unsubmitted";
-            $this->search_topt["all"] = PaperSearch::$search_type_names["all"];
+            $this->search_topt["unsub"] = PaperSearch::limit_description($this->conf, "unsub");
+            $this->search_topt["all"] = PaperSearch::limit_description($this->conf, "all");
         }
         if ($viewer->privChair ? $this->conf->has_any_manager() : $viewer->is_manager()) {
-            $this->search_topt["admin"] = PaperSearch::$search_type_names["admin"];
+            $this->search_topt["admin"] = PaperSearch::limit_description($this->conf, "admin");
         }
-        $this->search_topt["req"] = PaperSearch::$search_type_names["req"];
+        $this->search_topt["req"] = PaperSearch::limit_description($this->conf, "req");
 
         $this->recip = new MailRecipients($viewer);
     }
@@ -89,6 +89,10 @@ class Mail_Page {
         } else if (!isset($qreq->p) && isset($qreq->pap)) {
             $qreq->set_a("p", $qreq->has_a("pap") ? $qreq->get_a("pap") : preg_split('/\s+/', $qreq->pap));
         }
+        if (!$qreq->has_plimit && $qreq->has_a("p") && !isset($qreq->recheck)) {
+            $qreq->plimit = "1";
+        }
+
         // It's OK to just set $qreq->p from the input without
         // validation because MailRecipients filters internally
         if (isset($qreq->prevt) && isset($qreq->prevq)) {
@@ -100,22 +104,24 @@ class Mail_Page {
                 $qreq->recheck = "1";
             }
         }
-        $papersel = null;
-        if ($qreq->has_plimit || $qreq->plimit) {
-            if ($qreq->plimit) {
-                $search = new PaperSearch($this->viewer, ["t" => $qreq->t, "q" => $qreq->q]);
-                $papersel = $search->paper_ids();
-                sort($papersel);
-            }
-        } else if ($qreq->has_a("p") && !isset($qreq->recheck)) {
-            $papersel = [];
-            foreach ($qreq->get_a("p") as $p) {
-                if (($p = stoi($p) ?? -1) > 0)
-                    $papersel[] = $p;
-            }
+
+        if ($qreq->plimit) {
+            $search = new PaperSearch($this->viewer, ["t" => $qreq->t, "q" => $qreq->q]);
+            $papersel = $search->paper_ids();
             sort($papersel);
-            $qreq->q = join(" ", $papersel);
-            $qreq->plimit = 1;
+
+            if ($qreq->has_a("p") && !isset($qreq->recheck)) {
+                $chksel = [];
+                foreach ($qreq->get_a("p") as $p) {
+                    if (($p = stoi($p) ?? -1) > 0)
+                        $chksel[] = $p;
+                }
+                sort($chksel);
+                if ($chksel !== $papersel) {
+                    $papersel = $chksel;
+                    $qreq->q = join(" ", $chksel);
+                }
+            }
         } else {
             $qreq->q = "";
             $papersel = null;
@@ -172,33 +178,33 @@ class Mail_Page {
     }
 
     function print_keyword_help() {
-        echo '<div id="mailref">Keywords enclosed in percent signs, such as <code>%NAME%</code> or <code>%REVIEWDEADLINE%</code>, are expanded for each mail.  Use the following syntax:
+        echo '<div id="mailref">Keywords enclosed in double braces, such as <code>{{NAME}}</code> or <code>{{REVIEWDEADLINE}}</code>, are expanded for each mail. Use the following syntax:
 <hr class="g">
 
 <div class="ctable no-hmargin">
 <dl class="ctelt">
-<dt><code>%URL%</code></dt>
+<dt><code>{{LINK}}</code></dt>
     <dd>Site URL.</dd>
-<dt><code>%NUMSUBMITTED%</code></dt>
+<dt><code>{{NUMSUBMITTED}}</code></dt>
     <dd>Number of papers submitted.</dd>
-<dt><code>%NUMACCEPTED%</code></dt>
+<dt><code>{{NUMACCEPTED}}</code></dt>
     <dd>Number of papers accepted.</dd>
-<dt><code>%NAME%</code></dt>
+<dt><code>{{NAME}}</code></dt>
     <dd>Full name of recipient.</dd>
-<dt><code>%FIRST%</code>, <code>%LAST%</code></dt>
+<dt><code>{{FIRST}}</code>, <code>{{LAST}}</code></dt>
     <dd>First and last names, if any, of recipient.</dd>
-<dt><code>%EMAIL%</code></dt>
+<dt><code>{{EMAIL}}</code></dt>
     <dd>Email address of recipient.</dd>
-<dt><code>%REVIEWDEADLINE%</code></dt>
+<dt><code>{{REVIEWDEADLINE}}</code></dt>
     <dd>Reviewing deadline appropriate for recipient.</dd>
 </dl><dl class="ctelt">
-<dt><code>%NUMBER%</code></dt>
+<dt><code>{{PID}}</code></dt>
     <dd>Paper number relevant for mail.</dd>
-<dt><code>%TITLE%</code></dt>
+<dt><code>{{TITLE}}</code></dt>
     <dd>Paper title.</dd>
-<dt><code>%TITLEHINT%</code></dt>
+<dt><code>{{TITLEHINT}}</code></dt>
     <dd>First couple words of paper title (useful for mail subject).</dd>
-<dt><code>%OPT(AUTHORS)%</code></dt>
+<dt><code>{{OPT(AUTHORS)}}</code></dt>
     <dd>Paper authors (if recipient is allowed to see the authors).</dd>
 ';
 
@@ -214,36 +220,36 @@ class Mail_Page {
             }
         });
         if (!empty($opts)) {
-            echo '<dt><code>%', htmlspecialchars($opts[0]->search_keyword()), '%</code></dt>
+            echo '<dt><code>{{', htmlspecialchars($opts[0]->search_keyword()), '}}</code></dt>
     <dd>Value of paper’s “', $opts[0]->title_html(), '” submission field.';
             if (count($opts) > 1) {
                 echo ' Also ', join(", ", array_map(function ($o) {
-                    return '<code>%' . htmlspecialchars($o->search_keyword()) . '%</code>';
+                    return '<code>{{' . htmlspecialchars($o->search_keyword()) . '}}</code>';
                 }, array_slice($opts, 1))), '.';
             }
-            echo "</dd>\n<dt><code>%IF(", htmlspecialchars($opts[0]->search_keyword()), ')%...%ENDIF%</code></dt>
+            echo "</dd>\n<dt><code>{{IF(", htmlspecialchars($opts[0]->search_keyword()), ')}}...{{ENDIF}}</code></dt>
     <dd>Include text if paper has a “', $opts[0]->title_html(), "” submission field.</dd>\n";
         }
         echo '</dl><dl class="ctelt">
-<dt><code>%REVIEWS%</code></dt>
+<dt><code>{{REVIEWS}}</code></dt>
     <dd>Pretty-printed paper reviews.</dd>
-<dt><code>%COMMENTS%</code></dt>
+<dt><code>{{COMMENTS}}</code></dt>
     <dd>Pretty-printed paper comments, if any.</dd>
-<dt><code>%COMMENTS(<i>tag</i>)%</code></dt>
+<dt><code>{{COMMENTS(<i>tag</i>)}}</code></dt>
     <dd>Comments tagged #<code><i>tag</i></code>, if any.</dd>
 </dl><dl class="ctelt">
-<dt><code>%IF(SHEPHERD)%...%ENDIF%</code></dt>
+<dt><code>{{IF(SHEPHERD)}}...{{ENDIF}}</code></dt>
     <dd>Include text if a shepherd is assigned.</dd>
-<dt><code>%SHEPHERD%</code></dt>
+<dt><code>{{SHEPHERD}}</code></dt>
     <dd>Shepherd name and email, if any.</dd>
-<dt><code>%SHEPHERDNAME%</code></dt>
+<dt><code>{{SHEPHERDNAME}}</code></dt>
     <dd>Shepherd name, if any.</dd>
-<dt><code>%SHEPHERDEMAIL%</code></dt>
+<dt><code>{{SHEPHERDEMAIL}}</code></dt>
     <dd>Shepherd email, if any.</dd>
 </dl><dl class="ctelt">
-<dt><code>%IF(#<i>tag</i>)%...%ENDIF%</code></dt>
+<dt><code>{{IF(#<i>tag</i>)}}...{{ENDIF}}</code></dt>
     <dd>Include text if paper has tag <code><i>tag</i></code>.</dd>
-<dt><code>%TAGVALUE(<i>tag</i>)%</code></dt>
+<dt><code>{{TAGVALUE(<i>tag</i>)}}</code></dt>
     <dd>Value of paper’s <code><i>tag</i></code>.</dd>
 </dl>
 </div></div>';
@@ -301,7 +307,7 @@ class Mail_Page {
                 $this->recip->append_item_at("q", $mi);
             }
             if ($plist->is_empty()) {
-                $this->recip->warning_at("q", "<0>No papers match that search.");
+                $this->recip->warning_at("q", "<0>No papers match that search");
             }
         }
         echo '<div class="', $this->recip->control_class("q", "fx8 mt-1 d-flex"), '">';

@@ -1,6 +1,6 @@
 <?php
 // pages/p_settings.php -- HotCRP chair-only conference settings management page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Settings_Page {
     /** @var Conf */
@@ -70,10 +70,10 @@ class Settings_Page {
     function handle_update($qreq) {
         if ($this->sv->execute()) {
             $qreq->set_csession("settings_highlight", $this->sv->message_field_map());
-            if (!empty($this->sv->changed_keys())) {
+            if (!empty($this->sv->saved_keys())) {
                 $this->conf->success_msg("<0>Changes saved");
             } else if (!$this->sv->has_success()) {
-                $this->conf->feedback_msg(new MessageItem(null, "<0>No changes", MessageSet::WARNING_NOTE));
+                $this->conf->feedback_msg(MessageItem::warning_note("<0>No changes"));
             }
             $this->sv->report();
             $this->conf->redirect_self($qreq);
@@ -97,9 +97,11 @@ class Settings_Page {
         echo Ht::unstash(), // clear out other script references
             $this->conf->make_script_file("scripts/settings.js"), "\n",
 
-            Ht::form($this->conf->hoturl("=settings", "group={$group}"),
-                     ["id" => "f-settings", "class" => "need-diff-check need-unload-protection"]),
-
+            Ht::form($this->conf->hoturl("=settings", "group={$group}"), [
+                "id" => "f-settings",
+                "name" => base64_encode(random_bytes(8)), // prevent FF from autofilling on reload
+                "class" => "need-diff-check need-unload-protection"
+            ]),
             '<div class="leftmenu-left"><nav class="leftmenu-menu">',
             '<h1 class="leftmenu"><button type="button" class="q uic js-leftmenu">Settings</button></h1>',
             '<ul class="leftmenu-list">';

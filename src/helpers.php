@@ -1,38 +1,20 @@
 <?php
 // helpers.php -- HotCRP non-class helper functions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 // string helpers
-
-/** @param null|int|string $value
- * @return int
- * @deprecated */
-function cvtint($value, $default = -1) {
-    $v = trim((string) $value);
-    if (is_numeric($v)) {
-        $ival = intval($v);
-        if ($ival == floatval($v)) {
-            return $ival;
-        }
-    }
-    return $default;
-}
 
 /** @param null|int|string $s
  * @return ?int */
 function stoi($s) {
     if ($s === null || is_int($s)) {
         return $s;
-    }
-    $v = trim((string) $s);
-    if (!is_numeric($v)) {
+    } else if (!is_numeric($s)) {
         return null;
     }
-    $iv = intval($v);
-    if ($iv != floatval($v)) {
-        return null;
-    }
-    return $iv;
+    $iv = intval($s);
+    $fv = floatval($s);
+    return $iv == $fv ? $iv : null;
 }
 
 /** @param null|int|float|string $s
@@ -40,13 +22,11 @@ function stoi($s) {
 function stonum($s) {
     if ($s === null || is_int($s) || is_float($s)) {
         return $s;
-    }
-    $v = trim((string) $s);
-    if (!is_numeric($v)) {
+    } else if (!is_numeric($s)) {
         return null;
     }
-    $iv = intval($v);
-    $fv = floatval($v);
+    $iv = intval($s);
+    $fv = floatval($s);
     return $iv == $fv ? $iv : $fv;
 }
 
@@ -129,12 +109,8 @@ class JsonResult implements JsonSerializable, ArrayAccess {
                 assert(!($a2 instanceof JsonResult));
                 $this->content = (array) $a2;
             }
-        } else if (is_string($a2)) {
-            error_log("bad JsonResult with string " . debug_string_backtrace());
-            assert($this->status && $this->status > 299);
-            $this->content = ["ok" => false, "error" => $a2];
         } else {
-            assert(is_associative_array($a2));
+            assert(is_array($a2) && !array_is_list($a2));
             $this->content = $a2;
         }
     }
@@ -150,6 +126,11 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         return $jr;
     }
 
+    /** @return JsonResult */
+    static function make_ok() {
+        return new JsonResult(200);
+    }
+
     /** @param int $status
      * @param string $ftext
      * @return JsonResult */
@@ -162,11 +143,26 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         ]);
     }
 
+    /** @param int|MessageItem|iterable<MessageItem>|MessageSet ...$mls
+     * @return JsonResult */
+    static function make_message_list(...$mls) {
+        $status = null;
+        if (!empty($mls) && is_int($mls[0])) {
+            $status = array_shift($mls);
+        }
+        $mlx = MessageSet::make_list(...$mls);
+        $status = $status ?? (MessageSet::list_status($mlx) > 1 ? 400 : 200);
+        return new JsonResult($status, [
+            "ok" => $status < 300,
+            "message_list" => $mlx
+        ]);
+    }
+
     /** @param ?string $param
      * @param ?string $ftext
      * @return JsonResult */
     static function make_parameter_error($param, $ftext = null) {
-        $mi = new MessageItem($param, $ftext ?? "<0>Parameter error", 2);
+        $mi = new MessageItem(2, $param, $ftext ?? "<0>Parameter error");
         return new JsonResult(400, ["ok" => false, "message_list" => [$mi]]);
     }
 
@@ -174,7 +170,7 @@ class JsonResult implements JsonSerializable, ArrayAccess {
      * @param ?string $ftext
      * @return JsonResult */
     static function make_missing_error($param, $ftext = null) {
-        $mi = new MessageItem($param, $ftext ?? "<0>Parameter missing", 2);
+        $mi = new MessageItem(2, $param, $ftext ?? "<0>Parameter missing");
         return new JsonResult(400, ["ok" => false, "message_list" => [$mi]]);
     }
 
@@ -182,7 +178,7 @@ class JsonResult implements JsonSerializable, ArrayAccess {
      * @param ?string $ftext
      * @return JsonResult */
     static function make_permission_error($field = null, $ftext = null) {
-        $mi = new MessageItem($field, $ftext ?? "<0>Permission error", 2);
+        $mi = new MessageItem(2, $field, $ftext ?? "<0>Permission error");
         return new JsonResult(403, ["ok" => false, "message_list" => [$mi]]);
     }
 
@@ -190,15 +186,50 @@ class JsonResult implements JsonSerializable, ArrayAccess {
      * @param ?string $ftext
      * @return JsonResult */
     static function make_not_found_error($field = null, $ftext = null) {
-        $mi = new MessageItem($field, $ftext ?? "<0>Not found", 2);
+        $mi = new MessageItem(2, $field, $ftext ?? "<0>Not found");
         return new JsonResult(404, ["ok" => false, "message_list" => [$mi]]);
     }
 
 
+    /** @param int $status
+     * @return $this */
+    function set_status($status) {
+        $this->status = $status;
+        return $this;
+    }
+
     /** @param bool $pp
      * @return $this */
-    function pretty_print($pp) {
+    function set_pretty_print($pp) {
         $this->pretty_print = $pp;
+        return $this;
+    }
+
+
+    /** @param MessageItem $mi
+     * @return $this */
+    function append_item($mi) {
+        $this->content["message_list"][] = $mi;
+        return $this;
+    }
+
+
+    /** @return bool */
+    function ok() {
+        return $this->content["ok"];
+    }
+
+    /** @param string $key
+     * @return mixed */
+    function get($key) {
+        return $this->content[$key] ?? null;
+    }
+
+    /** @param string $key
+     * @param mixed $value
+     * @return $this */
+    function set($key, $value) {
+        $this->content[$key] = $value;
         return $this;
     }
 
@@ -233,34 +264,28 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     }
 
 
-    /** @param ?bool $validated */
-    function emit($validated = null) {
-        if ($this->status && !$this->minimal) {
-            if (!isset($this->content["ok"])) {
-                $this->content["ok"] = $this->status <= 299;
-            }
-            if (!isset($this->content["status"])) {
-                $this->content["status"] = $this->status;
-            }
-        } else if (isset($this->content["status"])) {
-            $this->status = $this->content["status"];
+    /** @param ?Qrequest $qreq */
+    function emit($qreq = null) {
+        if ($this->status && !$this->minimal && !isset($this->content["ok"])) {
+            $this->content["ok"] = $this->status <= 299;
         }
-        if ($validated
-            ?? (Qrequest::$main_request && Qrequest::$main_request->valid_token())) {
+        if ($qreq && $qreq->valid_token()) {
             // Don’t set status on unvalidated requests, since that can leak
             // information (e.g. via <link prefetch onerror>).
             if ($this->status) {
                 http_response_code($this->status);
             }
-            header("Access-Control-Allow-Origin: *");
+            if (($origin = $qreq->header("Origin"))) {
+                header("Access-Control-Allow-Origin: {$origin}");
+            }
+        } else if ($this->status > 299 && !isset($this->content["status_code"])) {
+            $this->content["status_code"] = $this->status;
         }
         header("Content-Type: application/json; charset=utf-8");
-        if (Qrequest::$main_request && isset(Qrequest::$main_request->pprint)) {
-            $pprint = friendly_boolean(Qrequest::$main_request->pprint);
-        } else if ($this->pretty_print !== null) {
-            $pprint = $this->pretty_print;
+        if ($qreq && isset($qreq->pretty)) {
+            $pprint = friendly_boolean($qreq->pretty);
         } else {
-            $pprint = Contact::$main_user && Contact::$main_user->is_bearer_authorized();
+            $pprint = $this->pretty_print ?? true;
         }
         echo json_encode_browser($this->content, $pprint ? JSON_PRETTY_PRINT : 0), "\n";
     }
@@ -282,7 +307,7 @@ class Redirection extends Exception {
     public $url;
     /** @param string $url */
     function __construct($url) {
-        parent::__construct("Redirect to $url");
+        parent::__construct("Redirect to {$url}");
         $this->url = $url;
     }
 }
@@ -362,7 +387,7 @@ function clean_tempdirs() {
     $dirh = opendir($dir);
     $now = time();
     while (($fname = readdir($dirh)) !== false) {
-        if (preg_match('/\Ahotcrptmp\d+\z/', $fname)
+        if (preg_match('/\Ahotcrptmp[.\w]+\z/', $fname)
             && is_dir("{$dir}/{$fname}")
             && ($mtime = @filemtime("{$dir}/{$fname}")) !== false
             && $mtime < $now - 1800)
@@ -475,9 +500,14 @@ function pluralize($s) {
                && $len > 1
                && strpos("bcdfgjklmnpqrstvxz", $s[$len - 2]) !== false) {
         return substr($s, 0, $len - 1) . "ies";
-    } else if ($last === "t"
-               && $s === "that") {
-        return "those";
+    } else if ($last === "t") {
+        if ($s === "that") {
+            return "those";
+        } else if ($s === "it") {
+            return "them";
+        } else {
+            return "{$s}s";
+        }
     } else if ($last === ")"
                && preg_match('/\A(.*?)(\s*\([^)]*\))\z/', $s, $m)) {
         return pluralize($m[1]) . $m[2];
@@ -531,6 +561,22 @@ function unparse_byte_size_binary($n) {
         return round($n / 1024) . "KiB";
     } else if ($n > 0) {
         return (max(round($n / 102.4), 1) / 10) . "KiB";
+    } else {
+        return "0B";
+    }
+}
+
+/** @param int|float $n
+ * @return string */
+function unparse_byte_size_binary_f($n) {
+    if ($n > 1073689395) {
+        return sprintf("%.2fGiB", round($n / 10737418.24) / 100);
+    } else if ($n > 1048063) {
+        return sprintf("%.1fMiB", round($n / 104857.6) / 10);
+    } else if ($n > 10188) {
+        return sprintf("%.0fKiB", $n / 1024);
+    } else if ($n > 0) {
+        return sprintf("%.1fKiB", max(round($n / 102.4), 1) / 10);
     } else {
         return "0B";
     }
@@ -599,14 +645,12 @@ function unparse_preference($preference) {
 }
 
 /** @param int $revtype
- * @param bool $unfinished
  * @param ?string $classes
  * @return string */
-function review_type_icon($revtype, $unfinished = false, $classes = null) {
+function review_type_icon($revtype, $classes = null) {
     // see also script.js:review_form
     assert(!!$revtype);
     return '<span class="rto rt' . $revtype
-        . ($revtype > 0 && $unfinished ? " rtinc" : "")
         . ($classes ? " " . $classes : "")
         . '" title="' . ReviewForm::$revtype_names_full[$revtype]
         . '"><span class="rti">' . ReviewForm::$revtype_icon_text[$revtype] . '</span></span>';

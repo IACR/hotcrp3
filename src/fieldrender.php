@@ -1,5 +1,5 @@
 <?php
-// fieldrender.php -- HotCRP helper class for multi-format messages
+// fieldrender.php -- HotCRP helper class for rendering submission fields
 // Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
 class FieldRender {
@@ -39,16 +39,17 @@ class FieldRender {
     const CFVERBOSE = 0x8000;
 
     /** @param int $context */
-    function __construct($context, Contact $user = null) {
+    function __construct($context, ?Contact $user = null) {
         assert(($context & 3) !== 0 && ($context & 3) !== 3);
         assert((($context & 0xFF0) & (($context & 0xFF0) - 1)) === 0);
         $this->context = $context;
         $this->user = $user;
     }
+
     /** @param PaperTable $table
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function make_table($table) {
+    function set_table($table) {
         assert(($this->context & self::CFHTML) === self::CFHTML);
         assert(($this->context & (self::CFPAGE | self::CFFORM)) !== 0);
         assert(!$this->table && (!$this->user || $this->user === $table->user));
@@ -56,11 +57,20 @@ class FieldRender {
         $this->table = $table;
         return $this;
     }
+
     /** @param PaperColumn $column
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function make_column($column) {
+    function set_column($column) {
         $this->column = $column;
+        return $this;
+    }
+
+    /** @param int $context
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    function set_context($context) {
+        $this->context = $context;
         return $this;
     }
 
@@ -68,55 +78,23 @@ class FieldRender {
         $this->title = null;
         $this->value = $this->value_format = $this->value_long = null;
     }
+
     /** @return bool */
     function is_empty() {
         return (string) $this->title === "" && (string) $this->value === "";
     }
+
     /** @param int $context
      * @return bool */
     function want($context) {
         return ($this->context & $context) === $context;
     }
-    /** @return bool
-     * @deprecated */
-    function for_page() {
-        return ($this->context & self::CFPAGE) !== 0;
-    }
-    /** @return bool
-     * @deprecated */
-    function for_form() {
-        return ($this->context & self::CFFORM) !== 0;
-    }
-    /** @return bool
-     * @deprecated */
-    function want_text() {
-        return ($this->context & self::CFHTML) === 0;
-    }
-    /** @return bool
-     * @deprecated */
-    function want_html() {
-        return ($this->context & self::CFHTML) !== 0;
-    }
-    /** @return bool
-     * @deprecated */
-    function want_list() {
-        return ($this->context & self::CFLIST) !== 0;
-    }
-    /** @return bool
-     * @deprecated */
-    function want_list_row() {
-        return ($this->context & (self::CFLIST | self::CFCOLUMN)) === self::CFLIST;
-    }
-    /** @return bool
-     * @deprecated */
-    function want_list_column() {
-        return ($this->context & (self::CFLIST | self::CFCOLUMN)) ===
-            (self::CFLIST | self::CFCOLUMN);
-    }
+
     /** @return bool */
     function verbose() {
         return ($this->context & self::CFVERBOSE) !== 0;
     }
+
     /** @param string $t
      * @return $this */
     function set_text($t) {
@@ -124,6 +102,7 @@ class FieldRender {
         $this->value_format = 0;
         return $this;
     }
+
     /** @param string $t
      * @return $this */
     function set_html($t) {
@@ -131,6 +110,7 @@ class FieldRender {
         $this->value_format = 5;
         return $this;
     }
+
     /** @param bool $b
      * @return $this */
     function set_bool($b) {
@@ -143,6 +123,15 @@ class FieldRender {
         }
         return $this;
     }
+
+    /** @return string */
+    function value_text() {
+        if ($this->value === null || $this->value === "") {
+            return "";
+        }
+        return Ftext::convert_to(0, $this->value_format, $this->value);
+    }
+
     /** @return string */
     function value_html($divclass = null) {
         $rest = "";
@@ -170,5 +159,38 @@ class FieldRender {
             $html = "<div{$divclass}{$rest}>{$html}</div>";
         }
         return $html;
+    }
+
+    /** @param ?int $wl
+     * @param ?int $hwl */
+    function apply_wordlimit($wl = 0, $hwl = 0) {
+        if ($this->value === null || $this->value === "" || $this->value_format === 5) {
+            return;
+        }
+        $wl = $wl ?? 0;
+        $hwl = $hwl ?? 0;
+        if ($hwl > 0 && ($wl <= 0 || $wl > $hwl)) {
+            $wl = $hwl;
+        }
+        if ($wl <= 0 || ($wc = count_words($this->value)) <= $wl) {
+            return;
+        }
+        if ($hwl > 0 && $wc > $hwl) {
+            list($prefix, $suffix) = count_words_split($this->value, $hwl);
+            $this->value = rtrim($prefix) . "… ✖";
+        }
+        if ($wl > 0 && $wc > $wl && ($hwl <= 0 || $wl < $hwl)) {
+            list($prefix, $suffix) = count_words_split($this->value, $wl);
+            $formatclass = $this->value_format === 0 ? "format0" : "need-format";
+            $formatattr = $this->value_format === 0 ? "" : " data-format=\"{$this->value_format}\"";
+            $this->value = "<div class=\"has-overlong overlong-collapsed\"><div class=\"overlong-divider\"><div class=\"overlong-allowed {$formatclass}\"{$formatattr}>"
+                . ($this->value_format === 0 ? Ht::format0($prefix) : htmlspecialchars($prefix))
+                . "</div><div class=\"overlong-mark\"><div class=\"overlong-expander\">"
+                . Ht::button("Show more", ["class" => "ui js-overlong-expand", "aria-expanded" => "false"])
+                . "</div></div></div><div class=\"overlong-content {$formatclass}\"{$formatattr}>"
+                . ($this->value_format === 0 ? Ht::format0($this->value) : htmlspecialchars($this->value))
+                . "</div></div>";
+            $this->value_format = 5;
+        }
     }
 }

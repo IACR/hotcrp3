@@ -1,6 +1,6 @@
 <?php
 // pc_formula.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Formula_PaperColumn extends PaperColumn {
     /** @var Formula */
@@ -9,12 +9,12 @@ class Formula_PaperColumn extends PaperColumn {
     private $formula_function;
     /** @var ScoreInfo */
     private $statistics;
-    /** @var ?ScoreInfo */
-    private $override_statistics;
     /** @var array<int,mixed> */
     private $results;
     /** @var ?string */
     private $real_format;
+    /** @var ValueFormat */
+    private $value_format;
     /** @var array<int,int|float> */
     private $sortmap;
     function __construct(Conf $conf, $cj) {
@@ -22,14 +22,8 @@ class Formula_PaperColumn extends PaperColumn {
         $this->override = PaperColumn::OVERRIDE_BOTH;
         $this->formula = $cj->formula;
     }
-    function add_decoration($decor) {
-        if (preg_match('/\A%\d*(?:\.\d*)[bdeEfFgGoxX]\z/', $decor)) {
-            $this->__add_decoration($decor, [$this->real_format]);
-            $this->real_format = $decor;
-            return true;
-        } else {
-            return parent::add_decoration($decor);
-        }
+    function view_option_schema() {
+        return ["format!"];
     }
     function completion_name() {
         if (strpos($this->formula->name, " ") !== false) {
@@ -54,6 +48,10 @@ class Formula_PaperColumn extends PaperColumn {
         if ($visible) {
             $this->formula->add_query_options($pl->qopts);
         }
+        if (($v = $this->view_option("format")) !== null
+            && preg_match('/\A%?(\d*(?:\.\d*)[bdeEfFgGoxX])\z/', $v, $m)) {
+            $this->real_format = "%{$m[1]}";
+        }
         return true;
     }
     function prepare_sort(PaperList $pl, $sortindex) {
@@ -75,28 +73,22 @@ class Formula_PaperColumn extends PaperColumn {
         if ($this->results === null) {
             $formulaf = $this->formula_function;
             $this->results = [];
-            $isreal = $this->formula->result_format_is_numeric();
+            $isreal = $this->formula->result_format() === Fexpr::FNUMERIC
+                && !$this->real_format;
             foreach ($pl->rowset() as $row) {
                 $v = $formulaf($row, null, $pl->user);
                 $this->results[$row->paperId] = $v;
-                if ($isreal
-                    && !$this->real_format
-                    && is_float($v)
-                    && round($v * 100) % 100 != 0) {
+                if ($isreal && is_float($v) && $v - floor($v) >= 0.005) {
                     $this->real_format = "%.2f";
                 }
             }
         }
-        $this->statistics = new ScoreInfo;
-        $this->override_statistics = null;
-    }
-    /** @return string */
-    private function unparse($x) {
-        return $this->formula->unparse_html($x, $this->real_format);
-    }
-    /** @return string */
-    private function unparse_diff($x) {
-        return $this->formula->unparse_diff_html($x, $this->real_format);
+        if ($this->real_format && $this->formula->result_format_is_numeric()) {
+            $this->value_format = new Numeric_ValueFormat($this->real_format);
+        } else {
+            $this->value_format = $this->formula->value_format();
+        }
+        $this->statistics = (new ScoreInfo)->set_value_format($this->value_format);
     }
     function content(PaperList $pl, PaperInfo $row) {
         if ($pl->overriding === 2) {
@@ -104,50 +96,18 @@ class Formula_PaperColumn extends PaperColumn {
         } else {
             $v = $this->results[$row->paperId];
         }
-        if ($pl->overriding !== 0 && !$this->override_statistics) {
-            $this->override_statistics = clone $this->statistics;
-        }
-        if ($pl->overriding <= 1) {
-            $this->statistics->add($v);
-        }
-        if ($pl->overriding !== 1 && $this->override_statistics) {
-            $this->override_statistics->add($v);
-        }
-        return $this->unparse($v);
+        $this->statistics->add_overriding($v, $pl->overriding);
+        return $this->value_format->html($v);
     }
     function text(PaperList $pl, PaperInfo $row) {
         $v = $this->results[$row->paperId];
-        return $this->formula->unparse_text($v, $this->real_format);
+        return $this->value_format->text($v);
     }
     function has_statistics() {
         return true;
     }
-    /** @return string */
-    private function unparse_statistic($statistics, $stat) {
-        $x = $statistics->statistic($stat);
-        if ($stat === ScoreInfo::MEAN || $stat === ScoreInfo::MEDIAN) {
-            return $this->unparse($x);
-        } else if ($stat === ScoreInfo::STDDEV_P || $stat === ScoreInfo::VARIANCE_P) {
-            return $this->unparse_diff($x);
-        } else if ($stat === ScoreInfo::COUNT && is_int($x)) {
-            return (string) $x;
-        } else if ($this->real_format) {
-            return sprintf($this->real_format, $x);
-        } else {
-            return is_int($x) ? (string) $x : sprintf("%.2f", $x);
-        }
-    }
-    function statistic_html(PaperList $pl, $stat) {
-        if ($stat === ScoreInfo::SUM
-            && !$this->formula->result_format_is_numeric()) {
-            return "—";
-        }
-        $t = $this->unparse_statistic($this->statistics, $stat);
-        if ($this->override_statistics) {
-            $tt = $this->unparse_statistic($this->override_statistics, $stat);
-            $t = $pl->wrap_conflict($t, $tt);
-        }
-        return $t;
+    function statistics() {
+        return $this->statistics;
     }
 }
 
@@ -214,7 +174,7 @@ class Formula_PaperColumnFactory {
         return null;
     }
     static function completions(Contact $user, $fxt) {
-        $cs = ["(<formula>)"];
+        $cs = ["({formula})"];
         foreach ($user->conf->named_formulas() as $f) {
             if ($user->can_view_formula($f)) {
                 $cs[] = preg_match('/\A[-A-Za-z_0-9:]+\z/', $f->name) ? $f->name : "\"{$f->name}\"";

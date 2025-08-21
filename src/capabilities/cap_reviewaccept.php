@@ -1,6 +1,6 @@
 <?php
 // cap_reviewaccept.php -- HotCRP review-acceptor capability management
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ReviewAccept_Capability {
     /** @param ReviewInfo $rrow
@@ -14,7 +14,7 @@ class ReviewAccept_Capability {
         $result = $rrow->conf->qe("select * from Capability where salt>=? and salt<?",
             "hcra{$rrow->reviewId}@", "hcra{$rrow->reviewId}~");
         $tok = null;
-        while (($xtok = TokenInfo::fetch($result, $rrow->conf))) {
+        while (($xtok = TokenInfo::fetch($result, $rrow->conf, false, "TokenInfo"))) {
             if ($xtok->capabilityType === TokenInfo::REVIEWACCEPT
                 && $xtok->reviewId === $rrow->reviewId
                 && (!$tok || $xtok->is_active()))
@@ -23,19 +23,16 @@ class ReviewAccept_Capability {
         Dbl::free($result);
 
         if (!$tok && $create) {
-            $tok = new TokenInfo($rrow->conf, TokenInfo::REVIEWACCEPT);
-            $tok->paperId = $rrow->paperId;
-            $tok->reviewId = $rrow->reviewId;
-            $tok->contactId = $rrow->contactId;
-            $tok->set_invalid_after(2592000); /* 30 days */
-            $tok->set_expires_after(5184000); /* 60 days */
-            $tok->set_token_pattern("hcra{$rrow->reviewId}[16]");
-            if (!$tok->create()) {
-                return null;
-            }
+            $tok = (new TokenInfo($rrow->conf, TokenInfo::REVIEWACCEPT))
+                ->set_review($rrow)
+                ->set_user_id($rrow->contactId)
+                ->set_invalid_after(3888000 /* 45 days */)
+                ->set_expires_after(5184000 /* 60 days */)
+                ->set_token_pattern("hcra{$rrow->reviewId}[16]")
+                ->insert();
         }
 
-        return $tok;
+        return $tok && $tok->stored() ? $tok : null;
     }
 
     static function apply_review_acceptor(Contact $user, $uf) {
@@ -50,7 +47,7 @@ class ReviewAccept_Capability {
                     Conf::$now, "hcra{$rrowid}@", "hcra{$rrowid}~", $uf->name, Conf::$now);
             }
             $tok->update_use()
-                ->extend_validity(7776000) /* 90 days */
+                ->extend_validity(10368000) /* 120 days */
                 ->extend_expiry(15552000) /* 180 days */
                 ->update();
         } else {
@@ -74,13 +71,9 @@ class ReviewAccept_Capability {
                     $t .= " <a href=\"" . $user->conf->hoturl("signin") . "\">Sign in to the site</a> to view or edit your reviews.";
                 }
                 $user->conf->feedback_msg([
-                    new MessageItem(null, "<0>Bad review link", MessageSet::ERROR),
-                    new MessageItem(null, $t, MessageSet::INFORM)
+                    MessageItem::error("<0>Bad review link"),
+                    MessageItem::inform($t)
                 ]);
-                error_log("bad review acceptor {$uf->name}: "
-                          . (!$tok || $tok->capabilityType !== TokenInfo::REVIEWACCEPT
-                             ? "not found"
-                             : "created {$tok->timeCreated}, used {$tok->timeUsed}, invalid {$tok->timeInvalid}, expired {$tok->timeExpires}, user {$tok->contactId}"));
             }
         }
     }

@@ -1,6 +1,6 @@
 <?php
 // a_conflict.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Conflict_Assignable extends Assignable {
     /** @var int */
@@ -11,10 +11,13 @@ class Conflict_Assignable extends Assignable {
      * @param ?int $cid
      * @param ?int $ctype */
     function __construct($pid, $cid, $ctype = null) {
-        $this->type = "conflict";
         $this->pid = $pid;
         $this->cid = $cid;
         $this->_ctype = $ctype;
+    }
+    /** @return string */
+    function type() {
+        return "conflict";
     }
     /** @return self */
     function fresh() {
@@ -65,19 +68,17 @@ class Conflict_AssignmentParser extends AssignmentParser {
         if ($this->remove) {
             $min = $this->iscontact ? CONFLICT_CONTACTAUTHOR : CONFLICT_MAXUNCONFLICTED + 1;
             return new CountMatcher(">=$min");
-        } else if (!$this->iscontact
-                   && ($pos = strpos((string) $req["conflict"], ":")) !== false) {
+        }
+        if (!$this->iscontact
+            && ($pos = strpos((string) $req["conflict"], ":")) !== false) {
             $x = strtolower(substr($req["conflict"], 0, $pos));
-            if (in_array($x, ["", "any", "all", "y", "yes", "conflict", "conflicted"])) {
+            if (in_array($x, ["", "any", "all", "y", "yes", "conflict", "conflicted"], true)) {
                 return new CountMatcher(">" . CONFLICT_MAXUNCONFLICTED);
             } else if (($ct = $conf->conflict_set()->parse_assignment($x, 0)) !== false) {
                 return new CountMatcher("=" . $ct);
-            } else {
-                return null;
             }
-        } else {
-            return null;
         }
+        return null;
     }
     function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
         $matcher = $this->_matcher($req, $state->conf);
@@ -85,9 +86,8 @@ class Conflict_AssignmentParser extends AssignmentParser {
             $m = $state->query(new Conflict_Assignable($prow->paperId, null));
             $cids = array_map(function ($x) { return $x->cid; }, $m);
             return $state->users_by_id($cids);
-        } else {
-            return null;
         }
+        return null;
     }
     function allow_user(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         return $contact->contactId != 0;
@@ -186,25 +186,44 @@ class Conflict_Assigner extends Assigner {
         $uname = $u->name(NAME_E);
         $type = $item->type();
 
-        if ($has_conflict
-            && isset($item["_override"])
-            && $state->user->can_administer($prow)) {
-            $state->msg_near($item->landmark, "<0>Overriding conflict for #{$pid} {$type} assignment {$uname}", 1);
-        } else if ($has_conflict) {
+        if ($has_conflict) {
+            if (isset($item["_override"])
+                && $state->user->can_administer($prow)) {
+                $state->msg_near($item->landmark, "<0>Overriding conflict for #{$pid} {$type} assignment {$uname}", 1);
+                return;
+            }
+
             $state->msg_near($item->landmark, "<0>{$uname} cannot {$type} #{$pid} because they are conflicted", 2);
             if ($state->csv_context && $state->user->allow_administer($prow)) {
                 $state->msg_near($item->landmark, "<0>Set an “override” column to “yes” to force this assignment.", MessageSet::INFORM);
             }
             throw new AssignmentError("");
+        }
+
+        // otherwise, no conflict yet
+        $xtype = $type === "review" ? "reviewer" : $type;
+        $state->msg_near($item->landmark, "<0>Warning: Proposed {$xtype} {$uname} may conflict with #{$pid}", 1);
+        foreach ($potconf->messages as $msglist) {
+            $state->msg_near($item->landmark, "<5>" . $potconf->render_ul_item(null, null, $msglist), MessageSet::INFORM);
+        }
+        ++$state->potential_conflict_warnings;
+        $can_admin = $state->user->allow_administer($prow);
+        if ($state->potential_conflict_warnings > 1
+            && !$state->confirm_potential_conflicts) {
+            return;
+        }
+        if ($state->confirm_potential_conflicts && $can_admin) {
+            $state->msg_near($item->landmark, "<5>"
+                . Ht::button("Confirm this conflict", ["class" => "ui js-assign-potential-conflict mr-2", "data-pid" => $pid, "data-uid" => $u->contactId, "data-conflict-type" => "pinned conflicted"])
+                . Ht::button("Ignore this conflict", ["class" => "ui js-assign-potential-conflict", "data-pid" => $pid, "data-uid" => $u->contactId, "data-conflict-type" => "pinned unconflicted"]),
+                MessageSet::INFORM);
+        }
+        if ($state->potential_conflict_warnings > 1) {
+            // do nothing
+        } else if ($can_admin) {
+            $state->msg_near($item->landmark, "<5>You may want to <a href=\"" . $state->conf->hoturl("conflictassign") . "\" target=\"_blank\" rel=\"noopener\">confirm all potential conflicts</a>.", MessageSet::INFORM);
         } else {
-            $state->msg_near($item->landmark, "<0>Warning: #{$pid} {$type} assignment {$uname} has a potential conflict", 1);
-            foreach ($potconf->messages as $msglist) {
-                $state->msg_near($item->landmark, "<5>" . $potconf->render_ul_item(null, null, $msglist), MessageSet::INFORM);
-            }
-            if ($state->potential_conflict_warnings < 1) {
-                $state->msg_near($item->landmark, "<5>You may want to <a href=\"" . $state->conf->hoturl("conflictassign") . "\" target=\"_blank\" rel=\"noopener\" class=\"btn\">Confirm potential conflicts</a> before performing other assignments.", MessageSet::INFORM);
-                ++$state->potential_conflict_warnings;
-            }
+            $state->msg_near($item->landmark, "<5>You may want to ask an administrator to confirm potential conflicts.", MessageSet::INFORM);
         }
     }
 

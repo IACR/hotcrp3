@@ -16,7 +16,7 @@ Values meaningful within page stacking contexts, especially `#p-page`
 Generic values
 
 * `.modal.transparent`: 10
-* `.header-actas`, `.dropmenu-container`: 12 (must be > `.modal.transparent`)
+* `#h-actas`, `.dropmenu-container`: 12 (must be > `.modal.transparent`)
 * `.modal`: 14
 * `.modal-dialog`: 16 (must be > `.modal`)
 * `.bubble`: 20
@@ -32,7 +32,7 @@ Generic values
 * `.overlong-content`: 1
 * `.overlong-collapsed > .overlong-content`: 0
 * `.overlong-collapsed > .overlong-divider > .overlong-mark`: 2
-* `.cmtcard.is-editing.popout`: 4
+* `.cmtcard.edit.popout`: 4
 
 ## `id`
 
@@ -50,11 +50,14 @@ Generic values
 * `id^=i-` is for icons
 * `id^=f-` is for forms
 * `id^=h-` is for header elements
+    * `#h-actas`
     * `#h-site`
     * `#h-page`
     * `#h-right`
     * `#h-deadline`
     * `#h-messages`
+    * `#h-usermenu`
+    * `#h-usermenubutton`
 * `id^=n-` is for navigation elements (quicklinks)
     * `#n-next`
     * `#n-prev`

@@ -1,22 +1,23 @@
 <?php
 // pages/doc.php -- HotCRP document download page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Doc_Page {
     /** @param string $status
-     * @param MessageItem|MessageSet $msg
+     * @param MessageItem|MessageSet|iterable<MessageItem> $msg
      * @param Qrequest $qreq */
     static private function error($status, $msg, $qreq) {
-        $ml = $msg instanceof MessageSet ? $msg->message_list() : [$msg];
-
         if (str_starts_with($status, "403") && $qreq->user()->is_empty()) {
             $qreq->user()->escape();
-            exit;
-        } else if (str_starts_with($status, "5")) {
+            exit(0);
+        }
+
+        $ml = MessageSet::make_list($msg);
+        if (str_starts_with($status, "5")) {
             $navpath = $qreq->path();
             error_log($qreq->conf()->dbname . ": bad doc $status "
                 . MessageSet::feedback_text($ml)
-                . json_encode($qreq) . ($navpath ? " @$navpath" : "")
+                . json_encode($qreq) . ($navpath ? " @{$navpath}" : "")
                 . ($qreq->user() ? " " . $qreq->user()->email : "")
                 . (empty($_SERVER["HTTP_REFERER"]) ? "" : " R[" . $_SERVER["HTTP_REFERER"] . "]"));
         }
@@ -28,7 +29,7 @@ class Doc_Page {
             $qreq->print_header("Download", null);
             $qreq->conf()->feedback_msg($ml);
             $qreq->print_footer();
-            exit;
+            exit(0);
         }
     }
 
@@ -84,7 +85,7 @@ class Doc_Page {
         }
 
         if (($whyNot = $dr->perm_view_document($user))) {
-            self::error(isset($whyNot["permission"]) ? "403 Forbidden" : "404 Not Found", MessageItem::error("<5>" . $whyNot->unparse_html()), $qreq);
+            self::error(isset($whyNot["permission"]) ? "403 Forbidden" : "404 Not Found", $whyNot->message_list(), $qreq);
         }
         $prow = $dr->prow;
         $want_docid = $request_docid = (int) $dr->docid;
@@ -153,7 +154,7 @@ class Doc_Page {
             } else if (($listing = $doc->archive_listing(65536)) === null) {
                 $ml = $doc->message_list();
                 if (empty($ml)) {
-                    $ml[] = new MessageItem(null, "<0>Internal error", 2);
+                    $ml[] = MessageItem::error("<0>Internal error");
                 }
                 json_exit(["ok" => false, "message_list" => $ml]);
             } else {
@@ -167,11 +168,12 @@ class Doc_Page {
 
         // serve document
         $qreq->qsession()->commit();      // to allow concurrent clicks
-        $dopt = Downloader::make_server_request();
-        $dopt->attachment = (stoi($qreq->save) ?? -1) > 0;
+        $dopt = new Downloader;
+        $dopt->parse_qreq($qreq);
+        $dopt->set_attachment((stoi($qreq->save) ?? -1) > 0);
         $dopt->cacheable = $doc->has_hash() && ($x = $qreq->hash) && $doc->check_text_hash($x);
         $dopt->log_user = $user;
-        if (!$doc->download($dopt)) {
+        if (!$doc->emit($dopt)) {
             self::error("500 Server Error", $doc->message_set(), $qreq);
         }
     }

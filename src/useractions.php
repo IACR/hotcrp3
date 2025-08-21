@@ -1,6 +1,6 @@
 <?php
 // useractions.php -- HotCRP helpers for user actions
-// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2024 Eddie Kohler; see LICENSE.
 
 class UserActions {
     /** @param Conf $conf
@@ -26,15 +26,15 @@ class UserActions {
             [$ids, Contact::CF_UDISABLED, $user->contactId]);
         $j = (object) ["ok" => true, "message_list" => []];
         if (empty($users)) {
-            $j->message_list[] = new MessageItem(null, "<0>No changes (those accounts were already disabled)", MessageSet::WARNING_NOTE);
+            $j->message_list[] = MessageItem::warning_note("<0>No changes (those accounts were already disabled)");
         } else {
-            $conf->qe("update ContactInfo set disabled=?, cflags=cflags|? where contactId?a and (cflags&?)=0",
-                Contact::CF_UDISABLED, Contact::CF_UDISABLED,
-                array_keys($users), Contact::CF_UDISABLED);
+            $conf->qe("update ContactInfo set cflags=cflags|? where contactId?a and (cflags&?)=0",
+                Contact::CF_UDISABLED, array_keys($users), Contact::CF_UDISABLED);
             $conf->delay_logs();
             foreach ($users as $u) {
                 $conf->log_for($user, $u, "Account disabled");
                 $j->disabled_users[] = $u->name(NAME_E);
+                $u->update_cdb_roles();
             }
             $conf->release_logs();
         }
@@ -49,9 +49,9 @@ class UserActions {
             [$ids, Contact::CF_UDISABLED]);
         $j = (object) ["ok" => true, "message_list" => []];
         if (empty($users)) {
-            $j->message_list[] = new MessageItem(null, "<0>No changes (those accounts were already enabled)", MessageSet::WARNING_NOTE);
+            $j->message_list[] = MessageItem::warning_note("<0>No changes (those accounts were already enabled)");
         } else {
-            $conf->qe("update ContactInfo set disabled=0, cflags=(cflags&~?) where contactId?a and (cflags&?)!=0",
+            $conf->qe("update ContactInfo set cflags=(cflags&~?) where contactId?a and (cflags&?)!=0",
                 Contact::CF_UDISABLED, array_keys($users), Contact::CF_UDISABLED);
             $conf->delay_logs();
             foreach ($users as $u) {
@@ -67,6 +67,7 @@ class UserActions {
                         array_push($j->message_list, ...$prep->message_list());
                     }
                 }
+                $u->update_cdb_roles();
             }
             $conf->release_logs();
         }

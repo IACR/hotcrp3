@@ -1,16 +1,22 @@
 <?php
 // autoassigners/aa_review.php -- HotCRP helper classes for autoassignment
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Review_Autoassigner extends Autoassigner {
     /** @var int */
     private $rtype;
+    /** @var ?string */
+    private $xrtype;
     /** @var int */
     private $count;
     /** @var 1|2|3 */
     private $kind;
+    /** @var bool */
+    private $adjust = false;
     /** @var 1|2|3 */
     private $load;
+    /** @var ?int */
+    private $round;
 
     const KIND_ENSURE = 1;
     const KIND_ADD = 2;
@@ -20,59 +26,84 @@ class Review_Autoassigner extends Autoassigner {
     const LOAD_RTYPE = 2;
     const LOAD_ROUND = 3;
 
-    /** @param ?list<int> $pcids
-     * @param list<int> $papersel
-     * @param array<string,mixed> $subreq
-     * @param object $gj */
-    function __construct(Contact $user, $pcids, $papersel, $subreq, $gj) {
-        parent::__construct($user, $pcids, $papersel);
-        $t = $gj->rtype ?? $subreq["rtype"] ?? "primary";
+    /** @param object $gj */
+    function __construct(Contact $user, $gj) {
+        parent::__construct($user);
+        if ($gj->name === "review_per_user" || $gj->name === "review_per_pc") {
+            $this->kind = self::KIND_PER_USER;
+        } else if ($gj->name === "review_ensure") {
+            $this->kind = self::KIND_ENSURE;
+        } else if ($gj->name === "review_adjust") {
+            $this->kind = self::KIND_ENSURE;
+            $this->adjust = true;
+        } else {
+            $this->kind = self::KIND_ADD;
+        }
+        $this->xrtype = $gj->rtype ?? null;
+    }
+
+    function option_schema() {
+        return make_array(
+            "rtype$",
+            "round$",
+            "count#+",
+            "load=all;rtype;round",
+            ...self::balance_method_schema(),
+            ...self::max_load_schema(),
+            ...self::gadget_schema(),
+            ...self::costs_schema(),
+            ...self::preference_fuzz_schema()
+        );
+    }
+
+    function configure() {
+        $t = $this->xrtype ?? $this->option("rtype") ?? "primary";
         if (($rtype = ReviewInfo::parse_type($t, true))) {
             $this->rtype = $rtype;
         } else {
-            $this->error_at("rtype", "<0>Review type not found");
+            $this->error_at("rtype", "<0>Unknown review type ‘{$t}’");
             $this->rtype = REVIEW_PRIMARY;
         }
         $this->set_assignment_action(ReviewInfo::unparse_assigner_action($this->rtype));
 
-        if (($round = $subreq["round"] ?? null) !== null && $round !== "") {
-            $round = trim($round);
-            if (($err = Conf::round_name_error($round))) {
-                $this->error_at("round", "<0>{$err}");
-            } else {
-                $this->set_assignment_column("round", $round);
-            }
+        $roundname = trim($this->option("round") ?? "");
+        if ($roundname === "") {
+            $roundname = $this->conf->assignment_round_option($this->rtype);
         }
+        $this->round = $this->conf->round_number($roundname);
+        if ($this->round === null) {
+            $e = Conf::round_name_error($roundname);
+            $this->error_at("round", $e ? "<0>{$e}" : "<0>Review round ‘{$roundname}’ does not exist");
+        } else {
+            $this->set_assignment_column("round", $roundname);
+        }
+
         $this->set_computed_assignment_column("preference");
         $this->set_computed_assignment_column("topic_score");
 
-        $t = $subreq["load"] ?? "all";
-        if ($t === "all") {
+        $ld = $this->option("load") ?? "all";
+        if ($ld === "all") {
             $this->load = self::LOAD_ALL;
-        } else if ($t === "rtype") {
+        } else if ($ld === "rtype") {
             $this->load = self::LOAD_RTYPE;
-        } else if ($t === "round") {
+        } else if ($ld === "round") {
             $this->load = self::LOAD_ROUND;
+        } else {
+            $this->error_at("load", "<0>Expected ‘all’, ‘rtype’, or ‘round’");
         }
 
-        $this->extract_balance_method($subreq);
-        $this->extract_max_load($subreq);
-        $this->extract_gadget_costs($subreq);
-
-        $n = stoi($subreq["count"] ?? $gj->count ?? 1) ?? -1;
+        $n = stoi($this->option("count") ?? 1) ?? -1;
         if ($n <= 0) {
             $this->error_at("count", "<0>Positive number expected");
             $n = 1;
         }
         $this->count = $n;
 
-        if ($gj->name === "review_per_user" || $gj->name === "review_per_pc") {
-            $this->kind = self::KIND_PER_USER;
-        } else if ($gj->name === "review_ensure") {
-            $this->kind = self::KIND_ENSURE;
-        } else {
-            $this->kind = self::KIND_ADD;
-        }
+        $this->configure_balance_method();
+        $this->configure_max_load();
+        $this->configure_gadget();
+        $this->configure_costs();
+        $this->configure_preference_fuzz();
     }
 
     function incompletely_assigned_paper_ids() {
@@ -90,48 +121,63 @@ class Review_Autoassigner extends Autoassigner {
             $q .= " and (reviewType!=" . REVIEW_PC . " or requestedBy!=contactId)";
         }
         if ($this->load === self::LOAD_ROUND) {
-            $rname = $this->assignment_column("round")
-                ?? $this->conf->assignment_round_option($this->rtype === REVIEW_EXTERNAL);
-            $round = $this->conf->round_number($rname);
-            if ($round !== null) {
-                $q .= " and reviewRound={$round}";
-            } else {
-                $q .= " and false";
-            }
+            $q .= $this->round === null ? " and false" : " and reviewRound={$this->round}";
         }
         $result = $this->conf->qe($q . " group by contactId", $this->user_ids());
         while (($row = $result->fetch_row())) {
             $this->add_aauser_load((int) $row[0], (int) $row[1]);
+            if ($this->balance === self::BALANCE_ALL) {
+                $this->add_aauser_balance((int) $row[0], (int) $row[1]);
+            }
         }
         Dbl::free($result);
     }
 
-    private function set_ensure() {
-        $result = $this->conf->qe("select paperId, count(reviewId) from PaperReview where reviewType={$this->rtype} group by paperId");
-        while (($row = $result->fetch_row())) {
-            if (($ap = $this->aapaper((int) $row[0]))) {
-                $ap->ndesired = max($ap->ndesired - (int) $row[1], 0);
+    /** @param PaperInfo $prow */
+    protected function load_paper_reviews($prow) {
+        foreach ($prow->reviews_as_list() as $rrow) {
+            if ($this->kind === self::KIND_ENSURE
+                && $rrow->reviewType === $this->rtype) {
+                if ($this->adjust
+                    && $rrow->reviewRound === $this->round
+                    && $rrow->reviewStatus < ReviewInfo::RS_DRAFTED) {
+                    $eass = self::ENEWASSIGN;
+                } else {
+                    $eass = self::EOLDASSIGN;
+                }
+            } else {
+                $eass = self::EOTHERASSIGN;
+            }
+            $this->load_assignment($rrow->contactId, $prow->paperId, $eass);
+            if ($eass === self::ENEWASSIGN
+                && $this->balance === self::BALANCE_NEW) {
+                $this->add_aauser_balance($rrow->contactId, 1);
             }
         }
-        Dbl::free($result);
     }
 
     function run() {
         $this->load_review_preferences($this->rtype);
         $this->set_load();
 
-        $count = $this->count;
         if ($this->kind === self::KIND_PER_USER) {
             foreach ($this->aausers() as $ac) {
-                $ac->ndesired = $count;
+                $ac->ndesired = $this->count;
             }
-            $count = ceil((count($this->aausers()) * ($count + 2)) / max(count($this->aapapers()), 1));
-        }
-        foreach ($this->aapapers() as $ap) {
-            $ap->ndesired = $count;
-        }
-        if ($this->kind === self::KIND_ENSURE) {
-            $this->set_ensure();
+            $count = ceil((count($this->aausers()) * ($this->count + 2))
+                          / max(count($this->aapapers()), 1));
+            foreach ($this->aapapers() as $ap) {
+                $ap->ndesired = $count;
+                $ap->balance = true;
+            }
+        } else if ($this->kind === self::KIND_ENSURE) {
+            foreach ($this->aapapers() as $ap) {
+                $ap->ndesired = max($this->count - $ap->assignment_count(self::EOLDASSIGN), 0);
+            }
+        } else {
+            foreach ($this->aapapers() as $ap) {
+                $ap->ndesired = $this->count;
+            }
         }
         $this->reset_desired_assignment_count();
         gc_collect_cycles();

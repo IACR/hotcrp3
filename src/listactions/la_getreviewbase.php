@@ -1,6 +1,6 @@
 <?php
 // listactions/la_getreviewbase.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class GetReviewBase_ListAction extends ListAction {
     protected $isform;
@@ -15,14 +15,14 @@ class GetReviewBase_ListAction extends ListAction {
     protected function finish(Contact $user, $texts, $ms) {
         if (empty($texts)) {
             $user->conf->feedback_msg(
-                new MessageItem(null, "Nothing to download", MessageSet::MARKED_NOTE),
+                MessageItem::marked_note("<0>Nothing to download"),
                 $ms->message_list()
             );
             return;
         }
 
         if ($ms->has_error()) {
-            $ms->prepend_msg($this->isform ? "<0>Some review forms are missing." : "<0>Some reviews are missing.", MessageSet::MARKED_NOTE);
+            $ms->prepend_item(MessageItem::marked_note($this->isform ? "<0>Some review forms are missing." : "<0>Some reviews are missing."));
         }
 
         $rfname = $this->author_view ? "aureview" : "review";
@@ -49,18 +49,20 @@ class GetReviewBase_ListAction extends ListAction {
             foreach ($texts as $pt) {
                 $text .= $pt[1];
             }
-            return $user->conf->make_csvg($rfname, CsvGenerator::TYPE_STRING)
-                ->set_inline(false)->add_string($text);
-        } else {
-            $zip = new DocumentInfoSet($user->conf->download_prefix . "reviews.zip");
-            foreach ($texts as $pt) {
-                $zip->add_string_as($header . $pt[1], $user->conf->download_prefix . $rfname . $pt[0] . ".txt", null, $pt[2]);
-            }
-            foreach ($ms->message_list() as $mi) {
-                $zip->message_set()->append_item($mi);
-            }
-            $zip->download();
-            exit;
+            return $user->conf->make_text_downloader($rfname)
+                ->set_content($text);
         }
+
+        $zip = new DocumentInfoSet($user->conf->download_prefix . "reviews.zip");
+        foreach ($texts as $pt) {
+            if (($doc = $zip->add_string_as($header . $pt[1], $user->conf->download_prefix . $rfname . $pt[0] . ".txt"))
+                && $pt[2]) {
+                $doc->set_timestamp($pt[2]);
+            }
+        }
+        foreach ($ms->message_list() as $mi) {
+            $zip->message_set()->append_item($mi);
+        }
+        return $zip;
     }
 }

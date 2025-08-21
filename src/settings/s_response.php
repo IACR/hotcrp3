@@ -1,6 +1,6 @@
 <?php
 // settings/s_response.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Response_Setting {
     /** @var int */
@@ -136,7 +136,7 @@ class Response_SettingParser extends SettingParser {
 
     function prepare_oblist(Si $si, SettingValues $sv) {
         $m = [];
-        foreach ($sv->conf->response_rounds() as $rrd) {
+        foreach ($sv->conf->response_round_list() as $rrd) {
             $m[] = Response_Setting::make($sv->conf, $rrd);
         }
         $sv->append_oblist("response", $m, "name");
@@ -155,7 +155,7 @@ class Response_SettingParser extends SettingParser {
     }
 
     function print_name(SettingValues $sv) {
-        $t = Ht::button(Icons::ui_use("trash"), ["class" => "ui js-settings-response-delete ml-2 need-tooltip", "name" => "response/{$this->ctr}/deleter", "aria-label" => "Delete response", "tabindex" => -1]);
+        $t = Ht::button(Icons::ui_use("trash"), ["class" => "ui js-settings-response-delete btn-licon-s ml-2 need-tooltip", "name" => "response/{$this->ctr}/deleter", "aria-label" => "Delete response", "tabindex" => -1]);
         if (($n = $this->exists_count($sv->conf, $this->ctrid))) {
             $t .= '<span class="ml-3 d-inline-block">' . plural($n, "response") . '</span>';
         }
@@ -178,9 +178,10 @@ class Response_SettingParser extends SettingParser {
     }
 
     function print_wordlimit(SettingValues $sv) {
-        $sv->print_entry_group("response/{$this->ctr}/wordlimit", "Word limit", [
+        $sv->print_entry_group("response/{$this->ctr}/wordlimit", "Word limit", ["horizontal" => true]);
+        $sv->print_entry_group("response/{$this->ctr}/hard_wordlimit", "Hard word limit", [
             "horizontal" => true,
-            "hint" => is_int($this->ctr) && $this->ctr > 1 ? null : "This is a soft limit: authors may submit longer responses. 0 means no limit."
+            "hint" => is_int($this->ctr) && $this->ctr > 1 ? null : "Words beyond the soft limit are hidden from reviewers by default. Reviewers can’t see words beyond the hard limit."
         ]);
     }
 
@@ -269,11 +270,11 @@ class Response_SettingParser extends SettingParser {
         foreach ($sv->oblist_keys("response") as $ctr) {
             $rs = $sv->newv("response/{$ctr}");
             '@phan-var-force Response_Setting $rs';
-            if ($rs->deleted) {
-                $this->round_delete[] = $rs->id;
-            } else {
+            if (!$rs->deleted) {
                 $sv->check_date_before("response/{$ctr}/open", "response/{$ctr}/done", false);
                 array_splice($rss, $rs->name === "" ? 0 : count($rss), 0, [$rs]);
+            } else if ($rs->id !== null) {
+                $this->round_delete[] = $rs->id;
             }
         }
 
@@ -290,11 +291,13 @@ class Response_SettingParser extends SettingParser {
             }
         }
 
+        $xform = !empty($this->round_transform) || !empty($this->round_delete);
         $jrt = json_encode_db($jrl);
-        $sv->update("responses", $jrt === "[{}]" || $jrt === "[]" ? "" : $jrt);
-        if (!empty($this->round_transform) || !empty($this->round_delete)) {
-            $sv->request_write_lock("PaperComment");
+        if ($sv->update("responses", $jrt === "[{}]" || $jrt === "[]" ? "" : $jrt) || $xform) {
             $sv->request_store_value($si);
+        }
+        if ($xform) {
+            $sv->request_write_lock("PaperComment");
         }
         return true;
     }
@@ -302,7 +305,7 @@ class Response_SettingParser extends SettingParser {
     function store_value(Si $si, SettingValues $sv) {
         if (!empty($this->round_delete)) {
             $sv->conf->qe("update PaperComment set commentRound=0, commentType=(commentType&~?)|? where commentType>=? and (commentType&?)!=0 and commentRound?a",
-                CommentInfo::CT_RESPONSE | CommentInfo::CTVIS_MASK,
+                CommentInfo::CT_RESPONSE | CommentInfo::CTM_VIS,
                 CommentInfo::CT_FROZEN | CommentInfo::CTVIS_ADMINONLY,
                 CommentInfo::CTVIS_AUTHOR,
                 CommentInfo::CT_RESPONSE,
@@ -318,7 +321,7 @@ class Response_SettingParser extends SettingParser {
 
     static function crosscheck(SettingValues $sv) {
         if ($sv->has_interest("response")) {
-            foreach ($sv->conf->response_rounds() as $i => $rrd) {
+            foreach ($sv->conf->response_round_list() as $i => $rrd) {
                 $ctr = $i + 1;
                 if ($rrd->hard_wordlimit > 0
                     && $rrd->wordlimit > $rrd->hard_wordlimit) {

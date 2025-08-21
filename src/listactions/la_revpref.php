@@ -1,6 +1,6 @@
 <?php
 // listactions/la_revpref.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Revpref_ListAction extends ListAction {
     /** @var string */
@@ -32,13 +32,14 @@ class Revpref_ListAction extends ListAction {
             return $user->conf->pc_member_by_email($reviewer);
         }
     }
+
     function run(Contact $user, Qrequest $qreq, SearchSelection $ssel) {
         // maybe download preferences for someone else
         $reviewer = self::lookup_reviewer($user, $qreq->reviewer);
         if (!$reviewer) {
-            return $user->conf->error_msg("<0>Reviewer ‘{$qreq->reviewer}’ not found");
+            return JsonResult::make_not_found_error("reviewer", "<0>Reviewer ‘{$qreq->reviewer}’ not found");
         } else if (!$reviewer->isPC) {
-            return self::eperm();
+            return JsonResult::make_permission_error();
         } else if ($this->name === "get/revpref") {
             return $this->run_get($user, $qreq, $ssel, $reviewer, false);
         } else if ($this->name === "get/revprefx") {
@@ -50,9 +51,10 @@ class Revpref_ListAction extends ListAction {
                    || $this->name === "applyuploadpref") {
             return $this->run_uploadpref($user, $qreq, $ssel, $reviewer);
         } else {
-            return self::enoent();
+            return parent::run($user, $qreq, $ssel);
         }
     }
+
     function run_get(Contact $user, Qrequest $qreq, SearchSelection $ssel,
                      Contact $reviewer, $extended) {
         $not_me = $user->contactId !== $reviewer->contactId;
@@ -105,58 +107,59 @@ class Revpref_ListAction extends ListAction {
         }
         $aset = (new AssignmentSet($user))->set_override_conflicts(true);
         $aset->parse($csvg->unparse());
-        $ok = $aset->execute();
+        $aset->execute();
         if ($qreq->ajax) {
             return $aset->json_result();
-        } else if ($ok) {
-            if ($aset->is_empty()) {
-                $aset->prepend_msg("<0>No changes", MessageSet::WARNING_NOTE);
-            } else {
-                $aset->prepend_msg("<0>Preference changes saved", MessageSet::SUCCESS);
-            }
-            $user->conf->feedback_msg($aset->message_list());
-            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
-        } else {
-            $user->conf->feedback_msg($aset->message_list());
         }
-    }
-    /** @return CsvParser */
-    static function preference_file_csv($text, $filename) {
-        $text = preg_replace('/^==-== /m', '#', cleannl($text));
-        $csv = new CsvParser($text, CsvParser::TYPE_GUESS);
-        $csv->set_comment_chars("#");
-        $csv->set_filename($filename);
-        $line = $csv->next_list();
-        if ($line !== null) {
-            if (preg_grep('/\A(?:paper|pid|paper[\s_]*id|id)\z/i', $line)) {
-                $csv->set_header($line);
-            } else {
-                if (count($line) >= 2 && ctype_digit($line[0])) {
-                    if (preg_match('/\A\s*\d+\s*[XYZ]?\s*\z/i', $line[1])) {
-                        $csv->set_header(["paper", "preference"]);
-                    } else {
-                        $csv->set_header(["paper", "title", "preference"]);
-                    }
-                }
-                $csv->unshift($line);
-            }
+        $aset->feedback_msg(AssignmentSet::FEEDBACK_CHANGE);
+        if ($aset->has_error()) {
+            return;
         }
-        return $csv;
+        return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
     }
+
     function run_uploadpref(Contact $user, Qrequest $qreq, SearchSelection $ssel,
                             Contact $reviewer) {
         $reviewer_arg = $user->contactId === $reviewer->contactId ? null : $reviewer->email;
         $conf = $user->conf;
         if ($qreq->cancel) {
             return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
-        } else if ($qreq->file) {
-            $csv = self::preference_file_csv($qreq->file, $qreq->filename);
-        } else if ($qreq->has_file("fileupload")) {
-            $csv = self::preference_file_csv($qreq->file_contents("fileupload"), $qreq->file_filename("fileupload"));
+        }
+
+        if (($qf = $qreq->file("fileupload"))) {
+            $qf = $qf->content_or_docstore("prefassign-%s.csv", $user->conf);
+        } else if ($qreq->data) {
+            $qf = QrequestFile::make_string($qreq->data, $qreq->filename);
+        } else if ($qreq->data_source
+                   && ($ds = $user->conf->docstore())
+                   && ($f = $ds->open_tempfile($qreq->data_source, "prefassign-%s.csv"))) {
+            $qf = QrequestFile::make_stream($f, $qreq->filename);
         } else {
             return MessageItem::error("<0>File upload required");
         }
+        if (!$qf) {
+            return MessageItem::error("<0>Uploaded file too big to process");
+        }
+        $qf->convert_to_utf8();
 
+        $csv = new CsvParser($qf->stream ?? $qf->content, CsvParser::TYPE_GUESS);
+        $csv->add_comment_prefix("#")->add_comment_prefix("==-== ");
+        $csv->set_filename($qf->name);
+        $line = $csv->peek_list();
+        if ($line === null) {
+            // do nothing
+        } else if (preg_grep('/\A(?:paper|pid|paper[\s_]*id|id)\z/i', $line)) {
+            $csv->set_header($line);
+            $csv->next_list();
+        } else if (count($line) >= 2 && ctype_digit($line[0])) {
+            if (preg_match('/\A\s*\d+\s*[XYZ]?\s*\z/i', $line[1])) {
+                $csv->set_header(["paper", "preference"]);
+            } else {
+                $csv->set_header(["paper", "title", "preference"]);
+            }
+        }
+
+        $execute = $this->name === "applyuploadpref" || $this->name === "uploadpref";
         $aset = (new AssignmentSet($user))->set_override_conflicts(true);
         $aset->set_search_type("editpref");
         $aset->set_reviewer($reviewer);
@@ -165,36 +168,37 @@ class Revpref_ListAction extends ListAction {
             $aset->enable_papers($ssel->selection());
         }
         $aset->parse($csv);
-        if ($aset->is_empty()) {
-            if ($aset->has_error()) {
-                $aset->prepend_msg("<0>Changes not saved; please correct these errors and try again", 2);
-            } else {
-                $aset->prepend_msg("<0>No changes", MessageSet::WARNING_NOTE);
-            }
-            $conf->feedback_msg($aset->message_list());
-            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
-        } else if ($this->name === "applyuploadpref" || $this->name === "uploadpref") {
-            $aset->execute(true);
-            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
-        } else {
-            $qreq->print_header("Review preferences", "revpref");
-            $conf->feedback_msg($aset->message_list());
-
-            echo Ht::form($conf->hoturl("=reviewprefs", ["reviewer" => $reviewer_arg]), ["class" => "differs need-unload-protection"]),
-                Ht::hidden("fn", "applyuploadpref"),
-                Ht::hidden("file", $aset->make_acsv()->unparse(), ["data-default-value" => ""]),
-                Ht::hidden("filename", $csv->filename());
-
-            echo '<h3>Proposed preference assignment</h3>';
-            echo '<p>The uploaded file requests the following preference changes.</p>';
-            $aset->print_unparse_display();
-
-            echo Ht::actions([
-                Ht::submit("Apply changes", ["class" => "btn-success"]),
-                Ht::submit("cancel", "Cancel", ["formnovalidate" => true])
-            ], ["class" => "aab aabig"]), "</form>\n";
-            $qreq->print_footer();
-            exit;
+        if ($execute) {
+            $aset->execute();
         }
+        if ($execute || $aset->is_empty()) {
+            $aset->feedback_msg(AssignmentSet::FEEDBACK_CHANGE);
+            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
+        }
+
+        $qreq->print_header("Review preferences", "revpref");
+        $aset->feedback_msg(AssignmentSet::FEEDBACK_CHANGE);
+
+        echo Ht::form($conf->hoturl("=reviewprefs", ["reviewer" => $reviewer_arg]), ["class" => "differs need-unload-protection"]),
+            Ht::hidden("fn", "applyuploadpref");
+        if ($aset->assignment_count() < 5000) {
+            echo Ht::hidden("data", $aset->make_acsv()->unparse(), ["data-default-value" => ""]);
+        } else if (is_string($qf->content)) {
+            echo Ht::hidden("data", $qf->content, ["data-default-value" => ""]);
+        } else {
+            echo Ht::hidden("data_source", $qf->docstore_tmp_name, ["data-default-value" => ""]);
+        }
+        echo Ht::hidden("filename", $csv->filename());
+
+        echo '<h3>Proposed preference assignment</h3>';
+        echo '<p>The uploaded file requests the following preference changes.</p>';
+        $aset->print_unparse_display();
+
+        echo Ht::actions([
+            Ht::submit("Apply changes", ["class" => "btn-success"]),
+            Ht::submit("cancel", "Cancel", ["formnovalidate" => true])
+        ], ["class" => "aab aabig"]), "</form>\n";
+        $qreq->print_footer();
+        exit(0);
     }
 }

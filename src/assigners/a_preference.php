@@ -1,6 +1,6 @@
 <?php
 // a_preference.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Preference_Assignable extends Assignable {
     /** @var int */
@@ -14,11 +14,14 @@ class Preference_Assignable extends Assignable {
      * @param ?int $pref
      * @param ?int $exp */
     function __construct($pid, $cid, $pref = null, $exp = null) {
-        $this->type = "pref";
         $this->pid = $pid;
         $this->cid = $cid;
         $this->_pref = $pref;
         $this->_exp = $exp;
+    }
+    /** @return string */
+    function type() {
+        return "pref";
     }
     /** @return self */
     function fresh() {
@@ -44,10 +47,11 @@ class Preference_AssignmentParser extends AssignmentParser {
         return true;
     }
     function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
-        return array_filter($state->pc_users(),
-            function ($u) use ($prow, $state) {
-                return $state->user->can_edit_preference_for($u, $prow);
-            });
+        if ($state->user->can_administer($prow)) {
+            return $state->pc_users();
+        } else {
+            return [$state->user];
+        }
     }
     function expand_missing_user(PaperInfo $prow, $req, AssignmentState $state) {
         return $state->reviewer->isPC ? [$state->reviewer] : null;
@@ -55,92 +59,107 @@ class Preference_AssignmentParser extends AssignmentParser {
     function allow_user(PaperInfo $prow, Contact $user, $req, AssignmentState $state) {
         if (!$user->contactId) {
             return false;
-        } else if (!$state->user->can_edit_preference_for($user, $prow)) {
-            if ($user->contactId !== $state->user->contactId) {
-                $m = "<5>Can’t enter a preference for " . $user->name_h(NAME_E) . " on #{$prow->paperId}. ";
-            } else {
-                $m = "<5>Can’t enter a preference on #{$prow->paperId}. ";
-            }
-            return new AssignmentError($m . $state->user->perm_edit_preference_for($user, $prow)->unparse_html());
-        } else {
-            return true;
         }
+        if ($state->user->contactId !== $user->contactId) {
+            if (!$state->user->can_administer($prow)) {
+                return new AssignmentError($prow->failure_reason(["administer" => true]));
+            } else if (!$user->isPC) {
+                return new AssignmentError("<0>User ‘{$user->email}’ is not a PC member");
+            }
+        }
+        return true;
     }
     static private function make_exp($exp) {
         return $exp === null ? "N" : +$exp;
     }
-    /** @return ?array{int,?int} */
-    static function parse($str) {
-        if ($str === "" || strcasecmp($str, "none") == 0) {
-            return [0, null];
-        } else if (is_numeric($str)) {
-            $str = (float) $str;
-            if ($str <= 1000000) {
-                return [(int) round($str), null];
+    /** @return ?array{float,?int} */
+    static function parsef($str) {
+        $str = trim($str);
+        if ($str === "") {
+            return [0.0, null];
+        }
+        if (is_numeric($str)) {
+            return [floatval($str), null];
+        }
+        if (strpos($str, "\xE2") !== false) {
+            $str = preg_replace('/\xE2(?:\x88\x92|\x80\x93|\x80\x94)/', "-", $str);
+        }
+        if (preg_match('/\A(?:[\"\'`]\s*+|)(-\s*+(?:-\s*+|)(?=[\d.])|\+\s*+(?:\+\s*+|)(?=[\d.])|)(\d++(?:\.\d*+|)|\.\d++|(?=[cnx-z]))\s*([x-z]?|c|conflict|none|n\/a|)(?:\s*+[\"\'`]|)\z/i', $str, $m)) {
+            // $m[1] sign; $m[2] preference; $m[3] expertise
+            $exp = null;
+            if ($m[3] !== "") {
+                $exps = strtolower($m[3]);
+                if ($exps >= "x" && $exps <= "z") {
+                    $exp = 9 - (ord($exps) & 15);
+                } else if ($exps === "none" || $exps === "n/a") {
+                    return [0.0, null];
+                } else {
+                    return [-100.0, null];
+                }
+            }
+            if ($m[2] === "") {
+                $pref = 0.0;
             } else {
-                return null;
+                $pref = floatval($m[2]);
+                if ($m[1] !== "" && str_starts_with($m[1], "-")) {
+                    $pref = -$pref;
+                }
+            }
+            return [$pref, $exp];
+        }
+        $str = preg_replace('/\s++(?=[-+])/', "", $str);
+        if (strspn($str, "-") === strlen($str)) {
+            return [(float) -strlen($str), null];
+        } else if (strspn($str, "+") === strlen($str)) {
+            return [(float) strlen($str), null];
+        } else {
+            return null;
+        }
+    }
+    /** @return PaperReviewPreference|string */
+    static function parse_check($str, Conf $conf) {
+        $ppref = self::parsef($str);
+        if ($ppref === null) {
+            if (preg_match('/([-+]?)\s*(\d+)\s*([xyz]?)/i', $str, $m)) {
+                return $conf->_("<0>Invalid preference ‘{}’. Did you mean ‘{}’?", $str, $m[1] . $m[2] . strtoupper($m[3]));
+            } else {
+                return $conf->_("<0>Invalid preference ‘{}’", $str);
             }
         }
 
-        $str = rtrim(preg_replace('{(?:\A\s*[\"\'`]\s*|\s*[\"\'`]\s*\z|\s+(?=[-+\d.xyz]))}i', "", $str));
-        if ($str === "" || strcasecmp($str, "none") == 0 || strcasecmp($str, "n/a") == 0) {
-            return [0, null];
-        } else if (strspn($str, "-") === strlen($str)) {
-            return [-strlen($str), null];
-        } else if (strspn($str, "+") === strlen($str)) {
-            return [strlen($str), null];
-        } else if (preg_match('{\A(?:--?(?=-[\d.])|\+(?=\+?[\d.])|)([-+]?(?:\d+(?:\.\d*)?|\.\d+)|)([xyz]?)(?:[-+]|)\z}i', $str, $m)) {
-            if ($m[1] === "") {
-                $p = 0;
-            } else if ((float) $m[1] <= 1000000) {
-                $p = (int) round((float) $m[1]);
-            } else {
-                return null;
-            }
-            if ($m[2] === "") {
-                $e = null;
-            } else {
-                $e = 9 - (ord($m[2]) & 15);
-            }
-            return [$p, $e];
-        } else if (strcasecmp($str, "conflict") == 0) {
-            return [-100, null];
-        } else {
-            $str2 = str_replace(["\xE2\x88\x92", "–", "—"], ["-", "-", "-"], $str);
-            return $str === $str2 ? null : self::parse($str2);
+        $min = $conf->setting("pref_min") ?? -1000000;
+        $max = $conf->setting("pref_max") ?? 1000000;
+        $prefv = round($ppref[0]);
+        if ($ppref[0] !== -100.0 && ($prefv < $min || $prefv > $max)) {
+            return $conf->_("<0>Preference ‘{}’ out of range (must be between {} and {})", $ppref[0], $min, $max);
         }
+
+        return new PaperReviewPreference((int) $prefv, $ppref[1]);
     }
     function apply(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
         $pref = $req["preference"];
         if ($pref === null) {
             return new AssignmentError("<0>Preference missing");
         }
-        $ppref = self::parse($pref);
-        if ($ppref === null) {
-            if (preg_match('/([+-]?)\s*(\d+)\s*([xyz]?)/i', $pref, $m)) {
-                $msg = $state->conf->_("<0>Invalid preference ‘{}’. Did you mean ‘{}’?", $pref, $m[1] . $m[2] . strtoupper($m[3]));
-            } else {
-                $msg = $state->conf->_("<0>Invalid preference ‘{}’", $pref);
-            }
-            $state->user_error($msg);
+
+        $ppref = self::parse_check($pref, $prow->conf);
+        if (is_string($ppref)) {
+            $state->user_error($ppref);
             return false;
-        }
-        if ($prow->timeWithdrawn > 0) {
-            $state->warning("<5>" . $prow->make_whynot(["withdrawn" => 1])->unparse_html());
         }
 
         $exp = $req["expertise"];
         if ($exp && ($exp = trim($exp)) !== "") {
-            if (($pexp = self::parse($exp)) === null || $pexp[0]) {
+            if (($pexp = self::parsef($exp)) === null || $pexp[0]) {
                 $state->user_error($state->conf->_("<0>Invalid expertise ‘{}’", $exp));
                 return false;
             }
-            $ppref[1] = $pexp[1];
+            $ppref = new PaperReviewPreference($ppref->preference, $pexp[1]);
         }
 
         $state->remove(new Preference_Assignable($prow->paperId, $contact->contactId));
-        if ($ppref[0] || $ppref[1] !== null) {
-            $state->add(new Preference_Assignable($prow->paperId, $contact->contactId, $ppref[0], self::make_exp($ppref[1])));
+        if ($ppref->exists()) {
+            $state->add(new Preference_Assignable($prow->paperId, $contact->contactId, $ppref->preference, self::make_exp($ppref->expertise)));
         }
         return true;
     }
@@ -156,24 +175,26 @@ class Preference_Assigner extends Assigner {
     function unparse_description() {
         return "preference";
     }
-    /** @return ?PaperReviewPreference */
+    /** @return PaperReviewPreference */
     private function preference_data($before) {
-        $pref = $this->item->get($before, "_pref");
+        $pref = $this->item->get($before, "_pref") ?? 0;
         $exp = $this->item->get($before, "_exp");
         if ($exp === "N") {
             $exp = null;
         }
-        return $pref || $exp !== null ? new PaperReviewPreference($pref, $exp) : null;
+        return new PaperReviewPreference($pref, $exp);
     }
     function unparse_display(AssignmentSet $aset) {
         if (!$this->cid) {
             return "remove all preferences";
         }
         $t = $aset->user->reviewer_html_for($this->contact);
-        if (($pf = $this->preference_data(true))) {
+        $pf = $this->preference_data(true);
+        if ($pf->exists()) {
             $t .= " <del>" . $pf->unparse_span() . "</del>";
         }
-        if (($pf = $this->preference_data(false))) {
+        $pf = $this->preference_data(false);
+        if ($pf->exists()) {
             $t .= " <ins>" . $pf->unparse_span() . "</ins>";
         }
         return $t;
@@ -183,21 +204,13 @@ class Preference_Assigner extends Assigner {
         $acsv->add([
             "pid" => $this->pid, "action" => "preference",
             "email" => $this->contact->email, "name" => $this->contact->name(),
-            "preference" => $pf ? $pf->unparse() : "none"
+            "preference" => $pf->exists() ? $pf->unparse() : "none"
         ]);
     }
     function add_locks(AssignmentSet $aset, &$locks) {
         $locks["PaperReviewPreference"] = "write";
     }
     function execute(AssignmentSet $aset) {
-        if (($pf = $this->preference_data(false))) {
-            $aset->stage_qe("insert into PaperReviewPreference
-                set paperId=?, contactId=?, preference=?, expertise=?
-                on duplicate key update preference=?, expertise=?",
-                    $this->pid, $this->cid, $pf->preference, $pf->expertise,
-                    $pf->preference, $pf->expertise);
-        } else {
-            $aset->stage_qe("delete from PaperReviewPreference where paperId=? and contactId=?", $this->pid, $this->cid);
-        }
+        $this->preference_data(false)->save($this->pid, $this->cid, [$aset, "stage_qe"]);
     }
 }

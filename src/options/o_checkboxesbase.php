@@ -24,6 +24,24 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
     }
 
 
+    function jsonSerialize() {
+        $j = parent::jsonSerialize();
+        if ($this->min_count > 1) {
+            $j->min = $this->min_count;
+        }
+        if ($this->max_count > 0) {
+            $j->max = $this->max_count;
+        }
+        return $j;
+    }
+
+    function export_setting() {
+        $sfs = parent::export_setting();
+        $sfs->min = $this->min_count;
+        $sfs->max = $this->max_count;
+        return $sfs;
+    }
+
     /** @return TopicSet */
     abstract function topic_set();
 
@@ -68,10 +86,6 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
     }
 
     function value_store(PaperValue $ov, PaperStatus $ps) {
-        if ($ov->has_anno("new_values") && count($ov->anno("new_values")) > 0) {
-            $this->value_store_new_values($ov, $ps);
-        }
-
         $vs = $ov->value_list();
         $this->topic_set()->sort($vs); // to reduce unnecessary diffs
         $ov->set_value_data($vs, array_fill(0, count($vs), null));
@@ -80,9 +94,6 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
         if (!empty($badvs)) {
             $ov->warning($ps->_("<0>Options {:list} not found", $badvs, new FmtArg("type", $this->type)));
         }
-    }
-
-    function value_store_new_values(PaperValue $ov, PaperStatus $ps) {
     }
 
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
@@ -97,7 +108,7 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
         if ($v !== "" && $v !== "0" && ctype_digit($v)) {
             $tid = intval($v);
             if ($this->topic_set()->name($tid) !== null
-                && !in_array($tid, $vs)) {
+                && !in_array($tid, $vs, true)) {
                 $vs[] = $tid;
             }
         }
@@ -106,7 +117,7 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
 
     function parse_json(PaperInfo $prow, $j) {
         $bad = false;
-        if (is_object($j) || is_associative_array($j)) {
+        if (is_object($j) || (is_array($j) && !array_is_list($j))) {
             $j = array_keys(array_filter((array) $j, function ($x) use (&$bad) {
                 if ($x !== null && $x !== false && $x !== true) {
                     $bad = true;
@@ -134,30 +145,25 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
             } else if (!is_string($tk)) {
                 return PaperValue::make_estop($prow, $this, "<0>Validation error");
             } else if (($tk = trim($tk)) !== "") {
-                $tid = array_search($tk, $topicset->as_array(), true);
-                if ($tid !== false) {
+                $tid = $topicset->find_exact($tk);
+                if ($tid !== null) {
                     $vs[] = $tid;
-                } else if (!ctype_digit($tk)) {
-                    $tids = [];
-                    foreach ($topicset as $xtid => $tname) {
-                        if (strcasecmp($tk, $tname) == 0)
-                            $tids[] = $xtid;
-                    }
-                    if (count($tids) === 1) {
-                        $vs[] = $tids[0];
-                    } else {
-                        $badvs[] = $tk;
-                        if (empty($tids)) {
-                            $newvs[] = $tk;
-                        }
-                    }
+                } else if (empty($tids) && $topicset->auto_add()) {
+                    $newvs[] = $tk;
+                    $topicset->mark_auto_add($tk);
+                } else {
+                    $badvs[] = $tk;
                 }
             }
         }
 
         $ov = PaperValue::make_multi($prow, $this, $vs, array_fill(0, count($vs), null));
-        $ov->set_anno("bad_values", $badvs);
-        $ov->set_anno("new_values", $newvs);
+        if (!empty($badvs)) {
+            $ov->set_anno("bad_values", $badvs);
+        }
+        if (!empty($newvs)) {
+            $ov->set_anno("new_values", $newvs);
+        }
         return $ov;
     }
 
@@ -167,7 +173,7 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
             $basev = $prow->base_option($this);
             foreach ($this->topic_set() as $tid => $tname) {
                 if ($fcs->test("{$this->formid}:{$tid}") === FieldChangeSet::UNCHANGED) {
-                    $qreq["{$this->formid}:{$tid}"] = in_array($tid, $basev->value_list()) ? "1" : "";
+                    $qreq["{$this->formid}:{$tid}"] = in_array($tid, $basev->value_list(), true) ? "1" : "";
                 }
             }
         }
@@ -197,15 +203,14 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
                     "data-range-type" => $this->formid];
             if (($isgroup = $tg->nontrivial())) {
                 echo '<li class="ctelt cteltg"><div class="ctelti">';
-                if ($tg->improper()) {
-                    $arg["data-default-checked"] = in_array($tg->tid, $ov->value_list());
-                    $checked = in_array($tg->tid, $reqov->value_list());
+                if ($tg->has_group_topic()) {
+                    $arg["data-default-checked"] = in_array($tg->tid, $ov->value_list(), true);
+                    $checked = in_array($tg->tid, $reqov->value_list(), true);
                     echo '<label class="checki cteltx"><span class="checkc">',
                         $this->render_checkbox($tg->tid, $checked, $arg),
                         '</span>', $topicset->unparse_name_html($tg->tid), '</label>';
                 } else {
-                    echo '<div class="cteltx"><span class="topicg">',
-                        htmlspecialchars($tg->name), '</span></div>';
+                    echo '<div class="cteltx">', $tg->unparse_name_html(), '</div>';
                 }
                 echo '<div class="checki">';
             }
@@ -215,8 +220,8 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
                 } else {
                     $tname = $topicset->unparse_name_html($tid);
                 }
-                $arg["data-default-checked"] = in_array($tid, $ov->value_list());
-                $checked = in_array($tid, $reqov->value_list());
+                $arg["data-default-checked"] = in_array($tid, $ov->value_list(), true);
+                $checked = in_array($tid, $reqov->value_list(), true);
                 echo ($isgroup ? '<label class="checki cteltx">' : '<li class="ctelt"><label class="checki ctelti">'),
                     '<span class="checkc">',
                     $this->render_checkbox($tid, $checked, $arg),
@@ -258,13 +263,6 @@ abstract class CheckboxesBase_PaperOption extends PaperOption {
             $fr->set_html("<ul class=\"topict topict-{$lenclass}\">" . join("", $ts) . '</ul>');
             $fr->value_long = true;
         }
-    }
-
-    function export_setting() {
-        $sfs = parent::export_setting();
-        $sfs->min = $this->min_count;
-        $sfs->max = $this->max_count;
-        return $sfs;
     }
 
     function parse_search(SearchWord $sword, PaperSearch $srch) {

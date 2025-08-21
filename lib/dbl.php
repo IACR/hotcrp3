@@ -1,6 +1,6 @@
 <?php
 // dbl.php -- database interface layer
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Dbl_Result {
     /** @var int */
@@ -59,7 +59,7 @@ class Dbl_Result {
     }
     /** @template T
      * @param class-string<T> $class_name
-     * @return ?T
+     * @return T|null
      * @suppress PhanUnusedPublicNoOverrideMethodParameter */
     function fetch_object($class_name = "stdClass", $params = []) {
         return null;
@@ -73,36 +73,38 @@ class Dbl_MultiResult {
     private $dblink;
     /** @var int */
     private $flags;
+    /** @var 0|1|2|3 */
+    private $mstate;
     /** @var string */
     private $query_string;
 
     /** @param int $flags
      * @param string $qstr
-     * @param bool $result */
-    function __construct(mysqli $dblink, $flags, $qstr, $result) {
+     * @param bool $mqresult */
+    function __construct(mysqli $dblink, $flags, $qstr, $mqresult) {
+        assert(($flags & Dbl::F_MULTI) !== 0);
         $this->dblink = $dblink;
-        $this->flags = $flags | Dbl::F_MULTI | ($result ? Dbl::F_MULTI_OK : 0);
+        $this->flags = $flags;
+        $this->mstate = $mqresult ? 2 : 1;
         $this->query_string = $qstr;
     }
-    /** @return false|Dbl_Result */
+    /** @return ?Dbl_Result */
     function next() {
-        // XXX does processing stop at first error?
-        if ($this->flags & Dbl::F_MULTI_OK) {
-            $result = $this->dblink->store_result();
-        } else if ($this->flags & Dbl::F_MULTI) {
-            $result = false;
-        } else {
-            return false;
-        }
-        if ($this->dblink->more_results()) {
-            if ($this->dblink->next_result()) {
-                $this->flags |= Dbl::F_MULTI_OK;
+        // maybe load next result from connection
+        if ($this->mstate === 3) {
+            if ($this->dblink->more_results()) {
+                $this->mstate = $this->dblink->next_result() ? 2 : 1;
             } else {
-                $this->flags &= ~Dbl::F_MULTI_OK;
+                $this->mstate = 0;
             }
-        } else {
-            $this->flags &= ~(Dbl::F_MULTI | Dbl::F_MULTI_OK);
         }
+        // maybe done
+        if ($this->mstate === 0) {
+            return null;
+        }
+        // process next result (which might be an error)
+        $result = $this->mstate === 2 ? $this->dblink->store_result() : false;
+        $this->mstate = 3;
         return Dbl::do_result($this->dblink, $this->flags, $this->query_string, $result);
     }
     function free_all() {
@@ -208,11 +210,12 @@ class Dbl {
     const F_ERROR = 8;
     const F_ALLOWERROR = 16;
     const F_MULTI = 32;
-    const F_MULTI_OK = 64; // internal
     const F_ECHO = 128;
     const F_NOEXEC = 256;
     const F_THROW = 512;
 
+    /** @var int */
+    static public $nqueries = 0;
     /** @var int */
     static public $nerrors = 0;
     /** @var ?\mysqli */
@@ -350,7 +353,7 @@ class Dbl {
         } else if ($args[0] === null && count($args) > 1) {
             $argpos = 1;
         }
-        if ((($flags & self::F_RAW) && count($args) != $argpos + 1)
+        if ((($flags & self::F_RAW) && count($args) !== $argpos + 1)
             || (($flags & self::F_APPLY) && count($args) > $argpos + 2)) {
             trigger_error(self::landmark() . ": wrong number of arguments");
         } else if (($flags & self::F_APPLY)
@@ -535,7 +538,7 @@ class Dbl {
             }
             // combine
             $suffix = substr($qstr, $nextpos);
-            $qstr = "$prefix$arg$suffix";
+            $qstr = "{$prefix}{$arg}{$suffix}";
             $strpos = strlen($qstr) - strlen($suffix);
         }
         if ($simpleargs && $argpos !== count($argv)) {
@@ -564,6 +567,7 @@ class Dbl {
         if ($flags & self::F_NOEXEC) {
             return null;
         }
+        ++self::$nqueries;
         if (self::$query_log_key !== false) {
             $time = microtime(true);
             $result = $dblink->$qfunc($qstr);
@@ -605,8 +609,12 @@ class Dbl {
         return self::do_query_with($dblink, $qstr, $argv, $flags);
     }
 
-    /** @return Dbl_Result */
-    static public function do_result($dblink, $flags, $qstr, $result) {
+    /** @param \mysqli $dblink
+     * @param int $flags
+     * @param string $qstr
+     * @param null|bool|\mysqli_result|Dbl_Result $result
+     * @return Dbl_Result */
+    static function do_result($dblink, $flags, $qstr, $result) {
         if (is_bool($result)) {
             $result = Dbl_Result::make($dblink);
         } else if ($result === null) {
@@ -770,7 +778,7 @@ class Dbl {
 
     /** @param \mysqli $dblink
      * @param int $flags
-     * @return callable(?string,string|int|null|list...):void */
+     * @return callable(?string,string|int|float|null|list...):void */
     static function make_multi_query_stager($dblink, $flags) {
         // NB $q argument as `true` is deprecated but might still be present
         $qs = $qvs = [];
@@ -789,13 +797,13 @@ class Dbl {
     }
 
     /** @param ?\mysqli $dblink
-     * @return callable(?string,string|int|null...):void */
+     * @return callable(?string,string|int|float|null|list...):void */
     static function make_multi_ql_stager($dblink = null) {
         return self::make_multi_query_stager($dblink ?? self::$default_dblink, self::F_LOG);
     }
 
     /** @param ?\mysqli $dblink
-     * @return callable(?string,string|int|null...):void */
+     * @return callable(?string,string|int|float|null|list...):void */
     static function make_multi_qe_stager($dblink = null) {
         return self::make_multi_query_stager($dblink ?? self::$default_dblink, self::F_ERROR);
     }
@@ -815,7 +823,7 @@ class Dbl {
     }
 
     static private function do_make_result($args, $flags = self::F_ERROR) {
-        if (count($args) == 1 && !is_string($args[0])) {
+        if (count($args) === 1 && !is_string($args[0])) {
             return $args[0];
         } else {
             return self::do_query($args, $flags);
@@ -1067,7 +1075,7 @@ function sqlq($value) {
 function sql_in_int_list($set) {
     if (empty($set)) {
         return " is null";
-    } else if (count($set) == 1) {
+    } else if (count($set) === 1) {
         return "=" . $set[0];
     } else {
         return " in (" . join(", ", $set) . ")";

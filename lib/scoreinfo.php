@@ -19,6 +19,10 @@ class ScoreInfo {
     private $_max = 0;
     /** @var int */
     private $_n = 0;
+    /** @var ?ScoreInfo */
+    public $overrides;
+    /** @var ?ValueFormat */
+    public $value_format;
 
     const COUNT = 0;
     const MEAN = 1;
@@ -36,19 +40,16 @@ class ScoreInfo {
     static private $score_sorts = [
         "counts", "average", "median", "variance", "maxmin", "my"
     ];
-    static private $score_sort_parser = "0 C 0 M 0 count 0 counts 1 A 1 average 1 avg 1 av 1 ave 2 E 2 median 2 med 3 V 3 variance 3 var 4 D 4 maxmin 4 max-min 5 Y 5 my 5 myscore ";
+    /** @readonly */
+    static public $score_sort_enum = "counts,C,M,count;average,A,avg,av,ave,mean;median,E,med;variance,V,var;maxmin,D,max-min;my,Y,myscore";
 
-    /** @param string $x
-     * @return null|'count'|'average'|'median'|'variance'|'maxmin'|'my' */
+    /** @param ?string $x
+     * @return null|'counts'|'average'|'median'|'variance'|'maxmin'|'my' */
     static function parse_score_sort($x) {
-        if (in_array($x, self::$score_sorts)) {
+        if ($x === null || in_array($x, self::$score_sorts, true)) {
             return $x;
-        } else if (($p = strpos(self::$score_sort_parser, " {$x} ")) !== false
-                   && strpos($x, " ") === false) {
-            return self::$score_sorts[(int) self::$score_sort_parser[$p - 1]];
-        } else {
-            return null;
         }
+        return ViewOptionSchema::validate_enum($x, self::$score_sort_enum);
     }
 
     /** @return list<string> */
@@ -65,19 +66,6 @@ class ScoreInfo {
     }
 
 
-    /** @param int $stat
-     * @return bool */
-    static function statistic_is_int($stat) {
-        return $stat === self::COUNT;
-    }
-
-    /** @param int $stat
-     * @return bool */
-    static function statistic_is_sample($stat) {
-        return $stat === self::MEDIAN || $stat === self::MIN || $stat === self::MAX;
-    }
-
-
     /** @param null|list<int|float>|string $data */
     function __construct($data = null) {
         if (is_array($data)) {
@@ -90,6 +78,13 @@ class ScoreInfo {
                     $this->add(+$x);
             }
         }
+    }
+
+    /** @param ValueFormat $vf
+     * @return $this */
+    function set_value_format(ValueFormat $vf) {
+        $this->value_format = $vf;
+        return $this;
     }
 
     /** @param list<int|float>|string $data
@@ -139,6 +134,22 @@ class ScoreInfo {
         }
         if ($this->_sorted && $this->_max !== $x) {
             $this->_sorted = false;
+        }
+        return $this;
+    }
+
+    /** @param int|float $x
+     * @param 0|1|2 $overriding
+     * @return $this */
+    function add_overriding($x, $overriding) {
+        if ($overriding !== 0 && !$this->overrides) {
+            $this->overrides = clone $this;
+        }
+        if ($overriding !== 2) {
+            $this->add($x);
+        }
+        if ($overriding !== 1 && $this->overrides) {
+            $this->overrides->add($x);
         }
         return $this;
     }
@@ -194,12 +205,18 @@ class ScoreInfo {
 
     /** @return float */
     function mean() {
-        return $this->_n > 0 ? $this->_sum / $this->_n : 0.0;
+        if ($this->_n === 0) {
+            return 0.0;
+        }
+        return $this->_sum / $this->_n;
     }
 
     /** @return float */
     function variance_s() {
-        return $this->_n > 1 ? ($this->_sumsq - $this->_sum * $this->_sum / $this->_n) / ($this->_n - 1) : 0.0;
+        if ($this->_n <= 1) {
+            return 0.0;
+        }
+        return ($this->_sumsq - $this->_sum * $this->_sum / $this->_n) / ($this->_n - 1);
     }
 
     /** @return float */
@@ -209,7 +226,10 @@ class ScoreInfo {
 
     /** @return float */
     function variance_p() {
-        return $this->_n > 1 ? ($this->_sumsq - $this->_sum * $this->_sum / $this->_n) / $this->_n : 0.0;
+        if ($this->_n <= 1) {
+            return 0.0;
+        }
+        return ($this->_sumsq - $this->_sum * $this->_sum / $this->_n) / $this->_n;
     }
 
     /** @return float */
@@ -238,13 +258,14 @@ class ScoreInfo {
 
     /** @return int|float */
     function median() {
+        if ($this->_n === 0) {
+            return 0;
+        }
         $this->sort();
         if ($this->_n % 2) {
             return $this->_scores[($this->_n - 1) >> 1];
-        } else if ($this->_n) {
-            return ($this->_scores[($this->_n - 2) >> 1] + $this->_scores[$this->_n >> 1]) / 2;
         } else {
-            return 0;
+            return ($this->_scores[($this->_n - 2) >> 1] + $this->_scores[$this->_n >> 1]) / 2;
         }
     }
 
@@ -277,6 +298,23 @@ class ScoreInfo {
             return $this->min();
         } else if ($stat === self::MAX) {
             return $this->max();
+        }
+        assert(false);
+    }
+
+    /** @param int $stat
+     * @return ValueFormat */
+    static function statistic_value_format($stat, ?ValueFormat $vf) {
+        if ($stat === self::COUNT) {
+            return Int_ValueFormat::main();
+        } else if ($vf === null) {
+            return Numeric_ValueFormat::main();
+        } else if ($stat === self::SUM) {
+            return $vf->sum_format();
+        } else if ($stat === self::VARIANCE_P || $stat === self::STDDEV_P) {
+            return $vf->difference_format();
+        } else {
+            return $vf;
         }
     }
 

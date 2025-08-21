@@ -1,6 +1,6 @@
 <?php
 // settings/s_submissions.php -- HotCRP settings > submissions page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Submissions_SettingParser extends SettingParser {
     static function print_open(SettingValues $sv) {
@@ -15,7 +15,7 @@ class Submissions_SettingParser extends SettingParser {
         if ($sv->conf->site_lock("paper:start") > 0) {
             echo '<div class="f-i"><label for="submission_registration">Registration deadline</label>',
                 '<div id="submission_registration" class="mb-1">N/A</div>';
-            $sv->msg_at("submission_registration", "<0>The site is locked for new submissions.", MessageSet::URGENT_NOTE);
+            $sv->append_item_at("submission_registration", MessageItem::urgent_note("<0>The site is locked for new submissions."));
             $sv->print_feedback_at("submission_registration");
             echo '</div>';
         } else {
@@ -41,7 +41,7 @@ class Submissions_SettingParser extends SettingParser {
             '<strong>Submission anonymity:</strong> Are author names hidden from reviewers?');
     }
     static function print_pcseeall(SettingValues $sv) {
-        $sv->print_checkbox("draft_submission_early_visibility", "PC can view incomplete submissions before submission deadline",[
+        $sv->print_checkbox("draft_submission_early_visibility", "PC can view incomplete submissions until submission deadline", [
             "hint" => "Check this box to collect review preferences before the submission deadline. After the submission deadline, PC members can only see completed submissions."
         ]);
     }

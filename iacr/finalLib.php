@@ -1,10 +1,8 @@
 <?php
-require_once(dirname(__DIR__)."/conf/options.php");
-require_once(dirname(__DIR__)."/src/init.php");
+//require_once(dirname(__DIR__)."/conf/options.php");
+//require_once(dirname(__DIR__)."/src/init.php");
 require_once "/var/www/util/hotcrp/hmac.php";
-global $Conf;
-$Conf = initialize_conf();
-initialize_request();
+require_once(dirname(__DIR__)."/iacr/init.php");
 
 // %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 // THIS IS DEPRECATED SINCE HotCRP no longer stores a field in PaperOption

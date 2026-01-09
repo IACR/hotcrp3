@@ -1,6 +1,6 @@
 <?php
 // updateschema.php -- HotCRP function for updating old schemata
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class UpdateSchema {
     /** @var Conf */
@@ -62,7 +62,7 @@ class UpdateSchema {
             if (in_array($row->fieldName, ["overAllMerit", "technicalMerit", "novelty",
                                     "grammar", "reviewerQualification", "potential",
                                     "fixability", "interestToCommunity", "longevity",
-                                    "likelyPresentation", "suitableForShort"])) {
+                                    "likelyPresentation", "suitableForShort"], true)) {
                 $field->options = [];
                 if ((int) $row->levelChar > 1) {
                     $field->option_letter = (int) $row->levelChar;
@@ -281,38 +281,22 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         return true;
     }
 
-    private function v112_review_word_counts() {
-        $rf = new ReviewForm($this->conf, $this->conf->review_form_json());
-        do {
-            $n = 0;
-            $result = $this->conf->ql("select * from PaperReview where reviewWordCount is null limit 32");
-            $cleanf = Dbl::make_multi_ql_stager($this->conf->dblink);
-            while (($rrow = $result->fetch_object())) {
-                $cleanf("update PaperReview set reviewWordCount=? where paperId=? and reviewId=?", $rf->word_count($rrow), $rrow->paperId, $rrow->reviewId);
-                ++$n;
-            }
-            Dbl::free($result);
-            $cleanf(null);
-        } while ($n === 32);
-    }
-
     private function v129_bad_comment_timeDisplayed() {
         $badids = Dbl::fetch_first_columns($this->conf->dblink, "select a.commentId from PaperComment a join PaperComment b where a.paperId=b.paperId and a.commentId<b.commentId and a.timeDisplayed>b.timeDisplayed");
-        return !count($badids) || $this->conf->ql_ok("update PaperComment set timeDisplayed=0 where commentId ?a", $badids);
+        return empty($badids) || $this->conf->ql_ok("update PaperComment set timeDisplayed=0 where commentId ?a", $badids);
     }
 
     private function drop_keys_if_exist($table, $key) {
-        $indexes = Dbl::fetch_first_columns($this->conf->dblink, "select distinct index_name from information_schema.statistics where table_schema=database() and `table_name`='$table'");
+        $indexes = Dbl::fetch_first_columns($this->conf->dblink, "select distinct index_name from information_schema.statistics where table_schema=database() and `table_name`='{$table}'");
         $drops = [];
         foreach (is_array($key) ? $key : [$key] as $k) {
-            if (in_array($k, $indexes))
-                $drops[] = ($k === "PRIMARY" ? "drop primary key" : "drop key `$k`");
+            if (in_array($k, $indexes, true))
+                $drops[] = ($k === "PRIMARY" ? "drop primary key" : "drop key `{$k}`");
         }
-        if (count($drops)) {
-            return $this->conf->ql_ok("alter table `$table` " . join(", ", $drops));
-        } else {
+        if (empty($drops)) {
             return true;
         }
+        return $this->conf->ql_ok("alter table `{$table}` " . join(", ", $drops));
     }
 
     /** @param string $table
@@ -377,7 +361,7 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
     }
 
     private function v176_paper_review_drop_main_fields() {
-        $kf = array_map(function ($k) { return "$k is not null"; }, array_keys(self::$v175_text_field_map));
+        $kf = array_map(function ($k) { return "{$k} is not null"; }, array_keys(self::$v175_text_field_map));
         if (!$this->conf->ql_ok("lock tables PaperReview write")) {
             return false;
         }
@@ -390,7 +374,7 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         } else {
             $ok = true;
             foreach (self::$v175_text_field_map as $kmain => $kjson) {
-                $ok = $ok && $this->conf->ql_ok("alter table PaperReview drop column `$kmain`");
+                $ok = $ok && $this->conf->ql_ok("alter table PaperReview drop column `{$kmain}`");
             }
         }
         $this->conf->ql("unlock tables");
@@ -642,12 +626,11 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
             }
         }
         Dbl::free($result);
-        if (!empty($qv)) {
-            $result = $this->conf->ql("insert into Capability (capabilityType, contactId, paperId, otherId, timeCreated, timeUsed, timeInvalid, timeExpires, salt, data) values ?v", $qv);
-            return !Dbl::is_error($result);
-        } else {
+        if (empty($qv)) {
             return true;
         }
+        $result = $this->conf->ql("insert into Capability (capabilityType, contactId, paperId, otherId, timeCreated, timeUsed, timeInvalid, timeExpires, salt, data) values ?v", $qv);
+        return !Dbl::is_error($result);
     }
 
     private function v257_update_response_settings() {
@@ -732,7 +715,7 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
                     $fj->visibility = "au";
                 } else if ($fj->view_score === "authordec") {
                     $fj->visibility = "audec";
-                } else if (in_array($fj->view_score, ["secret", "admin", "pc", "audec", "au"])) {
+                } else if (in_array($fj->view_score, ["secret", "admin", "pc", "audec", "au"], true)) {
                     $fj->visibility = $fj->view_score;
                 } else {
                     error_log("{$this->conf->dbname}: review_form.{$fj->id}.view_score not found");
@@ -960,7 +943,7 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
                     $diff = true;
                 }
                 if (isset($v->selector)
-                    && in_array($v->type ?? "", ["dropdown", "radio"])) {
+                    && in_array($v->type ?? "", ["dropdown", "radio"], true)) {
                     $v->values = $v->values ?? $v->selector;
                     unset($v->selector);
                     $diff = true;
@@ -1156,6 +1139,114 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         }
     }
 
+    private function v291_unfuck_checkboxes($options_data) {
+        $any = false;
+        foreach ($options_data as $v) {
+            if (is_object($v) && $v->type === "checkboxes") {
+                $this->conf->qe("update PaperOption set value=value+1 where optionId=? order by paperId asc, value desc", $v->id);
+                $any = true;
+            }
+        }
+        if ($any) {
+            $this->conf->save_setting("__recompute_automatic_tags", mt_rand(1, 2000000000));
+        }
+    }
+
+    private function v295_unfuck_mentions() {
+        $result = $this->conf->qe("select * from PaperComment where commentData like '%mention%' and (comment is null or comment not like '%@%')");
+        $cleanf = Dbl::make_multi_ql_stager($this->conf->dblink);
+        while (($ci = $result->fetch_object())) {
+            $text = $ci->commentOverflow ?? $ci->comment;
+            if (strpos($text, "@") === false
+                && ($data = json_decode($ci->commentData))
+                && isset($data->mentions)) {
+                unset($data->mentions);
+                $datastr = json_encode_db($data);
+                $cleanf("update PaperComment set commentData=? where paperId=? and commentId=?",
+                        $datastr === "{}" ? null : $datastr,
+                        $ci->paperId, $ci->commentId);
+            }
+        }
+        $result->close();
+        $cleanf(null);
+        return true;
+    }
+
+    const RF_CONTENT_EDITED_v297 = 0x40000;
+    const RF_AUSEEN_v297 = 0x80000;
+    const RF_AUSEEN_PREVIOUS_v297 = 0x100000;
+    const RF_AUSEEN_LIVE_v299 = 0x200000;
+
+    private function v297_rf_content_edited_auseen() {
+        // These assertions are true at the time v297 should be applied.
+        assert(self::RF_CONTENT_EDITED_v297 === ReviewInfo::RF_CONTENT_EDITED);
+        assert(self::RF_AUSEEN_v297 === ReviewInfo::RF_AUSEEN);
+        assert(self::RF_AUSEEN_PREVIOUS_v297 === ReviewInfo::RF_AUSEEN_PREVIOUS);
+        $result = $this->conf->qe("select * from PaperReviewHistory order by paperId, reviewId, reviewTime");
+        $pid = $rid = $cetime = $auseentime = $praseen = $pranote = null;
+        $qstager = Dbl::make_multi_query_stager($this->conf->dblink, Dbl::F_LOG);
+        while (($rh = $result->fetch_object())) {
+            $xrid = (int) $rh->reviewId;
+            if ($xrid !== $rid) {
+                $this->v297_helper_update_pid_rid($qstager, $pid, $rid, $cetime, $auseentime, $praseen, $pranote);
+                $pid = (int) $rh->paperId;
+                $rid = $xrid;
+                $cetime = $auseentime = $praseen = $pranote = null;
+            }
+            $rtime = (int) $rh->reviewTime;
+            if ($cetime === null
+                && $rh->revdelta !== null) {
+                $cetime = $rtime;
+            }
+            $raseen = (int) $rh->reviewAuthorSeen;
+            $ranote = (int) $rh->reviewAuthorNotified;
+            if (($raseen > 0 && $praseen !== null && $raseen !== $praseen)
+                || ($ranote > 0 && $pranote !== null && $ranote !== $pranote)) {
+                $qstager("update PaperReviewHistory set rflags=rflags|? where paperId=? and reviewId=? and reviewTime=?", self::RF_AUSEEN_v297, $pid, $rid, $rtime);
+            }
+            if ($auseentime === null
+                && (($raseen > 0 && $raseen !== $praseen)
+                    || ($ranote > 0 && $ranote !== $pranote))) {
+                $auseentime = $rtime;
+            }
+            $praseen = $raseen;
+            $pranote = $ranote;
+        }
+        $this->v297_helper_update_pid_rid($qstager, $pid, $rid, $cetime, $auseentime, $praseen, $pranote);
+        $qstager(null);
+        return true;
+    }
+
+    private function v297_helper_update_pid_rid($qstager, $pid, $rid, $cetime, $auseentime, $praseen, $pranote) {
+        if ($cetime !== null) {
+            $qstager("update PaperReviewHistory set rflags=rflags|? where paperId=? and reviewId=? and reviewTime>?", self::RF_CONTENT_EDITED_v297, $pid, $rid, $cetime);
+            $qstager("update PaperReview set rflags=rflags|? where paperId=? and reviewId=?", self::RF_CONTENT_EDITED_v297, $pid, $rid);
+        }
+        if ($auseentime !== null) {
+            $qstager("update PaperReviewHistory set rflags=rflags|? where paperId=? and reviewId=? and reviewTime>?", self::RF_AUSEEN_PREVIOUS_v297, $pid, $rid, $auseentime);
+            $qstager("update PaperReview set rflags=rflags|? where paperId=? and reviewId=?", self::RF_AUSEEN_PREVIOUS_v297, $pid, $rid);
+        }
+        if ($praseen > 0 || $pranote > 0) {
+            $qstager("update PaperReview set rflags=rflags|? where paperId=? and reviewId=? and (reviewAuthorSeen>? or reviewAuthorNotified>?)", self::RF_AUSEEN_v297, $pid, $rid, $praseen, $pranote);
+        }
+    }
+
+    private function v302_update_comment_tracks() {
+        if (($tj = $this->conf->setting_json("tracks"))) {
+            $changed = false;
+            foreach ((array) $tj as $tag => $v) {
+                if (isset($v->unassrev) && !isset($v->comment)) {
+                    $v->comment = $v->unassrev;
+                    $changed = true;
+                }
+            }
+            if ($changed) {
+                $this->conf->save_setting("tracks", $this->conf->setting("tracks"), json_encode_db($tj));
+            }
+        }
+        return true;
+    }
+
     /** @return bool */
     function run() {
         $conf = $this->conf;
@@ -1185,14 +1276,26 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         if (is_object($options_data)) {
             $options_data = $this->v1_options_setting($options_data);
         }
-        if (is_array($options_data) && $conf->sversion <= 247) {
+        if ($conf->sversion <= 247
+            && is_array($options_data)) {
             $options_data = $this->v248_options_setting($options_data);
         }
-        if (is_array($options_data) && $conf->sversion <= 277) {
+        if ($conf->sversion <= 277
+            && is_array($options_data)) {
             $options_data = $this->v278_options_setting($options_data);
         }
-        if (is_array($options_data) && $conf->sversion <= 278) {
+        if ($conf->sversion <= 278
+            && is_array($options_data)) {
             $options_data = $this->v279_options_setting($options_data);
+        }
+
+        // unfuck checkboxes options
+        if ($conf->sversion <= 290
+            && !$conf->setting("__unfucked_checkboxes_v291")) {
+            $conf->save_setting("__unfucked_checkboxes_v291", 1);
+            if (is_array($options_data)) {
+                $this->v291_unfuck_checkboxes($options_data);
+            }
         }
 
         // update `review_form`
@@ -1870,7 +1973,6 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
             $conf->update_schema_version(98);
         }
         if ($conf->sversion === 98) {
-            $this->v112_review_word_counts();
             $conf->update_schema_version(99);
         }
         if ($conf->sversion === 99
@@ -1971,7 +2073,6 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
             $conf->update_schema_version(111);
         }
         if ($conf->sversion === 111) {
-            $this->v112_review_word_counts();
             $conf->update_schema_version(112);
         }
         if ($conf->sversion === 112
@@ -2954,6 +3055,125 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         if ($conf->sversion === 288
             && $conf->ql_ok("update ContactInfo set disabled=0 where disabled=2 and cflags!=2 and (cflags&" . Contact::CFM_DISABLEMENT . ")=0")) {
             $conf->update_schema_version(289);
+        }
+        if ($conf->sversion === 289
+            && $conf->ql_ok("update PaperReview set reviewAuthorSeen=0 where reviewAuthorSeen is null")
+            && $conf->ql_ok("alter table PaperReview change `reviewAuthorSeen` `reviewAuthorSeen` bigint(1) NOT NULL DEFAULT 0")) {
+            $conf->update_schema_version(290);
+        }
+        if ($conf->sversion === 290) {
+            $conf->ql_ok("delete from Settings where name='__unfucked_checkboxes_v291'");
+            $conf->update_schema_version(291);
+        }
+        if ($conf->sversion === 291
+            && $conf->ql_ok("alter table PaperReview add `rflags` int(11) NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table PaperReview change `rflags` `rflags` int(11) NOT NULL")
+            && $conf->ql_ok("alter table PaperReview change `reviewBlind` `reviewBlind` tinyint(1) NOT NULL")
+            && $conf->ql_ok("alter table PaperReview change `reviewType` `reviewType` tinyint(1) NOT NULL")
+            && $conf->ql_ok("alter table PaperReviewHistory add `rflags` int(11) NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table PaperReviewHistory change `rflags` `rflags` int(11) NOT NULL")
+            && $conf->ql_ok("update PaperReview set rflags=1|(1<<reviewType)|if(reviewModified>0,256,0)|if(reviewModified>1,512,0)|if(timeApprovalRequested!=0,1024,0)|if(timeApprovalRequested<0,2048,0)|if(coalesce(reviewSubmitted,0)>0,4096,0)|if(reviewBlind!=0,65536,0)|if(reviewType=2 and requestedBy=contactId,131072,0)")
+            && $conf->ql_ok("update PaperReviewHistory set rflags=1|(1<<reviewType)|if(reviewModified>0,256,0)|if(reviewModified>1,512,0)|if(timeApprovalRequested!=0,1024,0)|if(timeApprovalRequested<0,2048,0)|if(coalesce(reviewSubmitted,0)>0,4096,0)|if(reviewBlind!=0,65536,0)")
+            // also clean up reviewNextTime
+            && $conf->ql_ok("alter table PaperReviewHistory change `reviewNextTime` `reviewNextTime` bigint(11) NOT NULL")) {
+            $conf->update_schema_version(292);
+        }
+        if ($conf->sversion === 292
+            && $conf->ql_ok("alter table Paper change `withdrawReason` `withdrawReason` blob DEFAULT NULL")) {
+            $conf->update_schema_version(293);
+        }
+        if ($conf->sversion === 293
+            && $conf->ql_ok("alter table Capability add `lookupKey` varbinary(255) DEFAULT NULL")) {
+            $conf->update_schema_version(294);
+        }
+        if ($conf->sversion === 294
+            && $this->v295_unfuck_mentions()) {
+            $conf->update_schema_version(295);
+        }
+        if ($conf->sversion === 295
+            && $conf->ql_ok("update Settings set value=-1 where name='rev_ratings' and value=2")) {
+            $conf->update_schema_version(296);
+        }
+        if ($conf->sversion === 296
+            && $this->v297_rf_content_edited_auseen()) {
+            $conf->update_schema_version(297);
+        }
+        if ($conf->sversion === 297
+            && $conf->ql_ok("update PaperReview set rflags=rflags|? where (rflags&?)=0 and reviewAuthorSeen>0", self::RF_AUSEEN_v297, self::RF_AUSEEN_v297 | self::RF_AUSEEN_PREVIOUS_v297)) {
+            $conf->update_schema_version(298);
+        }
+        if ($conf->sversion === 298
+            && $conf->ql_ok("update PaperReview set rflags=rflags|? where reviewModified=reviewAuthorNotified and reviewAuthorNotified>0", self::RF_AUSEEN_LIVE_v299)
+            && $conf->ql_ok("update PaperReviewHistory set rflags=rflags|? where reviewModified=reviewAuthorNotified and reviewAuthorNotified>0", self::RF_AUSEEN_LIVE_v299)) {
+            assert(self::RF_AUSEEN_LIVE_v299 === ReviewInfo::RF_AUSEEN_LIVE);
+            $conf->update_schema_version(299);
+        }
+        if ($conf->sversion === 299
+            && CleanCountries_Batch::clean($conf->dblink, true)) {
+            $conf->update_schema_version(300);
+        }
+        if ($conf->sversion === 300
+            && $conf->ql_ok("update Settings set value=2 where name='cmt_author' and value=1")) {
+            $conf->update_schema_version(301);
+        }
+        if ($conf->sversion === 301
+            && $this->v302_update_comment_tracks()) {
+            $conf->update_schema_version(302);
+        }
+        if ($conf->sversion === 302
+            && $conf->ql_ok("update PaperReview set rflags=rflags&~? where rflags>=? and (rflags&?)=0", self::RF_AUSEEN_LIVE_v299, self::RF_AUSEEN_LIVE_v299, self::RF_AUSEEN_v297)
+            && $conf->ql_ok("update PaperReviewHistory set rflags=rflags&~? where rflags>=? and (rflags&?)=0", self::RF_AUSEEN_LIVE_v299, self::RF_AUSEEN_LIVE_v299, self::RF_AUSEEN_v297)) {
+            $conf->update_schema_version(303);
+        }
+        if ($conf->sversion === 303
+            && $conf->ql_ok("update PaperReview set rflags=rflags&~? where rflags>=? and reviewAuthorNotified=0", self::RF_AUSEEN_LIVE_v299, self::RF_AUSEEN_LIVE_v299)
+            && $conf->ql_ok("update PaperReviewHistory set rflags=rflags&~? where rflags>=? and reviewAuthorNotified=0", self::RF_AUSEEN_LIVE_v299, self::RF_AUSEEN_LIVE_v299)) {
+            $conf->update_schema_version(304);
+        }
+        if ($conf->sversion === 304
+            && $conf->ql_ok("DROP TABLE IF EXISTS `IDReservation`")
+            && $conf->ql_ok("CREATE TABLE `IDReservation` (
+  `type` int(11) NOT NULL,
+  `id` int(11) NOT NULL,
+  `timestamp` bigint(11) NOT NULL,
+  PRIMARY KEY (`type`,`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")) {
+            $conf->update_schema_version(305);
+        }
+        if ($conf->sversion === 305
+            && $conf->ql_ok("delete from IDReservation")
+            && $conf->ql_ok("alter table IDReservation add `uid` int(11) NOT NULL")
+            && $conf->ql_ok("alter table IDReservation add unique key `uid` (`uid`)")
+            && $conf->ql_ok("alter table IDReservation change `uid` `uid` int(11) NOT NULL AUTO_INCREMENT")) {
+            $conf->update_schema_version(306);
+        }
+        if ($conf->sversion === 306) {
+            Dbl::qx($conf->dblink, "DROP TABLE IF EXISTS `ContactPrimary`");
+            if ($conf->ql_ok("CREATE TABLE `ContactPrimary` (
+  `contactId` int(11) NOT NULL,
+  `primaryContactId` int(11) NOT NULL,
+  PRIMARY KEY (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")) {
+                $conf->update_schema_version(307);
+            }
+        }
+        if ($conf->sversion === 307
+            && $conf->ql_ok("alter table PaperReview drop `data`")
+            && $conf->ql_ok("alter table PaperReviewRefused drop `data`")) {
+            $conf->update_schema_version(308);
+        }
+        if ($conf->sversion === 308
+            && $conf->ql_ok("update ContactInfo set preferredEmail=null where preferredEmail=''")) {
+            $conf->update_schema_version(309);
+        }
+        if ($conf->sversion === 309
+            && $conf->ql_ok("alter table PaperReview add key `contactIdReviewType` (`contactId`,`reviewType`)")
+            && $conf->ql_ok("alter table PaperReview drop key `contactId`")) {
+            $conf->update_schema_version(310);
+        }
+        if ($conf->sversion === 310
+            && $conf->ql_ok("alter table ContactInfo drop `disabled`")) {
+            $conf->update_schema_version(311);
         }
 
         $conf->ql_ok("delete from Settings where name='__schema_lock'");

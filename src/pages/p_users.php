@@ -1,6 +1,6 @@
 <?php
 // pages/p_users.php -- HotCRP people listing/editing page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Users_Page {
     /** @var Conf */
@@ -78,26 +78,30 @@ class Users_Page {
         $users = [];
         while (($user = Contact::fetch($result, $this->conf))) {
             $users[] = $user;
-            $this->conf->prefetch_cdb_user_by_email($user->email);
         }
         Dbl::free($result);
         usort($users, $this->conf->user_comparator());
 
         $texts = [];
-        $has_country = false;
+        $has_country = $has_orcid = false;
         foreach ($users as $u) {
             $texts[] = $line = [
-                "first" => $u->firstName,
-                "last" => $u->lastName,
+                "given_name" => $u->firstName,
+                "family_name" => $u->lastName,
                 "email" => $u->email,
                 "affiliation" => $u->affiliation,
-                "country" => $u->country()
+                "country" => $u->country_code(),
+                "orcid" => $u->decorated_orcid()
             ];
+            $has_orcid = $has_orcid || $line["orcid"] !== "";
             $has_country = $has_country || $line["country"] !== "";
         }
-        $header = ["first", "last", "email", "affiliation"];
+        $header = ["given_name", "family_name", "email", "affiliation"];
         if ($has_country) {
             $header[] = "country";
+        }
+        if ($has_orcid) {
+            $header[] = "orcid";
         }
         $this->conf->make_csvg("users")->select($header)->append($texts)->emit();
         return true;
@@ -110,7 +114,6 @@ class Users_Page {
         $users = [];
         while (($user = Contact::fetch($result, $this->conf))) {
             $users[] = $user;
-            $this->conf->prefetch_cdb_user_by_email($user->email);
         }
         Dbl::free($result);
         usort($users, $this->conf->user_comparator());
@@ -120,20 +123,22 @@ class Users_Page {
         $tagger = new Tagger($this->viewer);
         $people = [];
         $has_preferred_email = $has_tags = $has_topics =
-            $has_phone = $has_country = $has_disabled = false;
+            $has_phone = $has_country = $has_orcid = $has_disabled = false;
         $has = (object) [];
         foreach ($users as $user) {
             $row = [
-                "first" => $user->firstName,
-                "last" => $user->lastName,
+                "given_name" => $user->firstName,
+                "family_name" => $user->lastName,
                 "email" => $user->email,
                 "affiliation" => $user->affiliation,
-                "country" => $user->country(),
+                "orcid" => $user->decorated_orcid(),
+                "country" => $user->country_code(),
                 "phone" => $user->phone(),
                 "disabled" => $user->is_disabled() ? "yes" : "",
                 "collaborators" => rtrim($user->collaborators())
             ];
             $has_country = $has_country || $row["country"] !== "";
+            $has_orcid = $has_orcid || $row["orcid"] !== "";
             $has_phone = $has_phone || ($row["phone"] ?? "") !== "";
             $has_disabled = $has_disabled || $user->is_disabled();
             if ($user->preferredEmail && $user->preferredEmail !== $user->email) {
@@ -145,18 +150,15 @@ class Users_Page {
                 $has_tags = $has_tags || $row["tags"] !== "";
             }
             foreach ($user->topic_interest_map() as $t => $i) {
-                $row["topic$t"] = $i;
+                $row["topic{$t}"] = $i;
                 $has_topics = true;
             }
             $f = [];
             $dw = $user->defaultWatch;
-            foreach (UserStatus::$watch_keywords as $kw => $bit) {
-                if ($dw === 0) {
-                    break;
-                } else if (($dw & $bit) !== 0) {
-                    $f[] = $kw;
-                    $dw &= ~$bit;
-                }
+            for ($b = 1; $b <= $dw; $b <<= 1) {
+                if (($dw & $b) !== 0
+                    && ($fb = UserStatus::unparse_follow_bit($b)))
+                    $f[] = $fb;
             }
             $row["follow"] = empty($f) ? "none" : join(" ", $f);
             if ($user->roles & (Contact::ROLE_PC | Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) {
@@ -177,7 +179,10 @@ class Users_Page {
             $people[] = $row;
         }
 
-        $header = ["first", "last", "email", "affiliation"];
+        $header = ["given_name", "family_name", "email", "affiliation"];
+        if ($has_orcid) {
+            $header[] = "orcid";
+        }
         if ($has_country) {
             $header[] = "country";
         }
@@ -200,7 +205,7 @@ class Users_Page {
         if ($has_topics) {
             foreach ($this->conf->topic_set() as $t => $tn) {
                 $header[] = "topic: " . $tn;
-                $selection[] = "topic$t";
+                $selection[] = "topic{$t}";
             }
         }
 
@@ -220,15 +225,15 @@ class Users_Page {
         if ($modifyfn === "disableaccount") {
             $j = UserActions::disable($this->viewer, $this->papersel);
             if ($j->disabled_users ?? false) {
-                $ms->success($this->conf->_("<0>Disabled accounts {:list}", $j->disabled_users));
+                $ms->success($this->conf->_("<0>Accounts {:list} disabled", $j->disabled_users));
             }
         } else if ($modifyfn === "enableaccount") {
             $j = UserActions::enable($this->viewer, $this->papersel);
             if ($j->enabled_users ?? false) {
-                $ms->success($this->conf->_("<0>Enabled accounts {:list}", $j->enabled_users));
+                $ms->success($this->conf->_("<0>Accounts {:list} enabled", $j->enabled_users));
             }
             if ($j->activated_users ?? false) {
-                $ms->success($this->conf->_("<0>Activated accounts and sent mail to {:list}", $j->activated_users));
+                $ms->success($this->conf->_("<0>Accounts {:list} activated and notified", $j->activated_users));
             }
         } else if ($modifyfn === "sendaccount") {
             $j = UserActions::send_account_info($this->viewer, $this->papersel);
@@ -236,7 +241,7 @@ class Users_Page {
                 $ms->success($this->conf->_("<0>Sent account information mail to {:list}", $j->mailed_users));
             }
             if ($j->skipped_users ?? false) {
-                $ms->msg_at(null, $this->conf->_("<0>Skipped disabled accounts {:list}", $j->skipped_users), MessageSet::WARNING_NOTE);
+                $ms->append_item(MessageItem::warning_note($this->conf->_("<0>Skipped disabled accounts {:list}", $j->skipped_users)));
             }
         } else {
             return false;
@@ -251,62 +256,69 @@ class Users_Page {
 
     /** @return bool */
     private function handle_tags() {
+        $tagfn = $this->qreq->tagfn;
+        // XXX what about removing a tag with a specific value?
+
         // check tags
         $tagger = new Tagger($this->viewer);
         $t1 = [];
         $ms = new MessageSet;
+        $flags = $tagfn === "d" ? Tagger::NOVALUE | Tagger::NOPRIVATE : Tagger::NOPRIVATE;
         foreach (preg_split('/[\s,;]+/', (string) $this->qreq->tag) as $t) {
             if ($t === "") {
-                /* nada */
-            } else if (!($t = $tagger->check($t, Tagger::NOPRIVATE))) {
+                continue;
+            } else if (!($t = $tagger->check($t, $flags))) {
                 $ms->error_at(null, $tagger->error_ftext());
-            } else if (in_array(strtolower(Tagger::tv_tag($t)), ["pc", "admin", "chair"])) {
+            } else if (!UserStatus::check_pc_tag(Tagger::tv_tag($t))) {
                 $ms->error_at(null, $this->conf->_("<0>User tag ‘{}’ reserved", Tagger::tv_tag($t)));
             } else {
                 $t1[] = $t;
             }
         }
         if ($ms->has_error()) {
-            $ms->prepend_msg("<0>Changes not saved; please correct these errors and try again", MessageSet::ERROR);
+            $ms->prepend_item(MessageItem::error("<0>Changes not saved; please correct these errors and try again"));
             $this->conf->feedback_msg($ms);
             return false;
-        } else if (!count($t1)) {
-            $ms->msg_at(null, "No changes", MessageSet::WARNING_NOTE);
+        } else if (empty($t1)) {
+            $ms->append_item(MessageItem::warning_note("<0>No changes"));
             $this->conf->feedback_msg($ms);
             return false;
         }
 
-        // modify database
+        // load affected users
         Conf::$no_invalidate_caches = true;
-        $users = [];
-        if ($this->qreq->tagfn === "s") {
-            // erase existing tags
-            $likes = $removes = [];
+        $tests = ["contactId?a"];
+        if ($tagfn === "s") {
             foreach ($t1 as $t) {
                 list($tag, $index) = Tagger::unpack($t);
-                $removes[] = $t;
-                $x = sqlq(Dbl::escape_like($tag));
-                $likes[] = "contactTags like " . Dbl::utf8ci("'% {$x}#%'");
-            }
-            foreach (Dbl::fetch_first_columns(Dbl::qe("select contactId from ContactInfo where " . join(" or ", $likes))) as $cid) {
-                $users[(int) $cid] = (object) ["id" => (int) $cid, "add_tags" => [], "remove_tags" => $removes];
+                $x = $this->conf->dblink->real_escape_string(Dbl::escape_like($tag));
+                $tests[] = "contactTags like " . Dbl::utf8ci($this->conf->dblink, "'% {$x}#%'");
             }
         }
+        $result = $this->conf->qe("select * from ContactInfo where " . join(" or ", $tests), $this->papersel);
 
-        // account for request
-        $key = $this->qreq->tagfn === "d" ? "remove_tags" : "add_tags";
-        foreach ($this->papersel as $cid) {
-            if (!isset($users[(int) $cid])) {
-                $users[(int) $cid] = (object) ["id" => (int) $cid, "add_tags" => [], "remove_tags" => []];
-            }
-            array_push($users[(int) $cid]->$key, ...$t1);
-        }
-
-        // apply modifications
+        // make changes
         $us = new UserStatus($this->viewer);
-        foreach ($users as $cid => $cj) {
-            $us->save_user($cj);
+        $changes = false;
+        while (($u = Contact::fetch($result, $this->conf))) {
+            $us->start_update();
+            $us->set_user($u);
+            foreach ($t1 as $t) {
+                if ($tagfn === "s"
+                    || $tagfn === "d") {
+                    $us->jval->change_tags[] = "-" . Tagger::tv_tag($t);
+                }
+                if (($tagfn === "s" && in_array($u->contactId, $this->papersel, true))
+                    || $tagfn === "a") {
+                    $us->jval->change_tags[] = $t;
+                }
+            }
+            $us->execute_update();
+            $changes = $changes || !empty($us->diffs);
         }
+        $result->close();
+
+        // that’s it
         Conf::$no_invalidate_caches = false;
         $this->conf->invalidate_caches(["pc" => true]);
 
@@ -315,25 +327,30 @@ class Users_Page {
             $ms->append_set($us);
             $this->conf->feedback_msg($ms);
             return false;
-        } else {
-            $ms->prepend_msg("<0>User tag changes saved", MessageSet::SUCCESS);
-            $this->conf->feedback_msg($ms);
-            unset($this->qreq->fn, $this->qreq->tagfn);
-            $this->conf->redirect_self($this->qreq);
-            return true;
         }
+        if ($changes) {
+            $ms->prepend_item(MessageItem::success("<0>User tag changes saved"));
+        } else {
+            $ms->prepend_item(MessageItem::warning_note("<0>No changes"));
+        }
+        $this->conf->feedback_msg($ms);
+        unset($this->qreq->fn, $this->qreq->tagfn);
+        $this->conf->redirect_self($this->qreq);
+        return true;
     }
 
 
     /** @return bool */
     private function handle_redisplay() {
+        $this->qreq->unset_csession("uldisplay");
         $sv = [];
         foreach (ContactList::$folds as $key) {
-            $sv[] = "uldisplay.{$key}=" . ($this->qreq->get("show$key") ? 0 : 1);
+            if (($x = friendly_boolean($this->qreq["show{$key}"])) !== null)
+                $sv[] = "uldisplay.{$key}=" . ($x ? 0 : 1);
         }
         foreach ($this->conf->all_review_fields() as $f) {
-            if ($this->qreq["has_show{$f->short_id}"])
-                $sv[] = "uldisplay.{$f->short_id}=" . ($this->qreq["show{$f->short_id}"] ? 0 : 1);
+            if (($x = friendly_boolean($this->qreq["show{$f->short_id}"])) !== null)
+                $sv[] = "uldisplay.{$f->short_id}=" . ($x ? 0 : 1);
         }
         if (isset($this->qreq->scoresort)) {
             $sv[] = "ulscoresort=" . ScoreInfo::parse_score_sort($this->qreq->scoresort);
@@ -369,7 +386,7 @@ class Users_Page {
             return $this->viewer->privChair
                 && $qreq->valid_post()
                 && !empty($this->papersel)
-                && in_array($qreq->tagfn, ["a", "d", "s"])
+                && in_array($qreq->tagfn, ["a", "d", "s"], true)
                 && $this->handle_tags();
         }
         if ($qreq->redisplay) {
@@ -380,7 +397,7 @@ class Users_Page {
     private function print_query_form(ContactList $pl) {
         echo '<div class="tlcontainer mb-3">';
 
-        echo '<div class="tld is-tla active" id="default" role="tabpanel" aria-labelledby="tab-default">',
+        echo '<div class="tld is-tla active" id="default" role="tabpanel" aria-labelledby="k-default-tab">',
             Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
         if (isset($this->qreq->sort)) {
             echo Ht::hidden("sort", $this->qreq->sort);
@@ -389,7 +406,7 @@ class Users_Page {
             " &nbsp;", Ht::submit("Go"), "</form></div>";
 
         // Display options
-        echo '<div class="tld is-tla" id="view" role="tabpanel" aria-labelledby="tab-view">',
+        echo '<div class="tld is-tla" id="view" role="tabpanel" aria-labelledby="k-view-tab">',
             Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
         foreach (["t", "sort"] as $x) {
             if (isset($this->qreq[$x]))
@@ -399,8 +416,11 @@ class Users_Page {
         echo '<table><tr><td><strong>Show:</strong> &nbsp;</td>
       <td class="pad">';
         foreach (["tags" => "Tags",
-                  "aff" => "Affiliations", "collab" => "Collaborators",
-                  "topics" => "Topics"] as $fold => $text) {
+                  "aff" => "Affiliations",
+                  "collab" => "Collaborators",
+                  "topics" => "Topics",
+                  "orcid" => "ORCID iD",
+                  "country" => "Country"] as $fold => $text) {
             if (($pl->have_folds[$fold] ?? null) !== null) {
                 $k = array_search($fold, ContactList::$folds) + 1;
                 echo Ht::checkbox("show{$fold}", 1, $pl->have_folds[$fold],
@@ -423,9 +443,9 @@ class Users_Page {
             $uldisplay = ContactList::uldisplay($this->qreq);
             foreach ($viewable_fields as $f) {
                 $checked = strpos($uldisplay, " {$f->short_id} ") !== false;
-                echo Ht::checkbox("show{$f->short_id}", 1, $checked),
-                    "&nbsp;", Ht::label($f->name_html),
-                    Ht::hidden("has_show{$f->short_id}", 1), "<br />";
+                echo '<label class="checki"><span class="checkc">',
+                    Ht::checkbox("show{$f->short_id}", 1, $checked),
+                    '</span>', $f->name_html, '</label>';
             }
             echo "</td>";
         }
@@ -435,7 +455,7 @@ class Users_Page {
         if (!empty($viewable_fields)) {
             $ss = [];
             foreach (ScoreInfo::score_sort_selector_options() as $k => $v) {
-                if (in_array($k, ["average", "variance", "maxmin"]))
+                if (in_array($k, ["average", "variance", "maxmin"], true))
                     $ss[$k] = $v;
             }
             echo '<tr><td colspan="3"><hr class="g"><b>Sort scores by:</b> &nbsp;',
@@ -446,8 +466,8 @@ class Users_Page {
 
         // Tab selectors
         echo '<div class="tllx" role="tablist">',
-            '<div class="tll active" role="tab" id="tab-default" aria-controls="default" aria-selected="true"><a class="ui tla" href="">User selection</a></div>',
-            '<div class="tll" role="tab" id="tab-view" aria-controls="view" aria-selected="false"><a class="ui tla" href="#view">View options</a></div>',
+            '<div class="tll active" role="tab" id="k-default-tab" aria-controls="default" aria-selected="true"><a class="ui tla" href="">User selection</a></div>',
+            '<div class="tll" role="tab" id="k-view-tab" aria-controls="view" aria-selected="false"><a class="ui tla" href="#view">View options</a></div>',
             '</div></div>', "\n\n";
     }
 
@@ -550,6 +570,9 @@ class Users_Page {
             Multiconference::fail($qreq, 403, ["title" => "Users"], "<0>User list not found");
             return;
         }
+
+        // update from contactdb
+        (new CdbUserUpdate($viewer->conf))->check();
 
         // handle request
         if (isset($qreq["default"]) && $qreq->defaultfn) {

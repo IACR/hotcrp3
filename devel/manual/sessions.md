@@ -1,14 +1,12 @@
-# HotCRP session data
+# HotCRP sessions
 
-This page describes the format of HotCRP session data.
-
-HotCRP sessions contain both **global** data, relevant for all conferences
-attached to a session, and **conference** data, which is relevant to a single
-conference. Conferences are distinguished by their **session keys**, which are
-`@` followed by the conference’s database name.
+Each HotCRP session contains both **global** data, relevant for all
+conferences attached to a session, and **conference** data relevant to a
+single conference. Session data is stored in PHP’s native [session
+encoding](https://www.php.net/manual/en/function.session-encode.php).
 
 
-## Global keys
+## Global session data
 
 ### Session version and expiration
 
@@ -40,7 +38,9 @@ conference. Conferences are distinguished by their **session keys**, which are
     the email address of the first account to log in, `us[1]` the second, and
     so forth. A URL like `https://conf.hotcrp.com/u/N/` accesses the given
     conference using account `N`. If `us` is not set but `u` is, then `us`
-    defaults to the one-element list `[u]`.
+    defaults to the one-element list `[u]`. If an account is removed from an
+    active session, but the session remains active, then that entry in `us`
+    is set to an empty string.
 
 * `uchoice` (associative array): Account choice
 
@@ -48,7 +48,7 @@ conference. Conferences are distinguished by their **session keys**, which are
     the most relevant account for each conference. On receiving a request for
     a plain conference URL (e.g., `https://conf.hotcrp.com/` rather than
     `https://conf.hotcrp.com/u/1/`), HotCRP looks up the best user for that
-    conference using `uchoice` and redirect appropriately.
+    conference using `uchoice` and redirects appropriately.
 
     `uchoice` is keyed by conference session key. The value for a conference
     is a two-element list `[USERINDEX, USETIME]`. `USERINDEX` is the most
@@ -87,7 +87,7 @@ conference. Conferences are distinguished by their **session keys**, which are
 * `login_bounce`
 
 
-## Conference keys
+## Conference session data
 
 Session data relevant to one conference is stored in the session element named
 by the conference’s session key, e.g., `@db-sigcomm23`. This element is

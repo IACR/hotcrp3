@@ -1,22 +1,35 @@
 <?php
-// permissionproblem.php -- HotCRP helper class for permission errors
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// failurereason.php -- HotCRP helper class for permission errors
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
-class PermissionProblem extends Exception
+class FailureReason extends Exception
     implements ArrayAccess, IteratorAggregate, Countable, JsonSerializable {
-    /** @var Conf */
+    /** @var Conf
+     * @readonly */
     public $conf;
-    /** @var bool */
+    /** @var ?PaperInfo
+     * @readonly */
+    public $prow;
+    /** @var bool
+     * @readonly */
     public $secondary;
     /** @var array<string,mixed> */
     private $_a;
 
     /** @param ?array<string,mixed> $a */
     function __construct(Conf $conf, $a = null) {
-        parent::__construct("HotCRP permission problem");
+        parent::__construct("HotCRP failure reason");
         $this->conf = $conf;
         $this->_a = $a ?? [];
         $this->secondary = !!($this->_a["secondary"] ?? false);
+    }
+
+    /** @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    function set_prow(PaperInfo $prow) {
+        $this->prow = $prow;
+        $this->_a["paperId"] = $prow->paperId;
+        return $this;
     }
 
     #[\ReturnTypeWillChange]
@@ -71,7 +84,7 @@ class PermissionProblem extends Exception
      * @return $this */
     function merge($a) {
         foreach ($a as $k => $v) {
-            $this->_a[$k] =$v;
+            $this->_a[$k] = $v;
         }
         return $this;
     }
@@ -81,7 +94,7 @@ class PermissionProblem extends Exception
     function count() {
         $n = 0;
         foreach ($this->_a as $k => $v) {
-            if (!in_array($k, ["paperId", "reviewId", "option", "override", "forceShow", "listViewable"]))
+            if (!in_array($k, ["paperId", "reviewId", "option", "override", "forceShow", "listViewable", "expand"], true))
                 ++$n;
         }
         return $n;
@@ -104,29 +117,35 @@ class PermissionProblem extends Exception
     }
 
     /** @param list<string> $offsets
-     * @return PermissionProblem */
+     * @return FailureReason
+     * @suppress PhanAccessReadOnlyProperty */
     function filter($offsets) {
-        $pp = new PermissionProblem($this->conf);
-        foreach ($this->_a as $k => $v) {
-            if ($k === "paperId" || in_array($k, $offsets))
-                $pp->_a[$k] = $v;
+        $fr = new FailureReason($this->conf);
+        if ($this->prow) {
+            $fr->prow = $this->prow;
         }
-        return $pp;
+        foreach ($this->_a as $k => $v) {
+            if ($k === "paperId" || in_array($k, $offsets, true))
+                $fr->_a[$k] = $v;
+        }
+        return $fr;
     }
 
-    /** @return array{string,int,string,int} */
+    /** @return array{string,int,string,int,list<FmtArg>} */
     private function deadline_info() {
         $dn = $this->_a["deadline"];
-        if ($dn === "response") {
-            $rrd = $this->conf->response_round_by_id($this->_a["commentRound"]);
-            return ["response_open", $rrd->open, "response_done", $rrd->done];
+        if (str_starts_with($dn, "sub_")) {
+            return $this->submission_deadline_info();
         }
 
-        if (str_starts_with($dn, "sub_")) {
-            $odn = "sub_open";
-        } else if (str_starts_with($dn, "rev_")
-                   || str_starts_with($dn, "extrev_")
-                   || str_starts_with($dn, "pcrev_")) {
+        if ($dn === "response") {
+            $rrd = $this->conf->response_round_by_id($this->_a["commentRound"]);
+            return ["response_open", $rrd->open, "response_done", $rrd->done, []];
+        }
+
+        if (str_starts_with($dn, "rev_")
+            || str_starts_with($dn, "extrev_")
+            || str_starts_with($dn, "pcrev_")) {
             $odn = "rev_open";
         } else {
             $odn = null;
@@ -137,12 +156,31 @@ class PermissionProblem extends Exception
             $dn = $this->conf->review_deadline_name($this->_a["reviewRound"] ?? null, false, true);
         }
         $end = $this->conf->setting($dn) ?? -1;
-        return [$odn, $start, $dn, $end];
+        return [$odn, $start, $dn, $end, []];
     }
 
-    /** @param int $format
-     * @return string */
-    function unparse($format = 0) {
+    /** @return array{string,int,string,int,list<FmtArg>} */
+    private function submission_deadline_info() {
+        $dn = $this->_a["deadline"];
+        $sr = $this->conf->submission_round_by_tag($this->_a["sclass"] ?? "")
+            ?? $this->conf->unnamed_submission_round();
+        if ($dn === "sub_reg") {
+            $end = $sr->register;
+        } else if ($dn === "sub_update") {
+            $end = $sr->update;
+        } else {
+            $end = $sr->submit;
+        }
+        return ["sub_sub", $sr->open, $dn, $end, [
+            new FmtArg("sclass", $sr->tag, 0),
+            new FmtArg("sclass_prefix", $sr->prefix, 0)
+        ]];
+    }
+
+    /** @param ?string $field
+     * @param 1|2|3 $status
+     * @return list<MessageItem> */
+    function message_list($field = null, $status = 2) {
         $ms = $args = [];
         $paperId = $this->_a["paperId"] ?? -1;
         if ($paperId > 0) {
@@ -153,6 +191,11 @@ class PermissionProblem extends Exception
         if ($option) {
             $args[] = new FmtArg("field", $option->title(), 0);
         }
+        if ($this->_a["expand"] ?? false) {
+            $args[] = new FmtArg("expand", true);
+        }
+
+        // collect primary messages
         if (isset($this->_a["invalidId"])) {
             $id = $this->_a["invalidId"];
             $idname = $id === "paper" ? "{submission}" : $id;
@@ -167,8 +210,8 @@ class PermissionProblem extends Exception
             $idname = $id === "paper" ? "{submission}" : $id;
             $ms[] = $this->conf->_("<0>Missing {$idname} ID");
         }
-        if (isset($this->_a["invalidSclass"])) {
-            $ms[] = $this->conf->_("<0>Unknown submission class ‘{}’", $this->_a["invalidSclass"]);
+        if ($this->_a["invalidSclass"] ?? false) {
+            $ms[] = $this->conf->_("<0>{Submission} class ‘{}’ not found", $this->_a["sclass"]);
         }
         if ($this->_a["site_lock"] ?? false) {
             $ms[] = $this->conf->_("<0>Action locked");
@@ -193,7 +236,10 @@ class PermissionProblem extends Exception
         }
         if (isset($this->_a["signin"])) {
             $url = $this->_a["signinUrl"] ?? $this->conf->hoturl_raw("signin");
-            $ms[] = $this->conf->_i("signin_required", new FmtArg("url", $url, 0), new FmtArg("action", $this->_a["signin"]));
+            $ms[] = $this->conf->_i("signin_required",
+                new FmtArg("action", $this->_a["signin"]),
+                new FmtArg("url", $url, 0),
+                ...$args);
         }
         if ($this->_a["withdrawn"] ?? false) {
             $ms[] = $this->conf->_("<0>{Submission} #{} has been withdrawn", $paperId);
@@ -202,7 +248,7 @@ class PermissionProblem extends Exception
             $ms[] = $this->conf->_("<0>{Submission} #{} is not withdrawn", $paperId);
         }
         if ($this->_a["notSubmitted"] ?? false) {
-            $ms[] = $this->conf->_("<0>{Submission} #{} is only a draft", $paperId);
+            $ms[] = $this->conf->_("<0>{Submission} #{} is a draft", $paperId);
         }
         if ($this->_a["reviewsSeen"] ?? false) {
             $ms[] = $this->conf->_("<0>You can’t withdraw {submission} #{} after seeing its reviews", $paperId);
@@ -216,6 +262,9 @@ class PermissionProblem extends Exception
         if ($this->_a["notUploaded"] ?? false) {
             $ms[] = $this->conf->_("<0>A PDF upload is required to submit");
         }
+        if ($this->_a["reviewNonexistent"] ?? false) {
+            $ms[] = $this->conf->_("<0>Review not found");
+        }
         if ($this->_a["reviewNotSubmitted"] ?? false) {
             $ms[] = $this->conf->_("<0>This review is not yet ready for others to see");
         }
@@ -223,22 +272,19 @@ class PermissionProblem extends Exception
             $ms[] = $this->conf->_("<0>Your own review for #{} is not complete, so you can’t view other people’s reviews", $paperId);
         }
         if ($this->_a["responseNonexistent"] ?? false) {
-            $ms[] = $this->conf->_("<0>That response is not allowed on {submission} #{}", $paperId);
+            $ms[] = $this->conf->_("<0>Response not allowed on {submission} #{}", $paperId);
         }
         if ($this->_a["responseNotReady"] ?? false) {
             $ms[] = $this->conf->_("<0>The authors’ response is not yet ready for reviewers to view");
         }
         if ($this->_a["reviewsOutstanding"] ?? false) {
             $ms[] = $this->conf->_("<0>You will get access to the reviews once you complete your assigned reviews. If you can’t complete your reviews, please inform the organizers.");
-            if ($format === 5) {
-                $ms[] = $this->conf->_("<5><a href=\"{searchurl}\">List assigned reviews</a>", new FmtArg("searchurl", $this->conf->hoturl_raw("search", ["q" => "", "t" => "r"]), 0));
-            }
         }
         if ($this->_a["reviewNotAssigned"] ?? false) {
             $ms[] = $this->conf->_("<0>You are not assigned to review {submission} #{}", $paperId);
         }
         if (isset($this->_a["deadline"])) {
-            list($odn, $start, $edn, $end) = $this->deadline_info();
+            list($odn, $start, $edn, $end, $args) = $this->deadline_info();
             $m = "<0>Action not available";
             $dl = $edn;
             $time = 0;
@@ -259,7 +305,7 @@ class PermissionProblem extends Exception
                     new FmtArg("pid", $paperId),
                     new FmtArg("deadline", $dl),
                     new FmtArg("deadlineurl", $this->conf->hoturl_raw("deadlines"), 0),
-                    new FmtArg("fmt", $format));
+                    ...$args);
         }
         if ($this->_a["override"] ?? false) {
             $ms[] = $this->conf->_("<0>“Override deadlines” can override this restriction.");
@@ -313,37 +359,75 @@ class PermissionProblem extends Exception
         if (empty($ms)) {
             $ms[] = $this->conf->_i("permission_error", new FmtArg("action", "unknown"), ...$args);
         }
-        // finish it off
-        if (($this->_a["forceShow"] ?? false)
-            && $format === 5
-            && Navigation::get()->page !== "api"
-            && Qrequest::$main_request) {
-            $ms[] = $this->conf->_("<5><a class=\"nw\" href=\"{overrideurl}\">Override conflict</a>", new FmtArg("overrideurl", $this->conf->selfurl(Qrequest::$main_request, ["forceShow" => 1], Conf::HOTURL_RAW), 0));
+
+        // return if no messages
+        if (empty($ms)) {
+            return [];
         }
-        if (!empty($ms)
-            && ($this->_a["listViewable"] ?? false)
-            && $format === 5) {
-            $ms[] = $this->conf->_("<5><a href=\"{searchurl}\">List the {submissions} you can view</a>", new FmtArg("searchurl", $this->conf->hoturl_raw("search", "q="), 0));
-        }
-        if (!empty($ms)
-            && ($this->_a["confirmOverride"] ?? false)) {
+
+        // consolidate primary messages
+        if ($this->_a["confirmOverride"] ?? false) {
             $ms[] = $this->conf->_("<0>Are you sure you want to override the deadline?");
         }
-        $tt = "";
-        foreach ($ms as $m) {
-            $t = Ftext::as($format, $m);
-            if ($tt !== "") {
-                if (preg_match('/\/(?:p|div|ul|ol)>\s*\z/i', $tt)) {
+        if (count($ms) > 1) {
+            $xformat = 0;
+            foreach ($ms as $m) {
+                if (!str_starts_with($m, "<0>")) {
+                    $xformat = 5;
+                    break;
+                }
+            }
+            $tt = "<{$xformat}>";
+            foreach ($ms as $m) {
+                $t = Ftext::as($xformat, $m);
+                if ($t === "") {
+                    continue;
+                }
+                if ($tt === "<{$xformat}>" || ($xformat === 5 && preg_match('/\/(?:p|div|ul|ol|li)>\s*\z/i', $tt))) {
                     // nothing
                 } else if (preg_match('/[.;,:?!\s]\z/', $tt)) {
                     $tt .= " ";
                 } else {
                     $tt .= ". ";
                 }
+                $tt .= $t;
             }
-            $tt .= $t;
+            $ms = [$tt];
         }
-        return $tt;
+        $ml = [new MessageItem($status, $field, $ms[0])];
+
+        // add context messages
+        if ($this->_a["expand"] ?? false) {
+            $mx = [];
+            if (($this->_a["forceShow"] ?? false) && Qrequest::$main_request) {
+                $mx[] = $this->conf->_("<5><a class=\"nw\" href=\"{overrideurl}\">Override conflict</a>", new FmtArg("overrideurl", $this->conf->selfurl(Qrequest::$main_request, ["forceShow" => 1], Conf::HOTURL_RAW), 0));
+            }
+            if ($this->_a["listViewable"] ?? false) {
+                $mx[] = $this->conf->_("<5><a href=\"{searchurl}\">List the {submissions} you can view</a>", new FmtArg("searchurl", $this->conf->hoturl_raw("search", "q="), 0));
+            }
+            if ($this->_a["reviewsOutstanding"] ?? false) {
+                $mx[] = $this->conf->_("<5><a href=\"{searchurl}\">List assigned reviews</a>", new FmtArg("searchurl", $this->conf->hoturl_raw("search", ["q" => "", "t" => "r"]), 0));
+            }
+            if (count($mx) > 1) {
+                $mxl = [];
+                foreach ($mx as $m) {
+                    $mxl[] = "<li>" . Ftext::as(5, $m) . "</li>";
+                }
+                $mx = ["<5><ul class=\"midpoint\">" . join("", $mxl) . "</ul>"];
+            }
+            if (count($mx) === 1) {
+                $ml[] = new MessageItem(MessageSet::PLAIN, $field, $mx[0]);
+            }
+        }
+
+        return $ml;
+    }
+
+    /** @param int $format
+     * @return string */
+    function unparse($format) {
+        $ml = $this->message_list(null, 2);
+        return $ml ? Ftext::as($format, $ml[0]->message) : "";
     }
 
     /** @return string */
@@ -356,16 +440,10 @@ class PermissionProblem extends Exception
         return $this->unparse(5);
     }
 
-    /** @param ?string $field
-     * @param 1|2|3 $status
-     * @return Iterable<MessageItem> */
-    function message_list($field, $status) {
-        return [new MessageItem(null, "<5>" . $this->unparse_html(), $status)];
-    }
-
-    /** @param ?string $field
+    /** @param MessageSet|JsonResult $ms
+     * @param ?string $field
      * @param 1|2|3 $status */
-    function append_to(MessageSet $ms, $field, $status) {
+    function append_to($ms, $field, $status) {
         foreach ($this->message_list($field, $status) as $mi) {
             $ms->append_item($mi);
         }

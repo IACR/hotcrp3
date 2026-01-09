@@ -9,8 +9,8 @@ class ReviewerList_PaperColumn extends PaperColumn {
     private $topics = false;
     /** @var ?ReviewSearchMatcher */
     private $rsm;
-    /** @var ?SearchTerm */
-    private $hlterm;
+    /** @var ?list<?SearchTerm> */
+    private $hlterms;
     function __construct(Conf $conf, $cj) {
         parent::__construct($conf, $cj);
         if (isset($cj->rematch)) {
@@ -20,24 +20,17 @@ class ReviewerList_PaperColumn extends PaperColumn {
             }
         }
     }
-    function add_decoration($decor) {
-        if ($decor[0] === "p" && in_array($decor, ["pref", "prefs", "preference", "preferences"])) {
-            $this->pref = true;
-            return $this->__add_decoration("pref");
-        } else if ($decor === "topic" || $decor === "topics" || $decor === "topicscore") {
-            $this->pref = $this->topics = true;
-            return $this->__add_decoration("topics");
-        } else {
-            return parent::add_decoration($decor);
-        }
+    function view_option_schema() {
+        return ["pref", "prefs/pref", "preference/pref", "preferences/pref", "topics", "topic/topics", "topicscore/topics"];
     }
     function prepare(PaperList $pl, $visible) {
         if (!$pl->user->can_view_some_review_identity()) {
             return false;
         }
-        if ($this->pref && !$pl->user->allow_view_preference(null)) {
-            $this->pref = false;
-        }
+        $this->topics = ($this->view_option("topics") ?? false)
+            && $pl->conf->has_topics();
+        $this->pref = ($this->view_option("pref") ?? $this->topics ?? false)
+            && $pl->user->allow_view_preference(null);
         $pl->qopts["reviewSignatures"] = true;
         if ($visible && $this->pref) {
             $pl->qopts["allReviewerPreference"] = true;
@@ -51,9 +44,18 @@ class ReviewerList_PaperColumn extends PaperColumn {
         } else {
             $this->override = PaperColumn::OVERRIDE_IFEMPTY;
         }
-        $st = $pl->search->main_term();
-        if ($st->about() === SearchTerm::ABOUT_REVIEW) {
-            $this->hlterm = $st;
+        $nhlt = 0;
+        $hlt = [];
+        foreach ($pl->search->group_slice_terms() as $gt) {
+            if ($gt->about() === SearchTerm::ABOUT_REVIEW) {
+                $hlt[] = $gt;
+                ++$nhlt;
+            } else {
+                $hlt[] = null;
+            }
+        }
+        if ($nhlt > 0) {
+            $this->hlterms = $hlt;
         }
         return true;
     }
@@ -74,7 +76,8 @@ class ReviewerList_PaperColumn extends PaperColumn {
                     $tv = $this->topics ? $prow->topic_interest_score($xrow->contactId) : null;
                     $t .= " " . $pf->unparse_span($tv);
                 }
-                if ($this->hlterm && $this->hlterm->test($prow, $xrow)) {
+                if (($hlt = $this->hlterms[$prow->_search_group] ?? null)
+                    && $hlt->test($prow, $xrow)) {
                     $t = "<span class=\"highlightmark taghh\">{$t}</span>";
                 }
                 $x[] = "<li>{$t}</li>";

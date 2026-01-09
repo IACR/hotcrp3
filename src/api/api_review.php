@@ -1,105 +1,184 @@
 <?php
-// api/api_review.php -- HotCRP paper-related API calls
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// api_review.php -- HotCRP review API calls
+// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
 
-class Review_API {
-    static function review(Contact $user, Qrequest $qreq, PaperInfo $prow) {
-        if (!$user->can_view_review($prow, null)) {
-            return JsonResult::make_permission_error();
-        }
-        $need_id = false;
-        if (isset($qreq->r)) {
-            $rrow = $prow->full_review_by_ordinal_id($qreq->r);
-            if (!$rrow && $prow->parse_ordinal_id($qreq->r) === false) {
-                return JsonResult::make_error(400, "<0>Bad request");
-            }
-            $rrows = $rrow ? [$rrow] : [];
-        } else if (isset($qreq->u)) {
-            $need_id = true;
-            $u = APIHelpers::parse_reviewer_for($qreq->u, $user, $prow);
-            $rrows = $prow->full_reviews_by_user($u);
-            if (!$rrows
-                && $user->contactId !== $u->contactId
-                && !$user->can_view_review_identity($prow, null)) {
-                return JsonResult::make_permission_error();
-            }
-        } else {
-            $prow->ensure_full_reviews();
-            $rrows = $prow->reviews_as_display();
-        }
-        $vrrows = [];
-        $rf = $user->conf->review_form();
-        foreach ($rrows as $rrow) {
-            if ($user->can_view_review($prow, $rrow)
-                && (!$need_id || $user->can_view_review_identity($prow, $rrow))) {
-                $vrrows[] = $rf->unparse_review_json($user, $prow, $rrow);
-            }
-        }
-        if (!$vrrows && $rrows) {
-            return JsonResult::make_permission_error();
-        } else {
-            return new JsonResult(["ok" => true, "reviews" => $vrrows]);
-        }
+/*preference for api/review
+
+single review download
+- p must be set
+- r must be set
+
+multiple review download
+- p may be set
+- q may be set
+- one of p, q must be set
+- rq may be set
+- u may be set
+
+single review upload
+- p must be set
+- r must be set (might be `new`)
+- u may be set
+- round may be set */
+
+class Review_API extends MessageSet {
+    /** @var Conf
+     * @readonly */
+    public $conf;
+    /** @var Contact
+     * @readonly */
+    public $user;
+
+
+    const M_ONE = 1;
+    const M_MULTI = 2;
+    const M_MATCH = 4;
+
+    function __construct(Contact $user) {
+        $this->conf = $user->conf;
+        $this->user = $user;
     }
 
-    static function reviewrating(Contact $user, Qrequest $qreq, PaperInfo $prow) {
-        if (!$qreq->r) {
-            return JsonResult::make_error(400, "<0>Bad request");
+    /** @return JsonResult */
+    static function run_get_one(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
+        if (!isset($qreq->p)) {
+            return JsonResult::make_missing_error("p");
+        } else if (!isset($qreq->r)) {
+            return JsonResult::make_missing_error("r");
         }
-        $rrow = $prow->full_review_by_ordinal_id($qreq->r);
-        if (!$rrow && $prow->parse_ordinal_id($qreq->r) === false) {
-            return JsonResult::make_error(400, "<0>Bad request");
-        } else if (!$user->can_view_review($prow, $rrow)) {
-            return JsonResult::make_permission_error();
-        } else if (!$rrow) {
-            return JsonResult::make_error(404, "<0>Review not found");
+        $fr = $prow ? $user->perm_view_paper($prow) : $qreq->annex("paper_whynot");
+        if (!$prow || $fr) {
+            return Conf::paper_error_json_result($fr);
         }
-        $editable = $user->can_rate_review($prow, $rrow);
-        if ($qreq->method() !== "GET") {
-            if (!isset($qreq->user_rating)
-                || ($rating = ReviewInfo::parse_rating($qreq->user_rating)) === null) {
-                return JsonResult::make_error(400, "<0>Bad request");
-            } else if (!$editable) {
-                return JsonResult::make_permission_error();
+
+        $rloc = $prow->parse_ordinal_id($qreq->r);
+        if ($rloc === false || $rloc === 0) {
+            return JsonResult::make_parameter_error("r");
+        } else if ($rloc < 0) {
+            $rrow = $prow->review_by_ordinal(-$rloc);
+        } else {
+            $rrow = $prow->review_by_id($rloc);
+        }
+        $fr = $user->perm_view_review($prow, $rrow);
+        if (!$rrow || $fr) {
+            $fr = $fr ?? $prow->failure_reason(["reviewNonexistent" => true]);
+            $status = isset($fr["reviewNonexistent"]) ? 404 : 403;
+            return new JsonResult($status, [
+                "ok" => false, "message_list" => $fr->message_list(null, 2)
+            ]);
+        }
+
+        $rj = (new PaperExport($user))->review_json($prow, $rrow);
+        assert(!!$rj);
+        return new JsonResult(["ok" => true, "review" => $rj]);
+    }
+
+    /** @return JsonResult */
+    static function run_get_multi(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
+        $ml = [];
+        if (!isset($qreq->q)) {
+            if (!isset($qreq->p)) {
+                JsonResult::make_missing_error("q")->complete();
             }
-            if ($rating === 0) {
-                $user->conf->qe("delete from ReviewRating where paperId=? and reviewId=? and contactId=?", $prow->paperId, $rrow->reviewId, $user->contactId);
+            $fr = $prow ? $user->perm_view_paper($prow) : $qreq->annex("paper_whynot");
+            if (!$prow || $fr) {
+                Conf::paper_error_json_result($fr)->complete();
+            }
+            $srch = null;
+            $prows = PaperInfoSet::make_singleton($prow);
+        } else {
+            list($srch, $prows) = Paper_API::make_search($user, $qreq);
+            $ml = $srch->message_list_with_default_field("q");
+        }
+
+        if (isset($qreq->rq) && isset($qreq->u)) {
+            JsonResult::make_parameter_error("rq", "<0>Supply at most one of `rq` and `u`")->complete();
+        }
+
+        $rst = null;
+        if (isset($qreq->u)) {
+            if (($u = $user->conf->user_by_email($qreq->u))) {
+                $rsm = new ReviewSearchMatcher;
+                $rsm->add_contact($u->contactId);
+                $rst = new Review_SearchTerm($user, $rsm);
             } else {
-                $user->conf->qe("insert into ReviewRating set paperId=?, reviewId=?, contactId=?, rating=? on duplicate key update rating=?", $prow->paperId, $rrow->reviewId, $user->contactId, $rating, $rating);
+                $rst = new False_SearchTerm;
             }
-            $rrow = $prow->fresh_review_by_id($rrow->reviewId);
+        } else if (isset($qreq->rq)) {
+            $query = [
+                "q" => $qreq->rq,
+                "reviewer" => $qreq->reviewer ?? null
+            ];
+            $srch = new PaperSearch($user, $query);
+            array_push($ml, ...$srch->message_list_with_default_field("rq"));
+            $rst = $srch->main_term();
         }
-        $rating = $rrow->rating_by_rater($user);
-        $jr = new JsonResult(["ok" => true, "user_rating" => $rating]);
-        if ($editable) {
-            $jr->content["editable"] = true;
+
+        $pex = new PaperExport($user);
+        $rjs = [];
+        foreach ($prows as $prow) {
+            foreach ($prow->viewable_reviews_as_display($user) as $rrow) {
+                if (!$rst || $rst->test($prow, $rrow))
+                    $rjs[] = $pex->review_json($prow, $rrow);
+            }
         }
-        if ($user->can_view_review_ratings($prow, $rrow)) {
-            $jr->content["ratings"] = array_values($rrow->ratings());
+
+        return new JsonResult([
+            "ok" => true,
+            "message_list" => $ml,
+            "reviews" => $rjs
+        ]);
+    }
+
+    /** @return JsonResult */
+    static private function run(Contact $user, Qrequest $qreq, ?PaperInfo $prow, $mode) {
+        $old_overrides = $user->overrides();
+        if (friendly_boolean($qreq->forceShow) !== false) {
+            $user->add_overrides(Contact::OVERRIDE_CONFLICT);
+        }
+        try {
+            if ($qreq->is_get()) {
+                if ($mode === self::M_ONE) {
+                    $jr = self::run_get_one($user, $qreq, $prow);
+                } else {
+                    $jr = self::run_get_multi($user, $qreq, $prow);
+                }
+            } else {
+                $jr = JsonResult::make_not_found_error();
+            }
+        } catch (JsonResult $jrx) {
+            $jr = $jrx;
+        }
+        $user->set_overrides($old_overrides);
+        if (($jr->content["message_list"] ?? null) === []) {
+            unset($jr->content["message_list"]);
         }
         return $jr;
     }
 
-    /** @param PaperInfo $prow */
-    static function reviewround(Contact $user, $qreq, $prow) {
-        if (!$qreq->r) {
-            return JsonResult::make_error(400, "<0>Bad request");
-        }
-        $rrow = $prow->full_review_by_ordinal_id($qreq->r);
-        if (!$rrow && $prow->parse_ordinal_id($qreq->r) === false) {
-            return JsonResult::make_error(400, "<0>Bad request");
-        } else if (!$user->can_administer($prow)) {
-            return JsonResult::make_permission_error();
-        } else if (!$rrow) {
-            return JsonResult::make_error(404, "<0>Review not found");
-        }
-        $rname_in = trim((string) $qreq->round);
-        if (($rname = $user->conf->sanitize_round_name($rname_in)) === false) {
-            return JsonResult::make_error(400, "<0>" . Conf::round_name_error($rname_in));
-        } else if (($rnum = $user->conf->round_number($rname)) === null) {
-            return JsonResult::make_error(400, "<0>Review round not found");
-        }
-        $user->conf->qe("update PaperReview set reviewRound=? where paperId=? and reviewId=?", $rnum, $prow->paperId, $rrow->reviewId);
-        return ["ok" => true];
+    /** @return JsonResult */
+    static function run_one(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
+        return self::run($user, $qreq, $prow, self::M_ONE);
+    }
+
+    /** @return JsonResult */
+    static function run_multi(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
+        return self::run($user, $qreq, $prow, self::M_MULTI | self::M_MATCH);
+    }
+
+
+    /** @deprecated */
+    static function reviewhistory(Contact $user, Qrequest $qreq, PaperInfo $prow) {
+        return ReviewMeta_API::reviewhistory($user, $qreq, $prow);
+    }
+
+    /** @deprecated */
+    static function reviewrating(Contact $user, Qrequest $qreq, PaperInfo $prow) {
+        return ReviewMeta_API::reviewrating($user, $qreq, $prow);
+    }
+
+    /** @deprecated */
+    static function reviewround(Contact $user, Qrequest $qreq, PaperInfo $prow) {
+        return ReviewMeta_API::reviewround($user, $qreq, $prow);
     }
 }

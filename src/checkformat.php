@@ -1,6 +1,6 @@
 <?php
 // checkformat.php -- HotCRP/banal integration
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class CheckFormat extends MessageSet {
     const RUN_ALWAYS = 0;
@@ -19,8 +19,9 @@ class CheckFormat extends MessageSet {
     /** @var bool */
     const DEBUG = false;
 
-    /** @var Conf */
-    private $conf;
+    /** @var Conf
+     * @readonly */
+    public $conf;
     /** @var int */
     public $allow_run;
     /** @var array<string,FormatChecker> */
@@ -365,22 +366,32 @@ class CheckFormat extends MessageSet {
     /** @return MessageItem */
     function front_report_item() {
         if ($this->has_error()) {
-            return new MessageItem(null, "<5>This document violates the submission format requirements", MessageSet::ERROR);
+            return MessageItem::error("<5>This document violates the submission format requirements");
         } else if ($this->has_problem()) {
-            return new MessageItem(null, "<0>This document may violate the submission format requirements", MessageSet::WARNING);
+            return MessageItem::warning("<0>This document may violate the submission format requirements");
         } else {
-            return new MessageItem(null, "<0>Congratulations, this document seems to comply with the format guidelines. However, the automated checker may not verify all formatting requirements. It is your responsibility to ensure correct formatting.", MessageSet::SUCCESS);
+            return MessageItem::success("<0>Congratulations, this document seems to comply with the format guidelines. However, the automated checker may not verify all formatting requirements. It is your responsibility to ensure correct formatting.");
         }
+    }
+
+    /** @return MessageSet */
+    function document_messages(DocumentInfo $doc) {
+        $spec = $doc->conf->format_spec($doc->documentType);
+        $ms = new MessageSet;
+        foreach ($this->spec_checkers($spec) as $checker) {
+            if ($checker->append_report($this, $spec, $doc, $ms))
+                break;
+        }
+        return $ms;
     }
 
     /** @return string */
     function document_report(DocumentInfo $doc) {
-        $spec = $doc->conf->format_spec($doc->documentType);
-        $report = null;
-        foreach ($this->spec_checkers($spec) as $checker) {
-            $report = $report ?? $checker->report($this, $spec, $doc);
+        $ms = $this->document_messages($doc);
+        if (!$ms->has_message()) {
+            return "";
         }
-        return $report ?? "";
+        return Ht::fmt_feedback_msg($doc->conf, $ms);
     }
 
     /** @param int $dtype
@@ -441,7 +452,7 @@ class Default_FormatChecker implements FormatChecker {
             && ($bj->msx[0] ?? null) === $spec->timestamp) {
             for ($i = 1; $i !== count($bj->msx); ++$i) {
                 $mx = $bj->msx[$i];
-                $mi = $cf->msg_at($mx[0], $mx[1], $mx[2]);
+                $mi = $cf->append_item(new MessageItem($mx[2], $mx[0], $mx[1]));
                 if (isset($mx[3])) {
                     $mi->landmark = $mx[3];
                 }
@@ -551,7 +562,7 @@ class Default_FormatChecker implements FormatChecker {
             }
             if ($p < $pages
                 && ($bj->pages[$p]->fs ?? $last_fs) > $last_fs) {
-                $cf->msg_at("pagelimit", "<5>It looks like this PDF might use normal section numbers for its appendixes. Appendix sections should use letters, like ‘A’ and ‘B’. If using LaTeX, start the appendixes with the <code>\appendix</code> command.", MessageSet::INFORM);
+                $cf->inform_at("pagelimit", "<5>It looks like this PDF might use normal section numbers for its appendixes. Appendix sections should use letters, like ‘A’ and ‘B’. If using LaTeX, start the appendixes with the <code>\appendix</code> command.");
             }
         }
     }
@@ -714,7 +725,7 @@ class Default_FormatChecker implements FormatChecker {
         }));
         if ($nd0_pages == $this->npages) {
             $cf->problem_at("notext", "<0>This document appears to contain no text", 2);
-            $cf->msg_at("notext", "<0>The PDF software has rendered pages as images. PDFs like this are less efficient to transfer and harder to search.", MessageSet::INFORM);
+            $cf->inform_at("notext", "<0>The PDF software has rendered pages as images. PDFs like this are less efficient to transfer and harder to search.");
         }
     }
 
@@ -789,16 +800,27 @@ class Default_FormatChecker implements FormatChecker {
         return $xj;
     }
 
+    /** @return bool */
+    function append_report(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc,
+                           MessageSet $ms) {
+        if (!$ms->has_message()) {
+            $mi = $cf->front_report_item();
+            if ($cf->has_error()) {
+                $mi->message = "<5><strong>" . $mi->message_as(5) . ".</strong> The most serious errors are marked with <span class=\"error-mark\"></span>.";
+            }
+            $ms->append_item($mi);
+        }
+        if ($cf->has_problem()) {
+            $ms->append_item(MessageItem::inform("<0>Submissions that violate the requirements will not be considered. However, some violation reports may be false positives (for instance, the checker can miscalculate margins and text sizes for figures). If you are confident that the current document respects all format requirements, keep it as is."));
+        }
+        $ms->append_list($cf->message_list());
+        return true;
+    }
 
     /** @return string */
     function report(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc) {
-        $msgs = [$cf->front_report_item()];
-        if ($cf->has_error()) {
-            $msgs[0]->message = "<5><strong>" . $msgs[0]->message_as(5) . ".</strong> The most serious errors are marked with <span class=\"error-mark\"></span>.";
-        }
-        if ($cf->has_problem()) {
-            $msgs[] = new MessageItem(null, "<5>Submissions that violate the requirements will not be considered. However, some violation reports may be false positives (for instance, the checker can miscalculate margins and text sizes for figures). If you are confident that the current document respects all format requirements, keep it as is.", MessageSet::INFORM);
-        }
-        return Ht::feedback_msg(array_merge($msgs, $cf->message_list()));
+        $ms = new MessageSet;
+        $this->append_report($cf, $spec, $doc, $ms);
+        return Ht::fmt_feedback_msg($doc->conf, $ms);
     }
 }

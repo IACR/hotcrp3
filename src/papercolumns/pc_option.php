@@ -1,6 +1,6 @@
 <?php
 // pc_option.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Option_PaperColumn extends PaperColumn {
     /** @var PaperOption */
@@ -12,10 +12,8 @@ class Option_PaperColumn extends PaperColumn {
         $this->override = PaperColumn::OVERRIDE_IFEMPTY;
         $this->opt = $conf->checked_option_by_id($cj->option_id);
     }
-    function add_decoration($decor) {
-        /* XXX ask PaperOption what decorations are supported */
-        return parent::add_decoration($decor)
-            || $this->__add_decoration($decor);
+    function view_option_schema() {
+        return $this->opt->view_option_schema();
     }
     function prepare(PaperList $pl, $visible) {
         if (!$pl->user->can_view_some_option($this->opt)) {
@@ -24,12 +22,15 @@ class Option_PaperColumn extends PaperColumn {
         $pl->qopts["options"] = true;
         if ($visible === self::PREP_VISIBLE) {
             $this->fr = new FieldRender($pl->render_context | ($this->as_row ? FieldRender::CFROW : FieldRender::CFCOLUMN), $pl->user);
-            $this->fr->make_column($this);
+            $this->fr->set_column($this);
         }
         if ($this->as_row) {
             $this->className = ltrim(preg_replace('/(?: +|\A)(?:plrd|plr|plc)(?= |\z)/', "", $this->className));
         }
         return true;
+    }
+    function sort_name() {
+        return $this->sort_name_with_options(...$this->opt->sort_view_options());
     }
     function compare(PaperInfo $a, PaperInfo $b, PaperList $pl) {
         return $this->opt->value_compare($a->option($this->opt),

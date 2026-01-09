@@ -1,6 +1,6 @@
 <?php
 // reviewrefusalinfo.php -- HotCRP PaperReviewRefused objects
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class ReviewRefusalInfo {
     /** @var Conf
@@ -34,7 +34,7 @@ class ReviewRefusalInfo {
     /** @var ?int */
     public $timeRefused;
     /** @var ?string */
-    public $data;
+    public $data; // XXX backward compat
     /** @var ?string */
     public $reason;
 
@@ -79,6 +79,11 @@ class ReviewRefusalInfo {
             $row->fetch_incorporate();
         }
         return $row;
+    }
+
+    /** @return bool */
+    function is_ghost() {
+        return false;
     }
 
     /** @return Contact */

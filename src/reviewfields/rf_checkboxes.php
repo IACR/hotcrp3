@@ -1,6 +1,6 @@
 <?php
 // reviewfields/rf_checkboxes.php -- HotCRP checkboxes review fields
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
     const MASK2SCORE = "012 3   4       5               6";
@@ -68,34 +68,13 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
     }
 
     /** @param int|float $fval
-     * @param ?string $real_format
      * @return string */
-    function unparse_computed($fval, $real_format = null) {
+    function unparse_computed($fval) {
         // XXX
-        if ($fval === null) {
-            return "";
-        }
-        $numeric = ($this->flags & self::FLAG_NUMERIC) !== 0;
-        if ($real_format !== null && $numeric) {
-            return sprintf($real_format, $fval);
-        }
-        if ($fval <= 0.8) {
-            return "–";
-        }
-        if (!$numeric && $fval <= count($this->values) + 0.2) {
-            $rval = (int) round($fval);
-            if ($fval >= $rval + 0.25 || $fval <= $rval - 0.25) {
-                $ival = (int) $fval;
-                $vl = $this->symbols[$ival - 1];
-                $vh = $this->symbols[$ival];
-                return $this->flip ? "{$vh}~{$vl}" : "{$vl}~{$vh}";
-            }
-            return $this->symbols[$rval - 1];
-        }
-        return (string) $fval;
+        return "???";
     }
 
-    function unparse_span_html($fval, $format = null) {
+    function unparse_span_html($fval) {
         $r = self::unpack_value($fval, $this->flip);
         if ($r === null) {
             return "";
@@ -187,8 +166,8 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
                 $word = $m[1];
                 $text = substr($text, strlen($word));
                 if (str_starts_with($text, ".") && $this->complex()) {
-                    $pos = strpos($text, ";;;;", strlen($word));
-                    $text = $pos === false ? "" : substr($text, $pos + 4);
+                    $pos = strpos($text, ";;;;");
+                    $text = $pos === false ? "" : (string) substr($text, $pos + 4);
                 }
                 $text = preg_replace('/\A(?:[\s.,;]|\(.*?\))+/', "", $text);
             } else {
@@ -251,7 +230,7 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
         $reqval = $reqstr === null ? $fval : $this->parse($reqstr);
         $n = count($this->values);
         $this->print_web_edit_open($this->short_id, null, $rvalues);
-        echo '<div class="revev">';
+        echo '<div class="revev">', Ht::hidden("has_{$this->short_id}", 1);
         $step = $this->flip ? -1 : 1;
         for ($i = $this->flip ? $n - 1 : 0; $i >= 0 && $i < $n; $i += $step) {
             $this->print_choice($i + 1, $fval ?? 0, $reqval ?? 0);
@@ -318,11 +297,18 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
         return new Checkboxes_ReviewFieldSearch($this, $op | $rsm->rfop, $allow0, $fvm);
     }
 
-    function renumber_value($fmap, $fval) {
+    function map_value($fval, $fvmap) {
         $nv = 0;
         for ($b = $s = 1; $b <= $fval; $b <<= 1, ++$s) {
-            if (($fval & $b) !== 0) {
-                $ns = $fmap[$s] ?? $s;
+            if (($fval & $b) === 0) {
+                continue;
+            }
+            if (array_key_exists($s, $fvmap)) {
+                $ns = $fvmap[$s];
+            } else {
+                $ns = $s;
+            }
+            if ($ns > 0) {
                 $nv |= $ns === $s ? $b : 1 << ($ns - 1);
             }
         }
@@ -361,8 +347,7 @@ class Checkboxes_ReviewFieldSearch extends ReviewFieldSearch {
         }
     }
 
-    function test_review($user, $prow, $rrow) {
-        $fv = $rrow->fval($this->rf);
+    function test_value($rrow, $fv) {
         if ($fv
             ? ($fv & $this->fvm) === 0 || ($fv & $this->fvnm) !== 0
             : !$this->allow0) {

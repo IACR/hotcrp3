@@ -1,6 +1,6 @@
 <?php
 // formulas/f_tag.php -- HotCRP helper class for formula expressions
-// Copyright (c) 2009-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2009-2025 Eddie Kohler; see LICENSE.
 
 class Tag_Fexpr extends Fexpr {
     private $tag;
@@ -20,9 +20,8 @@ class Tag_Fexpr extends Fexpr {
         } else if (count($ff->rawargs) === 1 && $arg[0] === ":") {
             $ff->rawargs[0] .= $arg;
             return true;
-        } else {
-            return false;
         }
+        return false;
     }
     static function make(FormulaCall $ff) {
         if (count($ff->rawargs) === 1
@@ -54,6 +53,10 @@ class Tag_Fexpr extends Fexpr {
             $value = (float) substr($tags, $hash);
             return $isvalue || $value !== (float) 0 ? $value : true;
         }
+    }
+    /** @return string */
+    function tag() {
+        return $this->tag;
     }
     function inferred_index() {
         if (str_starts_with($this->tag, "_~")) {
@@ -88,5 +91,9 @@ class Tag_Fexpr extends Fexpr {
             }
             return "Tag_Fexpr::tag_regex_value({$tags},{$regex},{$jvalue})";
         }
+    }
+    #[\ReturnTypeWillChange]
+    function jsonSerialize() {
+        return ["op" => "tag", "tag" => $this->tag];
     }
 }

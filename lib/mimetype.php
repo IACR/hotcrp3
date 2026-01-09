@@ -1,6 +1,6 @@
 <?php
 // mimetype.php -- HotCRP helper file for MIME types
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Mimetype {
     // NB types listed here must also be present in `lib/mime.types`
@@ -17,6 +17,9 @@ class Mimetype {
     const ZIP_TYPE = "application/zip";
     const RAR_TYPE = "application/x-rar-compressed";
     const KEYNOTE_TYPE = "application/vnd.apple.keynote";
+
+    const TXT_UTF8_TYPE = "text/plain; charset=utf-8";
+    const JSON_UTF8_TYPE = "application/json; charset=utf-8";
 
     const FLAG_INLINE = 1;
     const FLAG_UTF8 = 2;
@@ -136,6 +139,20 @@ class Mimetype {
         return self::$max_extension_length;
     }
 
+    /** @param string $type
+     * @return string */
+    static function base($type) {
+        $space = strpos($type, " ");
+        $semi = strpos($type, ";");
+        if ($space === false && $semi === false) {
+            return $type;
+        } else if ($space === false || $semi < $space) {
+            return substr($type, 0, $semi);
+        } else {
+            return substr($type, 0, $space);
+        }
+    }
+
     /** @param string|Mimetype $type
      * @return ?Mimetype */
     static function lookup($type) {
@@ -149,13 +166,9 @@ class Mimetype {
         if (array_key_exists($type, self::$tmap)) {
             return self::$tmap[$type];
         }
-        $space = strpos($type, " ");
-        $semi = strpos($type, ";");
-        if ($space || $semi) {
-            $type = substr($type, 0, min($space ? : strlen($type), $semi ? : strlen($type)));
-            if (array_key_exists($type, self::$tmap)) {
-                return self::$tmap[$type];
-            }
+        $type = self::base($type);
+        if (array_key_exists($type, self::$tmap)) {
+            return self::$tmap[$type];
         }
         self::$mime_types_loaded || self::load_mime_types();
         return self::$tmap[$type] ?? null;
@@ -318,20 +331,20 @@ class Mimetype {
         } else if (strlen($content) > 516
                    && substr($content, 512, 4) === "\x00\x6E\x1E\xF0") {
             return self::PPT_TYPE;
-        } else if (substr($content, 0, 4) === "\xFF\xD8\xFF\xD8"
-                   || (substr($content, 0, 4) === "\xFF\xD8\xFF\xE0"
+        } else if (str_starts_with($content, "\xFF\xD8\xFF\xD8")
+                   || (str_starts_with($content, "\xFF\xD8\xFF\xE0")
                        && substr($content, 6, 6) === "JFIF\x00\x01")
-                   || (substr($content, 0, 4) === "\xFF\xD8\xFF\xE1"
+                   || (str_starts_with($content, "\xFF\xD8\xFF\xE1")
                        && substr($content, 6, 6) === "Exif\x00\x00")) {
             return self::JPG_TYPE;
-        } else if (substr($content, 0, 8) === "\x89PNG\r\n\x1A\x0A") {
+        } else if (str_starts_with($content, "\x89PNG\r\n\x1A\x0A")) {
             return self::PNG_TYPE;
-        } else if ((substr($content, 0, 6) === "GIF87a"
-                    || substr($content, 0, 6) === "GIF89a")
+        } else if ((str_starts_with($content, "GIF87a")
+                    || str_starts_with($content, "GIF89a"))
                    && str_ends_with($content, "\x00;")) {
             return self::GIF_TYPE;
-        } else if (substr($content, 0, 7) === "Rar!\x1A\x07\x00"
-                   || substr($content, 0, 8) === "Rar!\x1A\x07\x01\x00") {
+        } else if (str_starts_with($content, "Rar!\x1A\x07\x00")
+                   || str_starts_with($content, "Rar!\x1A\x07\x01\x00")) {
             return self::RAR_TYPE;
         }
         // canonicalize
@@ -344,11 +357,13 @@ class Mimetype {
         }
         // unreliable sniffs
         if (!$type || $type === self::BIN_TYPE) {
-            if (substr($content, 0, 5) === "%!PS-") {
+            if (str_starts_with($content, "%!PS-")) {
                 return self::PS_TYPE;
-            } else if (substr($content, 0, 8) === "ustar\x0000"
-                       || substr($content, 0, 8) === "ustar  \x00") {
+            } else if (str_starts_with($content, "ustar\x0000")
+                       || str_starts_with($content, "ustar  \x00")) {
                 return self::TAR_TYPE;
+            } else if (str_starts_with($content, "PK\x03\x04")) {
+                return self::ZIP_TYPE;
             }
             self::$finfo = self::$finfo ?? new finfo(FILEINFO_MIME_TYPE);
             $type = self::$finfo->buffer(substr($content, 0, 2048));
@@ -389,9 +404,8 @@ class Mimetype {
                 $ivm = ISOVideoMimetype::make_string($content);
             }
             return $ivm->content_info();
-        } else {
-            return ["type" => $type];
         }
+        return ["type" => $type];
     }
 
     /** @param string $s

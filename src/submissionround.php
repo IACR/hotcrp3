@@ -8,7 +8,7 @@ class SubmissionRound {
     /** @var string */
     public $tag = "";
     /** @var string */
-    public $title1 = "";
+    public $prefix = "";
     /** @var int */
     public $open = 0;
     /** @var int */
@@ -46,7 +46,7 @@ class SubmissionRound {
     static function make_json($j, SubmissionRound $main_sr, Conf $conf) {
         $sr = new SubmissionRound;
         $sr->tag = $j->tag;
-        $sr->title1 = $sr->tag . " ";
+        $sr->prefix = $sr->tag . " ";
         $sr->open = $j->open ?? $main_sr->open;
         $sr->register = $j->register ?? 0;
         $sr->submit = $j->submit ?? 0;
@@ -95,6 +95,29 @@ class SubmissionRound {
             && $this->open <= Conf::$now
             && ($this->submit <= 0
                 || $this->submit + ($with_grace ? $this->grace : 0) >= Conf::$now);
+    }
+
+    /** @return bool */
+    function relevant(Contact $user, ?PaperInfo $prow = null) {
+        if ($user->isPC) {
+            return true;
+        }
+        return ($this->open > 0
+                && $this->open <= Conf::$now + 604800)
+            && ($this->register <= 0
+                || $this->register >= Conf::$now - 604800
+                || (($this->submit <= 0
+                     || $this->submit >= Conf::$now - 604800)
+                    && $this->_paper_relevant($user, $prow)));
+    }
+
+    /** @return bool */
+    private function _paper_relevant(Contact $user, ?PaperInfo $prow) {
+        foreach ($prow ? [$prow] : $user->authored_papers() as $row) {
+            if ($row->submission_round() === $this)
+                return true;
+        }
+        return false;
     }
 
     /** @param SubmissionRound|Sround_Setting $a

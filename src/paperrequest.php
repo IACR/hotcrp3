@@ -1,6 +1,6 @@
 <?php
 // paperrequest.php -- HotCRP helper class for parsing paper requests
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class PaperRequest {
     /** @var PaperInfo */
@@ -18,11 +18,11 @@ class PaperRequest {
     }
 
     /** @param bool $review
-     * @return PaperRequest|Redirection|PermissionProblem */
+     * @return PaperRequest|Redirection|FailureReason */
     static function make(Qrequest $qreq, $review) {
         try {
             return new PaperRequest($qreq, $review);
-        } catch (PermissionProblem $perm) {
+        } catch (FailureReason $perm) {
             return $perm;
         } catch (Redirection $redir) {
             return $redir;
@@ -78,10 +78,10 @@ class PaperRequest {
         if (isset($qreq->paperId)
             && !ctype_digit($qreq->paperId)
             && $qreq->paperId !== "new") {
-            throw new PermissionProblem($conf, ["invalidId" => "paper", "paperId" => $qreq->paperId]);
+            throw new FailureReason($conf, ["invalidId" => "paper", "paperId" => $qreq->paperId]);
         } else if (isset($qreq->reviewId)
                    && !preg_match('/\A\d+(?:|[A-Z]+|r[1-9]\d*|rnew)\z/', $qreq->reviewId)) {
-            throw new PermissionProblem($conf, ["invalidId" => "review", "reviewId" => $qreq->reviewId]);
+            throw new FailureReason($conf, ["invalidId" => "review", "reviewId" => $qreq->reviewId]);
         }
     }
 
@@ -101,20 +101,20 @@ class PaperRequest {
                     throw new Redirection($conf->selfurl($qreq, ["p" => $p]));
                 }
             }
-            throw new PermissionProblem($conf, ["invalidId" => "paper", "paperId" => $pid]);
+            throw new FailureReason($conf, ["invalidId" => "paper", "paperId" => $pid]);
         }
         // check reviewId
         if (($rid = $qreq->reviewId) !== null) {
-            assert(ctype_digit($rid));
+            assert(is_int($rid) || ctype_digit($rid));
             if (($p = $conf->fetch_ivalue("select paperId from PaperReview where reviewId=?", $rid)) > 0) {
                 return $p;
             } else {
-                throw new PermissionProblem($conf, ["invalidId" => "review", "reviewId" => $qreq->reviewId]);
+                throw new FailureReason($conf, ["invalidId" => "review", "reviewId" => $qreq->reviewId]);
             }
         }
         // give up on POST, empty user
         if (!self::simple_qreq($qreq) || $user->is_empty()) {
-            throw new PermissionProblem($conf, ["missingId" => "paper"]);
+            throw new FailureReason($conf, ["missingId" => "paper"]);
         }
         // check query
         if (($q = $qreq->q) !== null) {
@@ -139,7 +139,7 @@ class PaperRequest {
         $search = new PaperSearch($user, ["q" => ""]);
         $ps = $search->paper_ids();
         if (empty($ps)) {
-            throw new PermissionProblem($conf, ["missingId" => "paper"]);
+            throw new FailureReason($conf, ["missingId" => "paper"]);
         } else {
             throw new Redirection($conf->selfurl($qreq, ["p" => $ps[0]]));
         }
@@ -147,10 +147,10 @@ class PaperRequest {
 
     /** @param Qrequest $qreq
      * @param int $pid
-     * @return PermissionProblem */
+     * @return FailureReason */
     private function signin_redirection($qreq, $pid) {
         $conf = $qreq->conf();
-        return new PermissionProblem($conf, [
+        return new FailureReason($conf, [
             "signin" => $pid ? "paper" : "paper:start",
             "signinUrl" => $conf->hoturl_raw("signin", ["redirect" => $conf->selfurl($qreq, ["p" => $pid ? : "new"], Conf::HOTURL_SITEREL | Conf::HOTURL_RAW)]),
             "secondary" => true
@@ -179,14 +179,12 @@ class PaperRequest {
             || ($qreq->method() !== "GET" && $qreq->method() !== "HEAD")) {
             return;
         }
-        $susers = Contact::session_users($qreq);
-        if (count($susers) > 1
+        $semails = Contact::session_emails($qreq);
+        if (count($semails) > 1
             && !$user->is_actas_user()
             && self::other_user_redirectable($qreq->navigation())) {
-            foreach ($susers as $email) {
-                $user->conf->prefetch_user_by_email($email);
-            }
-            foreach ($susers as $i => $email) {
+            $user->conf->prefetch_users_by_email($semails);
+            foreach ($semails as $i => $email) {
                 if (strcasecmp($user->email, $email) !== 0
                     && ($u = $user->conf->user_by_email($email, USER_SLICE))
                     && self::check_prow($prow, $u, $qreq)) {
@@ -215,11 +213,9 @@ class PaperRequest {
         $pid = $this->find_pid($user->conf, $user, $qreq);
         if ($pid === 0) {
             if (isset($qreq->sclass)
-                && !$user->conf->submission_round_by_tag($qreq->sclass)
+                && !$user->conf->submission_round_by_tag($qreq->sclass, true)) {
                 // allow synonyms for unnamed submission round
-                && strcasecmp($qreq->sclass, "undefined") !== 0
-                && strcasecmp($qreq->sclass, "default") !== 0) {
-                throw new PermissionProblem($user->conf, ["invalidSclass" => $qreq->sclass]);
+                throw new FailureReason($user->conf, ["invalidSclass" => true, "sclass" => $qreq->sclass]);
             }
             return PaperInfo::make_new($user, $qreq->sclass);
         } else {
@@ -232,7 +228,7 @@ class PaperRequest {
             if (!self::check_prow($prow, $user, $qreq)) {
                 self::try_other_user($prow, $user, $qreq);
                 if (!isset($qreq->paperId) && isset($qreq->reviewId)) {
-                    throw new PermissionProblem($user->conf, ["missingId" => "paper"]);
+                    throw new FailureReason($user->conf, ["missingId" => "paper"]);
                 } else if (!$user->has_email()) {
                     throw $this->signin_redirection($qreq, $pid);
                 } else {
@@ -249,26 +245,34 @@ class PaperRequest {
      * @param Qrequest $qreq
      * @return ?ReviewInfo */
     function find_review($user, $qreq) {
-        if (isset($qreq->reviewId) && str_ends_with($qreq->reviewId, "new")) {
-            return null;
-        } else if (isset($qreq->reviewId)) {
-            $rrow = $this->prow->review_by_ordinal_id($qreq->reviewId);
-            if (!$rrow) {
-                if (($racid = $user->capability("@ra{$this->prow->paperId}"))) {
-                    // XXX @ra nonsense
-                    return null;
-                } else {
-                    throw new PermissionProblem($user->conf, ["invalidId" => "review"]);
-                }
-            } else if (($whynot = $user->perm_view_review($this->prow, $rrow))) {
-                $whynot2 = $user->perm_view_review($this->prow, null);
-                throw $whynot2 ?? $whynot;
-            }
-            return $rrow;
-        } else if (($racid = $user->capability("@ra{$this->prow->paperId}"))) {
-            return $this->prow->review_by_user($racid);
-        } else {
+        // no review set? maybe use capability to find review
+        if (!isset($qreq->reviewId)) {
+            $capuid = $user->reviewer_capability($this->prow);
+            return $capuid ? $this->prow->review_by_user($capuid) : null;
+        }
+        // `new` reviewId will definitey not exist
+        if (str_ends_with($qreq->reviewId, "new")) {
             return null;
         }
+        // check for viewable review
+        $rrow = $this->prow->review_by_ordinal_id($qreq->reviewId);
+        if ($rrow) {
+            $whynot = $user->perm_view_review($this->prow, $rrow);
+            if (!$whynot) {
+                return $rrow;
+            }
+            throw $user->perm_view_review($this->prow, null) ?? $whynot;
+        }
+        // numbered review that corresponds to our refusal is a special case
+        if (ctype_digit($qreq->reviewId)
+            && ($refrow = $this->prow->review_refusal_by_id(intval($qreq->reviewId)))
+            && ($refrow->contactId === $user->contactId
+                || (($capu = $user->reviewer_capability_user($this->prow))
+                    && $refrow->contactId === $capu->contactId))) {
+            return null;
+        }
+        // error
+        throw $user->perm_view_review($this->prow, null)
+            ?? $this->prow->failure_reason(["invalidId" => "review"]);
     }
 }

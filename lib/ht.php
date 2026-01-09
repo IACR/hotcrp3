@@ -1,12 +1,15 @@
 <?php
 // ht.php -- HotCRP HTML helper functions
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Ht {
     /** @var string */
     public static $img_base = "";
     /** @var string */
     private static $_script_open = "<script";
+    /** @var ?non-empty-string
+     * @readonly */
+    public static $script_nonce;
     /** @var int */
     private static $_controlid = 0;
     /** @var int */
@@ -32,8 +35,8 @@ class Ht {
         "data-default-checked" => self::ATTR_BOOLTEXT,
         "defer" => self::ATTR_BOOL,
         "disabled" => self::ATTR_BOOL,
-        "enctype" => self::ATTR_SKIP,
         "formnovalidate" => self::ATTR_BOOL,
+        "hidden" => self::ATTR_BOOL,
         "method" => self::ATTR_SKIP,
         "multiple" => self::ATTR_BOOL,
         "novalidate" => self::ATTR_BOOL,
@@ -86,11 +89,14 @@ class Ht {
         return $x;
     }
 
-    /** @param ?string $nonce */
+    /** @param ?string $nonce
+     * @suppress PhanAccessReadOnlyProperty */
     static function set_script_nonce($nonce) {
-        if ($nonce === null || $nonce === "") {
+        if ((string) $nonce === "") {
+            self::$script_nonce = null;
             self::$_script_open = '<script';
         } else {
+            self::$script_nonce = $nonce;
             self::$_script_open = '<script nonce="' . htmlspecialchars($nonce) . '"';
         }
     }
@@ -142,9 +148,10 @@ class Ht {
         $method = $extra["method"] ?? "post";
         if ($method === "get"
             && ($qpos = strpos($action, "?")) !== false) {
-            $pos = $qpos + 1;
-            while ($pos < strlen($action)
-                   && preg_match('/\G([^#=&;]*)=([^#&;]*)([#&;]|\z)/', $action, $m, 0, $pos)) {
+            $decoded_query = htmlspecialchars_decode(substr($action, $qpos + 1));
+            $pos = 0;
+            while ($pos < strlen($decoded_query)
+                   && preg_match('/\G([^\#=&;]*)=([^\#&;]*)([\#&;]|\z)/', $decoded_query, $m, 0, $pos)) {
                 $suffix .= self::hidden(urldecode($m[1]), urldecode($m[2]));
                 $pos += strlen($m[0]);
                 if ($m[3] === "#") {
@@ -152,24 +159,21 @@ class Ht {
                     break;
                 }
             }
-            $action = substr($action, 0, $qpos) . (string) substr($action, $pos);
+            $action = substr($action, 0, $qpos) . htmlspecialchars((string) substr($decoded_query, $pos));
         }
 
-        $x = '<form';
+        if (!isset($extra["enctype"]) && $method !== "get") {
+            $extra["enctype"] = "multipart/form-data";
+        }
+
+        $x = '<form' . self::extra($extra);
         if ($action !== "" || isset($extra["method"])) {
             $x .= " method=\"{$method}\"";
         }
         if ($action !== "") {
             $x .= " action=\"{$action}\"";
         }
-        $enctype = $extra["enctype"] ?? null;
-        if (!$enctype && $method !== "get") {
-            $enctype = "multipart/form-data";
-        }
-        if ($enctype) {
-            $x .= " enctype=\"{$enctype}\"";
-        }
-        return $x . ' accept-charset="UTF-8"' . self::extra($extra) . $suffix;
+        return $x . ' accept-charset="UTF-8"' . $suffix;
     }
 
     /** @param string $name
@@ -212,7 +216,7 @@ class Ht {
             }
 
             if ($info === null) {
-                $opts[] = '<option label=" " disabled></option>';
+                $opts[] = '<hr>';
                 continue;
             }
             if (($info["exclude"] ?? false)
@@ -232,15 +236,15 @@ class Ht {
                 }
             }
 
-            $label = $info["label"];
+            $value = $info["value"] = $info["value"] ?? (string) $key;
+            $label = $info["label"] ?? $value;
             unset($info["label"], $info["type"], $info["optgroup"], $info["exclude"]);
-            $info["value"] = $info["value"] ?? (string) $key;
             if (!isset($first_value)) {
-                $first_value = $info["value"];
+                $first_value = $value;
             }
             if ($selected !== null
-                && strcmp($info["value"], $selected) === 0
-                && !$has_selected) {
+                && !$has_selected
+                && strcmp($selected, $value) === 0) {
                 $info["selected"] = true;
                 $has_selected = true;
             }
@@ -280,9 +284,12 @@ class Ht {
             self::$_lastcontrolid = $js["id"];
         }
         $t = '<input type="checkbox"'; /* NB see Ht::radio */
-        if ($name) {
+        if ((string) $name !== "") {
+            $t .= " name=\"{$name}\"";
+        }
+        if ($value !== "" || (string) $name !== "") {
             $v = htmlspecialchars((string) $value);
-            $t .= " name=\"{$name}\" value=\"{$v}\"";
+            $t .= " value=\"{$v}\"";
         }
         if ($checked) {
             $t .= " checked";
@@ -325,11 +332,11 @@ class Ht {
         } else if ($js === null) {
             $js = [];
         }
-        $type = isset($js["type"]) ? $js["type"] : "button";
+        $type = $js["type"] ?? "button";
         if (!isset($js["value"]) && isset($js["name"]) && $type !== "button") {
             $js["value"] = "1";
         }
-        return "<button type=\"$type\"" . self::extra($js) . ">{$html}</button>";
+        return "<button type=\"{$type}\"" . self::extra($js) . ">{$html}</button>";
     }
 
     /** @param string $name
@@ -469,7 +476,8 @@ class Ht {
 
     /** @return string */
     static function pre_text_wrap($text) {
-        if (is_array($text) && !is_associative_array($text)
+        if (is_array($text)
+            && array_is_list($text)
             && array_reduce($text, function ($x, $s) { return $x && is_string($s); }, true)) {
             $text = join("\n", $text);
         } else if (is_array($text) || is_object($text)) {
@@ -734,31 +742,36 @@ class Ht {
     /** @param MessageItem|iterable<MessageItem>|MessageSet ...$mls
      * @return array{string,int} */
     static function feedback_msg_content(...$mls) {
-        $mlx = [];
-        foreach ($mls as $ml) {
-            if ($ml instanceof MessageItem) {
-                $mlx[] = $ml;
-            } else if ($ml instanceof MessageSet) {
-                if ($ml->has_message()) { // old PHPs require at least 2 args
-                    array_push($mlx, ...$ml->message_list());
-                }
-            } else {
-                foreach ($ml as $mi) {
-                    $mlx[] = $mi;
-                }
-            }
-        }
+        $mlx = MessageSet::make_list(...$mls);
         if (($h = MessageSet::feedback_html($mlx)) !== "") {
             return [$h, MessageSet::list_status($mlx)];
-        } else {
-            return ["", 0];
         }
+        return ["", 0];
+    }
+
+    /** @param Fmt|Conf $fmt
+     * @param MessageItem|iterable<MessageItem>|MessageSet ...$mls
+     * @return array{string,int} */
+    static function fmt_feedback_msg_content($fmt, ...$mls) {
+        $mlx = MessageSet::fmt_list($fmt, ...$mls);
+        if (($h = MessageSet::feedback_html($mlx)) !== "") {
+            return [$h, MessageSet::list_status($mlx)];
+        }
+        return ["", 0];
     }
 
     /** @param MessageItem|iterable<MessageItem>|MessageSet ...$mls
      * @return string */
     static function feedback_msg(...$mls) {
         $ms = self::feedback_msg_content(...$mls);
+        return $ms[0] === "" ? "" : self::msg($ms[0], $ms[1]);
+    }
+
+    /** @param Fmt|Conf $fmt
+     * @param MessageItem|iterable<MessageItem>|MessageSet ...$mls
+     * @return string */
+    static function fmt_feedback_msg($fmt, ...$mls) {
+        $ms = self::fmt_feedback_msg_content($fmt, ...$mls);
         return $ms[0] === "" ? "" : self::msg($ms[0], $ms[1]);
     }
 }

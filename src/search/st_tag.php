@@ -1,6 +1,6 @@
 <?php
 // search/st_tag.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Tag_SearchTerm extends SearchTerm {
     /** @var TagSearchMatcher */
@@ -35,11 +35,11 @@ class Tag_SearchTerm extends SearchTerm {
 
         // check value matchers
         $tsm = new TagSearchMatcher($srch->user);
-        if (preg_match('/\A([^#=!<>\x80-\xFF]+)(?:#|=)(-?(?:\.\d+|\d+\.?\d*))(?:\.\.\.?|-|–|—)(-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)) {
+        if (preg_match('/\A([^\#=!<>\x80-\xFF]+)(?:\#|=)(-?(?:\.\d+|\d+\.?\d*))(?:\.\.\.?|-|–|—)(-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)) {
             $tagword = $m[1];
             $tsm->add_value_matcher(new CountMatcher(">={$m[2]}"));
             $tsm->add_value_matcher(new CountMatcher("<={$m[3]}"));
-        } else if (preg_match('/\A([^#=!<>\x80-\xFF]+)(#?)([=!<>]=?|≠|≤|≥|)(-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)
+        } else if (preg_match('/\A([^\#=!<>\x80-\xFF]+)(\#?)([=!<>]=?|≠|≤|≥|)(-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)
                    && $m[1] !== "any"
                    && $m[1] !== "none"
                    && ($m[2] !== "" || $m[3] !== "")) {
@@ -178,7 +178,7 @@ class Tag_SearchTerm extends SearchTerm {
         assert(count($xjs) === 1 && $xjs[0]->function === "+Tag_PaperColumn");
         $pc = PaperColumn::make($pl->conf, $xjs[0]);
         if ($dt && $dt->is(TagInfo::TFM_VOTES)) {
-            $pc->add_decoration("reverse");
+            $pc->add_view_options((new ViewOptionList)->add("sort", "reverse"));
         }
         return $pc;
     }
@@ -200,7 +200,11 @@ class Tag_SearchTerm extends SearchTerm {
         return null;
     }
     function debug_json() {
-        return ["type" => $this->type, "tag_regex" => $this->tsm->regex()];
+        if (($t = $this->tsm->single_tag())) {
+            return ["type" => $this->type, "tag" => $t];
+        } else {
+            return ["type" => $this->type, "tag_regex" => $this->tsm->regex()];
+        }
     }
     function about() {
         return self::ABOUT_PAPER;

@@ -1,6 +1,6 @@
 <?php
 // api_comment.php -- HotCRP comment API call
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
 
 class Comment_API {
     /** @var Conf */
@@ -11,6 +11,8 @@ class Comment_API {
     private $prow;
     /** @var int */
     private $status = 200;
+    /** @var bool */
+    private $ok = true;
     /** @var MessageSet */
     private $ms;
 
@@ -95,7 +97,7 @@ class Comment_API {
         // empty
         if ($req["text"] === "" && empty($docs)) {
             if (!$qreq->delete && (!$xcrow->commentId || !isset($qreq->text))) {
-                $this->status = 400;
+                $this->ok = false;
                 $this->ms->error_at(null, "<0>Refusing to save empty comment");
                 return null;
             } else {
@@ -105,10 +107,10 @@ class Comment_API {
 
         // check permission, other errors
         $newctype = $xcrow->requested_type($req);
-        $whyNot = $this->user->perm_edit_comment($this->prow, $xcrow, $newctype);
-        if ($whyNot) {
-            $this->status = 403;
-            $whyNot->append_to($this->ms, null, 2);
+        $whynot = $this->user->perm_edit_comment($this->prow, $xcrow, $newctype);
+        if ($whynot) {
+            $whynot->set("expand", true)->append_to($this->ms, null, 2);
+            $this->ok = false;
             return null;
         }
 
@@ -116,7 +118,7 @@ class Comment_API {
         $suser = $this->user;
         if (($token = $qreq->review_token)
             && ($token = decode_token($token, "V"))
-            && in_array($token, $this->user->review_tokens())
+            && in_array($token, $this->user->review_tokens(), true)
             && ($rrow = $this->prow->review_by_token($token))) {
             $suser = $this->conf->user_by_id($rrow->contactId);
         }
@@ -153,17 +155,20 @@ class Comment_API {
         $this->ms->append_item(self::save_success_message($xcrow));
 
         $aunames = $mentions = [];
-        $mentions_missing = false;
+        $mentions_missing = $mentions_censored = false;
         foreach ($xcrow->notifications ?? [] as $n) {
-            if (($n->types & NotificationInfo::CONTACT) !== 0 && $n->sent) {
+            if ($n->has(NotificationInfo::CONTACT | NotificationInfo::SENT)) {
                 $aunames[] = $n->user->name_h(NAME_EB);
             }
-            if (($n->types & NotificationInfo::MENTION) !== 0) {
-                if ($n->sent) {
+            if ($n->has(NotificationInfo::MENTION)) {
+                if ($n->sent()) {
                     $mentions[] = $n->user_html ?? $suser->reviewer_html_for($n->user);
                 } else if ($xcrow->timeNotified === $xcrow->timeModified) {
                     $mentions_missing = true;
                 }
+            }
+            if ($n->has(NotificationInfo::CENSORED)) {
+                $mentions_censored = true;
             }
         }
         if ($aunames && !$this->prow->has_author($suser)) {
@@ -177,13 +182,26 @@ class Comment_API {
             $this->ms->success($this->conf->_("<5>Notified mentioned users {:nblist}", $mentions));
         }
         if ($mentions_missing) {
-            $this->ms->msg_at(null, $this->conf->_("<0>Some mentioned users cannot currently see this comment, so they were not notified."), MessageSet::WARNING_NOTE);
+            $this->ms->append_item(MessageItem::warning_note($this->conf->_("<0>Some mentioned users cannot currently see this comment, so they were not notified.")));
+        }
+        if ($mentions_censored) {
+            $this->ms->append_item(MessageItem::warning_note($this->conf->_("<0>Some notifications were censored to anonymize mentioned users.")));
         }
         return $xcrow;
     }
 
     /** @return JsonResult */
     private function run_qreq(Qrequest $qreq) {
+        // check for all-comments request
+        $content = $qreq->is_post() || friendly_boolean($qreq->content ?? "1");
+        if (!isset($qreq->c) && !isset($qreq->response) && !$qreq->is_post()) {
+            $comments = [];
+            foreach ($this->prow->viewable_comments($this->user) as $crow) {
+                $comments[] = $crow->unparse_json($this->user, !$content);
+            }
+            return new JsonResult(200, ["ok" => true, "comments" => $comments]);
+        }
+
         // analyze response parameter
         $c = $qreq->c ?? "";
         if ($c === "response") {
@@ -216,8 +234,8 @@ class Comment_API {
             $crow = $rcrow;
         } else if ($c === "new" || $c === "response") {
             $crow = null;
-        } else if (ctype_digit($c)) {
-            $crow = $this->find_comment("commentId=" . intval($c));
+        } else if (($cn = stoi($c)) !== null) {
+            $crow = $this->find_comment("commentId={$cn}");
         } else if ($c === "" && $qreq->is_post()) {
             $c = "new";
             $crow = null;
@@ -252,7 +270,7 @@ class Comment_API {
 
         // check comment view permission
         if ($crow && !$this->user->can_view_comment($this->prow, $crow, true)) {
-            if ($this->user->can_view_review($this->prow, null)) {
+            if ($this->user->can_view_submitted_review($this->prow)) {
                 return JsonResult::make_error(403, "<0>You aren’t allowed to view that {$lccmttype}");
             } else {
                 return JsonResult::make_error(404, "<0>{$uccmttype} not found");
@@ -260,31 +278,32 @@ class Comment_API {
         }
 
         // check post
-        if ($this->status === 200 && $qreq->is_post()) {
+        if ($this->status === 200 && $this->ok && $qreq->is_post()) {
             $crow = $this->run_post($qreq, $rrd, $crow);
         }
 
         if ($this->status === self::RESPONSE_REPLACED) {
             // report response replacement error
-            $jr = JsonResult::make_error(404, "<0>{uccmttype} was edited concurrently");
+            $jr = JsonResult::make_error(200, "<0>{$uccmttype} was edited concurrently");
             $jr["conflict"] = true;
         } else {
-            $jr = new JsonResult($this->status, ["ok" => $this->status <= 299]);
+            $jr = new JsonResult($this->status, ["ok" => $this->ok && $this->status <= 299]);
             if ($this->ms->has_message()) {
                 $jr["message_list"] = $this->ms->message_list();
             }
         }
         if ($crow && $crow->commentId > 0) {
-            $jr["cmt"] = $crow->unparse_json($this->user);
+            $jr["comment"] = $crow->unparse_json($this->user, !$content);
         }
         return $jr;
     }
 
     static function run(Contact $user, Qrequest $qreq, PaperInfo $prow) {
         // check parameters
-        if ((!isset($qreq->text) && !isset($qreq->delete) && $qreq->is_post())
-            || ($qreq->c === "new" && !$qreq->is_post())) {
-            return JsonResult::make_error(400, "<0>Bad request");
+        if (!isset($qreq->text) && !isset($qreq->delete) && $qreq->is_post()) {
+            return JsonResult::make_parameter_error("text");
+        } else if ($qreq->c === "new" && !$qreq->is_post()) {
+            return JsonResult::make_parameter_error("c");
         } else {
             return (new Comment_API($user, $prow))->run_qreq($qreq);
         }

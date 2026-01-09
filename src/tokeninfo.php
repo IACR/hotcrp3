@@ -1,6 +1,6 @@
 <?php
 // tokeninfo.php -- HotCRP token management
-// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class TokenInfo {
     /** @var Conf
@@ -12,13 +12,16 @@ class TokenInfo {
     /** @var int
      * @readonly */
     public $capabilityType;
-    /** @var int */
+    /** @var int
+     * @readonly */
     public $contactId;
-    /** @var int */
+    /** @var int
+     * @readonly */
     public $paperId;
     /** @var int */
     public $reviewId;
-    /** @var int */
+    /** @var ?int
+     * @readonly */
     public $timeCreated;
     /** @var int
      * @readonly */
@@ -39,6 +42,9 @@ class TokenInfo {
     public $data;
     /** @var ?string */
     public $outputData;
+    /** @var ?string
+     * @readonly */
+    public $lookupKey;
 
     /** @var ?string */
     public $email;
@@ -46,6 +52,8 @@ class TokenInfo {
     private $_user = false;
     /** @var ?string */
     private $_token_pattern;
+    /** @var ?callable(TokenInfo):bool */
+    private $_token_approver;
     /** @var ?object */
     private $_jinputData;
     /** @var ?object */
@@ -64,6 +72,7 @@ class TokenInfo {
     const BEARER = 7;
     const JOB = 8;
     const OAUTHCODE = 9;
+    const MANAGEEMAIL = 10;
 
     const CHF_TIMES = 1;
     const CHF_DATA = 2;
@@ -72,9 +81,12 @@ class TokenInfo {
     /** @param ?int $capabilityType */
     function __construct(Conf $conf, $capabilityType = null) {
         $this->conf = $conf;
-        if ($capabilityType !== null) {
-            $this->capabilityType = $capabilityType;
-        }
+        $this->capabilityType = $this->capabilityType ?? $capabilityType;
+    }
+
+    /** @return bool */
+    final function stored() {
+        return $this->timeCreated !== null;
     }
 
     /** return \mysqli */
@@ -85,7 +97,7 @@ class TokenInfo {
     /** @param bool $is_cdb
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_contactdb($is_cdb) {
+    final function set_contactdb($is_cdb) {
         assert($this->_user === false && !$this->contactId);
         $this->is_cdb = $is_cdb;
         return $this;
@@ -93,33 +105,88 @@ class TokenInfo {
 
     /** @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_user(Contact $user) {
-        assert(($user->contactId > 0 && !$this->is_cdb) || $user->contactDbId > 0);
-        $this->is_cdb = $user->contactId <= 0;
-        $this->contactId = $this->is_cdb ? $user->contactDbId : $user->contactId;
+    final function set_user(Contact $user) {
+        assert(!$this->is_cdb && !$this->stored());
+        $this->is_cdb = false;
+        $this->contactId = $user->contactId > 0 ? $user->contactId : 0;
+        $this->email = $user->email;
         $this->_user = $user;
+        return $this;
+    }
+
+    /** @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_cdb_user(Contact $user) {
+        assert($user->contactDbId > 0 && !$this->stored());
+        $this->is_cdb = true;
+        $this->contactId = $user->contactDbId > 0 ? $user->contactDbId : 0;
+        $this->email = $user->email;
+        $this->_user = $user;
+        return $this;
+    }
+
+    /** @param int $uid
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_user_id($uid) {
+        assert(!$this->is_cdb && !$this->stored());
+        $this->contactId = $uid;
+        return $this;
+    }
+
+    /** @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_paper(?PaperInfo $prow) {
+        assert(!$this->stored());
+        $this->paperId = $prow ? $prow->paperId : 0;
+        return $this;
+    }
+
+    /** @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_review(ReviewInfo $rrow) {
+        assert(!$this->stored());
+        $this->paperId = $rrow->paperId;
+        $this->reviewId = $rrow->reviewId;
         return $this;
     }
 
     /** @param string $pattern
      * @return $this */
-    function set_token_pattern($pattern) {
+    final function set_token_pattern($pattern) {
+        assert(!$this->stored());
         $this->_token_pattern = $pattern;
+        return $this;
+    }
+
+    /** @param callable(TokenInfo):bool $approver
+     * @return $this */
+    final function set_token_approver($approver) {
+        $this->_token_approver = $approver;
         return $this;
     }
 
     /** @param string $salt
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_salt($salt) {
+    final function set_salt($salt) {
+        assert(!$this->stored());
         $this->salt = $salt;
+        return $this;
+    }
+
+    /** @param ?string $key
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_lookup_key($key) {
+        $this->lookupKey = $key;
         return $this;
     }
 
     /** @param int $t
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_invalid_at($t) {
+    final function set_invalid_at($t) {
         if ($t !== $this->timeInvalid) {
             $this->timeInvalid = $t;
             $this->_changes |= self::CHF_TIMES;
@@ -129,12 +196,12 @@ class TokenInfo {
 
     /** @param int $seconds
      * @return $this */
-    function set_invalid_after($seconds) {
+    final function set_invalid_after($seconds) {
         return $this->set_invalid_at(Conf::$now + $seconds);
     }
 
     /** @return $this */
-    function set_invalid() {
+    final function set_invalid() {
         if ($this->timeInvalid <= 0 || $this->timeInvalid >= Conf::$now) {
             $this->set_invalid_at(Conf::$now - 1);
         }
@@ -143,7 +210,7 @@ class TokenInfo {
 
     /** @param int $seconds
      * @return $this */
-    function extend_validity($seconds) {
+    final function extend_validity($seconds) {
         if ($this->timeInvalid > 0 && $this->timeInvalid < Conf::$now + $seconds) {
             $this->set_invalid_at(Conf::$now + $seconds);
         }
@@ -153,7 +220,7 @@ class TokenInfo {
     /** @param int $t
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_expires_at($t) {
+    final function set_expires_at($t) {
         if ($t !== $this->timeExpires) {
             $this->timeExpires = $t;
             $this->_changes |= self::CHF_TIMES;
@@ -163,13 +230,13 @@ class TokenInfo {
 
     /** @param int $seconds
      * @return $this */
-    function set_expires_after($seconds) {
+    final function set_expires_after($seconds) {
         return $this->set_expires_at(Conf::$now + $seconds);
     }
 
     /** @param int $seconds
      * @return $this */
-    function extend_expiry($seconds) {
+    final function extend_expiry($seconds) {
         if ($this->timeExpires > 0 && $this->timeExpires < Conf::$now + $seconds) {
             $this->set_expires_at(Conf::$now + $seconds);
         }
@@ -179,88 +246,100 @@ class TokenInfo {
     /** @param null|string|associative-array|object $data
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_input($data, $value = null) {
+    final function set_input($data, $value = null) {
         json_encode_object_change($this->inputData, $this->_jinputData, $data, $value, func_num_args());
         return $this;
     }
 
-    /** @param null|string|associative-array|object $data
-     * @return $this
+    /** @param bool $is_cdb
      * @suppress PhanAccessReadOnlyProperty */
-    function assign_data($data) {
-        if ($data !== null && !is_string($data)) {
-            $data = json_encode_db($data);
-        }
-        /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
-        $this->data = $data;
-        $this->_jdata = null;
-        $this->_changes &= ~self::CHF_DATA;
-        return $this;
+    function incorporate(Conf $conf, $is_cdb) {
+        $this->conf = $conf;
+        $this->is_cdb = $is_cdb;
+        $this->capabilityType = (int) $this->capabilityType;
+        $this->contactId = (int) $this->contactId;
+        $this->paperId = (int) $this->paperId;
+        $this->reviewId = (int) $this->reviewId;
+        $this->timeCreated = (int) $this->timeCreated;
+        $this->timeUsed = (int) $this->timeUsed;
+        $this->timeInvalid = (int) $this->timeInvalid;
+        $this->timeExpires = (int) $this->timeExpires;
     }
 
-    /** @param mysqli_result|Dbl_Result $result
+    /** @template T
+     * @param mysqli_result|Dbl_Result $result
      * @param bool $is_cdb
-     * @return ?TokenInfo
-     * @suppress PhanAccessReadOnlyProperty */
-    static function fetch($result, Conf $conf, $is_cdb = false) {
-        if (($cap = $result->fetch_object("TokenInfo", [$conf]))) {
-            $cap->conf = $conf;
-            $cap->is_cdb = $is_cdb;
-            $cap->capabilityType = (int) $cap->capabilityType;
-            $cap->contactId = (int) $cap->contactId;
-            $cap->paperId = (int) $cap->paperId;
-            $cap->reviewId = (int) $cap->reviewId;
-            $cap->timeCreated = (int) $cap->timeCreated;
-            $cap->timeUsed = (int) $cap->timeUsed;
-            $cap->timeInvalid = (int) $cap->timeInvalid;
-            $cap->timeExpires = (int) $cap->timeExpires;
+     * @param class-string<T> $class
+     * @return T|null */
+    static function fetch($result, Conf $conf, $is_cdb, $class = "TokenInfo") {
+        $cap = $result->fetch_object($class, [$conf]);
+        '@phan-var ?T $cap';
+        if ($cap) {
+            $cap->incorporate($conf, $is_cdb);
         }
         return $cap;
     }
 
-    /** @param string $token
-     * @param bool $is_cdb
+    /** @param ?string $token
      * @return ?TokenInfo */
-    static function find($token, Conf $conf, $is_cdb = false) {
-        $dblink = $is_cdb ? $conf->contactdb() : $conf->dblink;
-        if (strlen($token) < 5 || !$dblink) {
+    static function find($token, Conf $conf) {
+        if ($token === null || strlen($token) < 5) {
             return null;
         }
-        $email = $is_cdb ? ", (select email from ContactInfo where contactDbId=Capability.contactId) email" : "";
-        $result = Dbl::qe($dblink, "select *{$email} from Capability where salt=?", $token);
-        $cap = self::fetch($result, $conf, $is_cdb);
-        Dbl::free($result);
+        $result = Dbl::qe($conf->dblink, "select * from Capability where salt=?", $token);
+        $cap = self::fetch($result, $conf, false);
+        $result->close();
+        return $cap;
+    }
+
+    /** @param ?string $token
+     * @return ?TokenInfo */
+    static function find_cdb($token, Conf $conf) {
+        if ($token === null || strlen($token) < 5 || !($cdb = $conf->contactdb())) {
+            return null;
+        }
+        $result = Dbl::qe($cdb, "select *, (select email from ContactInfo where contactDbId=Capability.contactId) email from Capability where salt=?", $token);
+        $cap = self::fetch($result, $conf, true);
+        $result->close();
         return $cap;
     }
 
     /** @param string $token
      * @param ?int $capabilityType
      * @param bool $is_cdb
-     * @return ?TokenInfo */
+     * @return ?TokenInfo
+     * @deprecated */
     static function find_active($token, $capabilityType, Conf $conf, $is_cdb = false) {
-        $tok = self::find($token, $conf, $is_cdb);
+        $tok = $is_cdb ? self::find_cdb($token, $conf) : self::find($token, $conf);
         return $tok && $tok->is_active($capabilityType) ? $tok : null;
     }
 
     /** @param list<int> $types
      * @return Dbl_Result */
-    static function expired_tokens_result(Conf $conf, $types) {
+    static function expired_result(Conf $conf, $types) {
         // do not load `inputData` or `outputData`
         return $conf->ql("select capabilityType, contactId, paperId, reviewId, timeCreated, timeUsed, timeInvalid, timeExpires, salt, `data` from Capability where timeExpires>0 and timeExpires<? and capabilityType?a",
             Conf::$now, $types);
     }
 
+    /** @param string $lookup_key
+     * @return Dbl_Result */
+    static function active_lookup_key_result(Conf $conf, $lookup_key) {
+        return $conf->ql("select * from Capability where (timeExpires<=0 or timeExpires>=?) and lookupKey?e",
+            Conf::$now, $lookup_key);
+    }
+
 
     /** @param ?int $capabilityType
      * @return bool */
-    function is_active($capabilityType = null) {
+    final function is_active($capabilityType = null) {
         return ($capabilityType === null || $this->capabilityType === $capabilityType)
             && ($this->timeExpires === 0 || $this->timeExpires > Conf::$now)
             && ($this->timeInvalid === 0 || $this->timeInvalid > Conf::$now);
     }
 
     /** @return ?Contact */
-    function user() {
+    final function user() {
         if ($this->_user === false) {
             if ($this->contactId <= 0) {
                 $this->_user = null;
@@ -274,43 +353,44 @@ class TokenInfo {
     }
 
     /** @return ?Contact */
-    function local_user() {
+    final function local_user() {
         if (!$this->is_cdb) {
             return $this->user();
         } else if ($this->email !== null) {
             return $this->conf->user_by_email($this->email)
                 ?? Contact::make_email($this->conf, $this->email);
-        } else {
-            return null;
         }
+        return null;
     }
 
     /** @return string */
-    function instantiate_token() {
+    final function instantiate_token() {
         return preg_replace_callback('/\[(\d+)\]/', function ($m) {
             return base48_encode(random_bytes(intval($m[1])));
         }, $this->_token_pattern);
     }
 
-    /** @return ?string
+    /** @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function create() {
+    final function insert() {
+        assert($this->timeCreated === null);
         assert($this->capabilityType > 0);
         $this->contactId = $this->contactId ?? 0;
         $this->paperId = $this->paperId ?? 0;
         $this->reviewId = $this->reviewId ?? 0;
-        $this->timeCreated = $this->timeCreated ?? Conf::$now;
         $this->timeUsed = $this->timeUsed ?? 0;
         $this->timeInvalid = $this->timeInvalid ?? 0;
         $this->timeExpires = $this->timeExpires ?? 0;
         $need_salt = !$this->salt;
         assert(!$need_salt || $this->_token_pattern);
+        $changes = $this->_changes;
+        $this->_changes = 0;
 
         $qf = "";
         $qv = [
-            null, $this->capabilityType, $this->contactId, $this->paperId,
-            $this->timeCreated, $this->timeUsed, $this->timeInvalid,
-            $this->timeExpires, $this->data
+            null /* salt */, null /* timeCreated */,
+            $this->capabilityType, $this->contactId, $this->paperId,
+            $this->timeUsed, $this->timeInvalid, $this->timeExpires, $this->data
         ];
         if ($this->reviewId !== 0) {
             $qf .= ", reviewId";
@@ -320,35 +400,59 @@ class TokenInfo {
             $qf .= ", inputData";
             $qv[] = $this->inputData;
         }
-
-        for ($tries = 0; $tries < ($need_salt ? 4 : 1); ++$tries) {
-            $salt = $need_salt ? $this->instantiate_token() : $this->salt;
-            $qv[0] = $salt;
-            $result = Dbl::qe($this->dblink(), "insert into Capability (salt, capabilityType, contactId, paperId, timeCreated, timeUsed, timeInvalid, timeExpires, data{$qf}) values ?v", [$qv]);
-            if ($result->affected_rows > 0) {
-                $this->salt = $salt;
-                $this->_changes = 0;
-                return $salt;
-            }
+        if ($this->lookupKey !== null) {
+            $qf .= ", lookupKey";
+            $qv[] = $this->lookupKey;
         }
-        return null;
+
+        for ($tries = 0; $tries < ($need_salt ? 5 : 1); ++$tries) {
+            if ($need_salt) {
+                $this->salt = $this->instantiate_token();
+            }
+            $qv[0] = $this->salt;
+            $qv[1] = Conf::$now;
+            $result = Dbl::qe($this->dblink(), "insert into Capability (salt, timeCreated, capabilityType, contactId, paperId, timeUsed, timeInvalid, timeExpires, data{$qf}) values ?v", [$qv]);
+            if ($result->affected_rows <= 0) {
+                continue;
+            }
+            if ($this->_token_approver
+                && !call_user_func($this->_token_approver, $this)) {
+                Dbl::qe($this->dblink(), "delete from Capability where salt=?", $this->salt);
+                continue;
+            }
+            $this->timeCreated = $qv[1];
+            $this->update();  // does nothing unless _token_approver modifies self
+            return $this;
+        }
+
+        if ($need_salt) {
+            $this->salt = null;
+        }
+        $this->_changes = $changes;
+        return $this;
     }
 
     /** @param ?string $key
      * @return mixed */
-    function data($key = null) {
+    final function data($key = null) {
         $this->_jdata = $this->_jdata ?? json_decode_object($this->data);
         return $key ? $this->_jdata->$key ?? null : $this->_jdata;
     }
 
-    function load_data() {
+    /** @param string $key
+     * @return bool */
+    final function has_data($key) {
+        return $this->data($key) !== null;
+    }
+
+    final function load_data() {
         /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
         $this->data = Dbl::fetch_value($this->dblink(), "select `data` from Capability where salt=?", $this->salt);
     }
 
     /** @param ?string $key
      * @return mixed */
-    function input($key = null) {
+    final function input($key = null) {
         $this->_jinputData = $this->_jinputData ?? json_decode_object($this->inputData);
         return $key ? $this->_jinputData->$key ?? null : $this->_jinputData;
     }
@@ -356,7 +460,10 @@ class TokenInfo {
 
     /** @param ?int $within_sec
      * @return $this */
-    function update_use($within_sec = null) {
+    final function update_use($within_sec = null) {
+        if ($within_sec === null) {
+            Conf::set_current_time();
+        }
         if ($within_sec === null || $this->timeUsed + $within_sec <= Conf::$now) {
             /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
             $this->timeUsed = Conf::$now;
@@ -367,16 +474,30 @@ class TokenInfo {
 
     /** @param ?string $data
      * @return $this */
-    function change_data($data, $value = null) {
+    final function change_data($data, $value = null) {
         if (json_encode_object_change($this->data, $this->_jdata, $data, $value, func_num_args())) {
             $this->_changes |= self::CHF_DATA;
         }
         return $this;
     }
 
+    /** @param null|string|associative-array|object $data
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function assign_data($data) {
+        if ($data !== null && !is_string($data)) {
+            $data = json_encode_db($data);
+        }
+        /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
+        $this->data = $data;
+        $this->_jdata = null;
+        $this->_changes &= ~self::CHF_DATA;
+        return $this;
+    }
+
     /** @param ?string $data
      * @return $this */
-    function change_output($data, $value = null) {
+    final function change_output($data, $value = null) {
         if (json_encode_object_change($this->outputData, $this->_joutputData, $data, $value, func_num_args())) {
             $this->_changes |= self::CHF_OUTPUT_DATA;
         }
@@ -385,14 +506,14 @@ class TokenInfo {
 
     /** @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function unload_output() {
+    final function unload_output() {
         $this->outputData = $this->_joutputData = null;
         $this->_changes &= ~self::CHF_OUTPUT_DATA;
         return $this;
     }
 
     /** @return bool */
-    function update() {
+    final function update() {
         assert($this->capabilityType > 0 && !!$this->salt);
         if (($this->_changes ?? 0) === 0) {
             return false;
@@ -419,7 +540,7 @@ class TokenInfo {
         return true;
     }
 
-    function delete() {
+    final function delete() {
         Dbl::qe($this->dblink(), "delete from Capability where salt=?", $this->salt);
     }
 }

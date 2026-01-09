@@ -35,7 +35,7 @@ class ChangeEmail_Page {
         if ($chuser && $conf->user_by_email($newemail)) {
             $conf->feedback_msg([
                 MessageItem::error("<0>The email address you requested, {$newemail}, is already in use on this site"),
-                MessageItem::inform("<5>You may want to <a href=\"" . $conf->hoturl("mergeaccounts") . "\">merge these accounts</a>.")
+                MessageItem::inform("<5>You may want to <a href=\"" . $conf->hoturl("manageemail") . "\">link these accounts</a>.")
             ]);
             return false;
         }
@@ -64,8 +64,8 @@ class ChangeEmail_Page {
                 Contact::set_main_user($chuser->activate($qreq, false));
             }
             if (Contact::session_index_by_email($qreq, $capcontent->oldemail) >= 0) {
-                UpdateSession::user_change($qreq, $capcontent->oldemail, false);
-                UpdateSession::user_change($qreq, $newemail, true);
+                UserSecurityEvent::session_user_add($qreq->qsession(), $newemail);
+                UserSecurityEvent::session_user_remove($qreq->qsession(), $capcontent->oldemail);
             }
             $conf->redirect_hoturl("profile");
         } else {
@@ -99,7 +99,7 @@ class ChangeEmail_Page {
                 '</div></form>';
             Ht::stash_script("hotcrp.focus_within(\$(\"#changeemailform\"));window.scroll(0,0)");
             $qreq->print_footer();
-            exit;
+            exit(0);
         }
     }
 }

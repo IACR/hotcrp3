@@ -1,6 +1,6 @@
 <?php
 // api_completion.php -- HotCRP completion API calls
-// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2024 Eddie Kohler; see LICENSE.
 
 class Completion_API {
     /** @param list &$comp
@@ -56,7 +56,7 @@ class Completion_API {
         if ($user->is_manager()) {
             array_push($comp, "has:proposal");
         }
-        foreach ($conf->response_rounds() as $rrd) {
+        foreach ($conf->response_round_list() as $rrd) {
             if (!in_array("has:response", $comp, true)) {
                 $comp[] = "has:response";
             }
@@ -66,7 +66,7 @@ class Completion_API {
             }
         }
         if ($user->can_view_some_draft_response()) {
-            foreach ($conf->response_rounds() as $rrd) {
+            foreach ($conf->response_round_list() as $rrd) {
                 if (!in_array("has:draftresponse", $comp, true)) {
                     $comp[] = "has:draftresponse";
                 }
@@ -102,10 +102,10 @@ class Completion_API {
 
         self::has_search_completion($user, $comp);
 
-        if ((!$category || $category === "ss")
-            && $user->isPC) {
-            foreach ($conf->named_searches() as $sj) {
-                $comp[] = "ss:" . $sj->name;
+        if (!$category || $category === "ss") {
+            foreach ($user->viewable_named_searches(false) as $sj) {
+                $twiddle = strpos($sj->name, "~");
+                $comp[] = "ss:" . ($twiddle > 0 ? substr($sj->name, $twiddle) : $sj->name);
             }
         }
 
@@ -149,13 +149,10 @@ class Completion_API {
 
         if ((!$category || $category === "style")
             && $user->can_view_tags()) {
-            $comp[] = ["pri" => -1, "nosort" => true, "i" => ["style:any", "style:none", "color:any", "color:none"]];
+            $comp[] = ["pri" => -1, "nosort" => true, "i" => ["style:any", "style:none"]];
             $tagmap = $conf->tags();
-            foreach ($tagmap->canonical_listed_styles(TagStyle::BG | TagStyle::TEXT) as $ks) {
-                $comp[] = "style:{$ks->style}";
-                if (($ks->sclass & TagStyle::BG) !== 0) {
-                    $comp[] = "color:{$ks->style}";
-                }
+            foreach ($tagmap->listed_style_names(TagStyle::BG | TagStyle::TEXT) as $name) {
+                $comp[] = "style:{$name}";
             }
         }
 
@@ -210,84 +207,17 @@ class Completion_API {
      * @param ?PaperInfo $prow
      * @param int $cvis
      * @param 0|1 $reason
-     * @return list<list<Contact|Author>> */
+     * @return list<list<Contact|Author>>
+     * @deprecated */
     static function mention_lists($user, $prow, $cvis, $reason) {
-        $alist = $rlist = $pclist = [];
-
-        if ($prow
-            && $user->can_view_authors($prow)
-            && $cvis >= CommentInfo::CTVIS_AUTHOR) {
-            $alist = $prow->contact_list();
-        }
-
-        if ($prow && $user->can_view_review_assignment($prow, null)) {
-            $prow->ensure_reviewer_names();
-            $xview = $user->conf->time_some_external_reviewer_view_comment();
-            foreach ($prow->reviews_as_display() as $rrow) {
-                if ($rrow->reviewType < REVIEW_PC && !$xview) {
-                    continue;
-                }
-                $viewid = $user->can_view_review_identity($prow, $rrow);
-                if ($rrow->reviewOrdinal
-                    && $user->can_view_review($prow, $rrow)) {
-                    $au = new Author;
-                    $au->lastName = "Reviewer " . unparse_latin_ordinal($rrow->reviewOrdinal);
-                    $au->contactId = $rrow->contactId;
-                    $au->status = $viewid ? Author::STATUS_REVIEWER : Author::STATUS_ANONYMOUS_REVIEWER;
-                    $rlist[] = $au;
-                }
-                if ($viewid
-                    && $rrow->contactId !== $user->contactId
-                    && ($cvis >= CommentInfo::CTVIS_REVIEWER || $rrow->reviewType >= REVIEW_PC)
-                    && !$rrow->reviewer()->is_dormant()) {
-                    $rlist[] = $rrow->reviewer();
-                }
-            }
-            // XXX todo: list previous commentees in privileged position?
-            // XXX todo: list lead and shepherd?
-        }
-
-        if ($user->can_view_pc()) {
-            if (!$prow
-                || $reason === self::MENTION_PARSE
-                || !$user->conf->check_track_view_sensitivity()) {
-                $pclist = $user->conf->enabled_pc_members();
-            } else {
-                foreach ($user->conf->pc_members() as $p) {
-                    if (!$p->is_dormant()
-                        && $p->can_pc_view_paper_track($prow))
-                        $pclist[] = $p;
-                }
-            }
-        }
-
-        return [$alist, $rlist, $pclist];
+        $mlister = new MentionLister($user, $prow, $cvis, $reason);
+        return $mlister->list_values();
     }
 
     /** @param Qrequest $qreq
-     * @param ?PaperInfo $prow */
+     * @param ?PaperInfo $prow
+     * @deprecated */
     static function mentioncompletion_api(Contact $user, $qreq, $prow) {
-        $comp = [];
-        $mlists = self::mention_lists($user, $prow, CommentInfo::CTVIS_AUTHOR, self::MENTION_COMPLETION);
-        $aunames = [];
-        foreach ($mlists as $i => $mlist) {
-            $skey = $i === 2 ? "sm1" : "s";
-            foreach ($mlist as $au) {
-                $n = Text::name($au->firstName, $au->lastName, $au->email, NAME_P);
-                $x = [$skey => $n];
-                if ($i === 0) {
-                    $x["au"] = true;
-                    if (in_array($n, $aunames)) { // duplicate contact names are common
-                        continue;
-                    }
-                    $aunames[] = $n;
-                }
-                if ($i < 2) {
-                    $x["pri"] = 1;
-                }
-                $comp[] = $x;
-            }
-        }
-        return ["ok" => true, "mentioncompletion" => array_values($comp)];
+        return MentionLister::mentioncompletion_api($user, $qreq, $prow);
     }
 }

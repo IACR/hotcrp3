@@ -1,6 +1,6 @@
 <?php
 // index.php -- HotCRP home page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 require_once("lib/navigation.php");
 
@@ -27,13 +27,15 @@ function handle_request_components($user, $qreq, $pagej, $pc) {
 
 /** @param NavigationState $nav */
 function handle_request($nav) {
+    $qreq = null;
     try {
         $conf = initialize_conf();
         if ($nav->page === "api") {
             API_Page::go_nav($nav, $conf);
             return;
         }
-        list($user, $qreq) = initialize_request();
+        $qreq = initialize_request($conf, $nav);
+        $user = initialize_user($qreq);
         $pc = $user->conf->page_components($user, $qreq);
         $pagej = $pc->get($nav->page);
         if (!$pagej || str_starts_with($pagej->name, "__")) {
@@ -48,17 +50,23 @@ function handle_request($nav) {
     } catch (Redirection $redir) {
         Conf::$main->redirect($redir->url);
     } catch (JsonCompletion $jc) {
-        $jc->result->emit();
+        $jc->result->emit($qreq);
     } catch (PageCompletion $unused) {
     }
 }
 
 $nav = Navigation::get();
 
+// handle OPTIONS requests, including CORS preflight
+if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
+    include("src/pages/p_api.php");
+    API_Page::go_options($nav);
+}
+
 // handle `/u/USERINDEX/`
 if ($nav->page === "u") {
     $unum = $nav->path_component(0);
-    if ($unum !== false && ctype_digit($unum)) {
+    if ($unum !== null && ctype_digit($unum)) {
         if (!$nav->shift_path_components(2)) {
             // redirect `/u/USERINDEX` => `/u/USERINDEX/`
             Navigation::redirect_absolute("{$nav->server}{$nav->base_path}u/{$unum}/{$nav->query}");

@@ -1,6 +1,6 @@
 <?php
 // search/st_author.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Author_SearchTerm extends SearchTerm {
     /** @var Contact */
@@ -16,6 +16,7 @@ class Author_SearchTerm extends SearchTerm {
         $this->csm = new ContactCountMatcher($countexpr, $contacts);
         if (!$contacts && $match) {
             $this->regex = Text::star_text_pregexes($match, $quoted);
+            $this->set_float("fhl:au", $this->regex);
         }
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
@@ -58,6 +59,7 @@ class Author_SearchTerm extends SearchTerm {
             && !$this->csm->test(0);
     }
     function test(PaperInfo $row, $xinfo) {
+        // XXX presence condition
         $n = 0;
         $can_view = $this->user->allow_view_authors($row);
         if ($this->csm->has_contacts()) {
@@ -80,15 +82,10 @@ class Author_SearchTerm extends SearchTerm {
         }
         return $this->csm->test($n);
     }
-    function prepare_visit($param, PaperSearch $srch) {
-        if ($param->want_field_highlighter() && $this->regex) {
-            $srch->add_field_highlighter("au", $this->regex);
-        }
-    }
     function script_expression(PaperInfo $row, $about) {
         if ($this->csm->has_contacts()
             || $this->regex
-            || $about !== self::ABOUT_PAPER) {
+            || ($about & self::ABOUT_PAPER) === 0) {
             return $this->test($row, null);
         } else {
             return ["type" => "compar", "compar" => $this->csm->relation(), "child" => [

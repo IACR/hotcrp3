@@ -1,6 +1,6 @@
 <?php
 // navigation.php -- HotCRP navigation helper functions
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class NavigationState {
     // Base URL:    PROTOCOL://HOST[:PORT]/BASEPATH/
@@ -50,7 +50,8 @@ class NavigationState {
         $nav = new NavigationState;
 
         // host, protocol, server
-        $nav->host = $server["HTTP_HOST"] ?? $server["SERVER_NAME"] ?? null;
+        $http_host = $server["HTTP_HOST"] ?? null;
+        $nav->host = $http_host ?? $server["SERVER_NAME"] ?? null;
         if ((isset($server["HTTPS"])
              && $server["HTTPS"] !== ""
              && $server["HTTPS"] !== "off")
@@ -64,9 +65,10 @@ class NavigationState {
         }
         $nav->protocol = $x;
         $x .= $nav->host ? : "localhost";
-        if (($port = $server["SERVER_PORT"])
-            && $port != $xport
-            && strpos($x, ":", 6) === false) {
+        if ($http_host === null // HTTP `Host` header should contain port
+            && strpos($x, ":", 6) === false
+            && ($port = $server["SERVER_PORT"])
+            && $port != $xport) {
             $x .= ":" . $port;
         }
         $nav->server = $x;
@@ -232,7 +234,6 @@ class NavigationState {
         $origsn = $server["ORIG_SCRIPT_NAME"] ?? null;
         $origsfn = $server["ORIG_SCRIPT_FILENAME"] ?? null;
         if ($origsn === null && $origsfn === null) {
-            $nsn = strlen($sn);
             $sfx = substr($sfn, strrpos($sfn, "/") + 1);
             $npfx = strlen($sn) - strlen($sfx);
             if ($npfx > 0
@@ -385,7 +386,7 @@ class NavigationState {
         if ($this->path !== "") {
             $p = explode("/", substr($this->path, 1));
             if ($n + 1 < count($p)
-                || ($n + 1 == count($p) && $p[$n] !== "")) {
+                || ($n + 1 === count($p) && $p[$n] !== "")) {
                 return $decoded ? urldecode($p[$n]) : $p[$n];
             }
         }
@@ -702,6 +703,6 @@ class Navigation {
 <title>Redirection</title>
 <script>location=", json_encode($url), ";</script></head>
 <body><p>You should be redirected <a href=\"", htmlspecialchars($url), "\">to here</a>.</p></body></html>\n";
-        exit;
+        exit(0);
     }
 }

@@ -5,9 +5,11 @@
 class AllTags_API {
     static function run(Contact $user) {
         if (!$user->isPC) {
-            return ["ok" => false, "error" => "Permission error", "tags" => []];
+            $jr = JsonResult::make_permission_error();
+            $jr["tags"] = [];
+            return $jr;
         } else if ($user->conf->check_track_view_sensitivity()
-                   || (!$user->conf->tag_seeall
+                   || (!$user->conf->pc_can_view_conflicted_tags()
                        && ($user->privChair
                            ? $user->conf->has_any_manager()
                            : $user->is_manager()
@@ -22,7 +24,7 @@ class AllTags_API {
 
     /** @param string $tag
      * @return ?string */
-    static private function strip($tag, Contact $user, PaperInfo $prow = null) {
+    static private function strip($tag, Contact $user, ?PaperInfo $prow) {
         $twiddle = strpos($tag, "~");
         if ($twiddle === false
             || ($twiddle === 0
@@ -45,7 +47,8 @@ class AllTags_API {
         } else {
             $qwhere[] = "timeSubmitted>0";
         }
-        if (!$user->privChair && !$user->conf->tag_seeall) {
+        if (!$user->privChair
+            && !$user->conf->pc_can_view_conflicted_tags()) {
             $q .= " left join PaperConflict on (PaperConflict.paperId=Paper.paperId and PaperConflict.contactId={$user->contactId})";
             $qwhere[] = "coalesce(conflictType,0)<=" . CONFLICT_MAXUNCONFLICTED;
         }
@@ -55,7 +58,7 @@ class AllTags_API {
         $tags = [];
         $result = $user->conf->qe($q . " where " . join(" and ", $qwhere));
         while ($result && ($row = $result->fetch_row())) {
-            if (($tag = self::strip($row[0], $user))
+            if (($tag = self::strip($row[0], $user, null))
                 && (!$hidden || !$dt->is_hidden($tag))) {
                 $tags[] = $tag;
             }

@@ -1,20 +1,40 @@
 // settings.js -- HotCRP JavaScript library for settings
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 "use strict";
 
 (function () {
-/* global hotcrp, $$, $e, hidden_input, log_jserror */
-/* global hoturl, hoturl_html, demand_load */
-/* global addClass, removeClass, toggleClass, hasClass */
-/* global handle_ui, event_key, event_modkey */
-/* global input_default_value, form_differs, check_form_differs */
-/* global render_feedback_list, append_feedback_near, append_feedback_to */
-/* global render_text */
-/* global popup_skeleton, make_bubble */
-/* global fold, foldup, focus_at */
-/* global sprintf, escape_html, plural, text_eq */
-/* global make_color_scheme, ensure_pattern_here */
+/* global hotcrp */
+const $$ = hotcrp.$$,
+    $e = hotcrp.$e,
+    $popup = hotcrp.$popup,
+    addClass = hotcrp.classes.add,
+    hasClass = hotcrp.classes.has,
+    removeClass = hotcrp.classes.remove,
+    toggleClass = hotcrp.classes.toggle,
+    check_form_differs = hotcrp.check_form_differs,
+    demand_load = hotcrp.demand_load,
+    escape_html = hotcrp.text.escape_html,
+    event_key = hotcrp.event_key,
+    feedback = hotcrp.feedback,
+    focus_at = hotcrp.focus_at,
+    fold = hotcrp.fold,
+    foldup = hotcrp.foldup,
+    form_differs = hotcrp.form_differs,
+    handle_ui = hotcrp.handle_ui,
+    hoturl = hotcrp.hoturl,
+    hidden_input = hotcrp.hidden_input,
+    input_default_value = hotcrp.input_default_value,
+    log_jserror = hotcrp.log_jserror,
+    make_bubble = hotcrp.make_bubble,
+    plural = hotcrp.text.plural,
+    render_text = hotcrp.render_text,
+    sprintf = hotcrp.text.sprintf,
+    text_eq = hotcrp.text.text_eq;
+
+function hoturl_html(page, options) {
+    return escape_html(hoturl(page, options));
+}
 
 handle_ui.on("hashjump.js-hash", function (hashc) {
     var e, fx, fp;
@@ -120,7 +140,7 @@ function settings_disable_children(e) {
         this.removeAttribute("name"); // do not submit with form
         if (this.type === "checkbox" || this.type === "radio" || this.type === "button")
             this.disabled = true;
-        else if (this.type !== "select")
+        else if (this.type !== "select-one")
             this.readonly = true;
         removeClass(this, "ui");
         this.removeAttribute("draggable");
@@ -141,10 +161,10 @@ function settings_field_order(parentid) {
             continue;
         }
         ++i;
-        if ((e = n.querySelector(".moveup"))) {
+        if ((e = n.querySelector(".move-up"))) {
             e.disabled = movedown === null;
         }
-        if ((e = n.querySelector(".movedown"))) {
+        if ((e = n.querySelector(".move-down"))) {
             e.disabled = false;
             movedown = e;
         }
@@ -195,11 +215,9 @@ function field_instantiate(ee, ftfinder, tname, instantiators) {
     for (let pe = ee.firstElementChild; pe; ) {
         const npe = pe.nextElementSibling,
             prop = pe.getAttribute("data-property");
-        if (prop === "type") {
-            field_instantiate_type(pe, ftfinder, ftype);
-        } else if (hasClass(pe, "property-optional")
-                   ? (ftype.properties || {})[prop]
-                   : (ftype.properties || {})[prop] !== false) {
+        if (hasClass(pe, "property-optional")
+            ? (ftype.properties || {})[prop]
+            : (ftype.properties || {})[prop] !== false) {
             if (instantiators && instantiators[prop])
                 instantiators[prop](pe, ftype);
             if ((ftype.placeholders || {})[prop])
@@ -225,14 +243,14 @@ function grid_select_event(evt) {
         evt = null;
     } else if (evt.type === "dblclick") {
         if (!hasClass(this, "grid-select-autosubmit")
-            || event_modkey(evt)
+            || event_key.modcode(evt) !== 0
             || evt.button !== 0
             || !e) {
             return false;
         }
         action = 2;
     } else if (evt.type === "click") {
-        if (event_modkey(evt)
+        if (event_key.modcode(evt) !== 0
             || evt.button !== 0
             || !e) {
             return false;
@@ -242,7 +260,7 @@ function grid_select_event(evt) {
         if (!e) {
             return false;
         }
-        var key = event_key(evt), mod = event_modkey(evt);
+        var key = event_key(evt), mod = event_key.modcode(evt);
         selidx = +e.getAttribute("data-index");
         columns = window.getComputedStyle(this).gridTemplateColumns.split(" ").length;
         if (key === "ArrowLeft" && !mod) {
@@ -253,13 +271,13 @@ function grid_select_event(evt) {
             selidx -= columns;
         } else if (key === "ArrowDown" && !mod) {
             selidx += columns;
-        } else if (key === "Home" && (!mod || mod === event_modkey.CTRL)) {
+        } else if (key === "Home" && (!mod || mod === event_key.CTRL)) {
             selidx = columns < 3 ? 0 : selidx - selidx % columns;
             action = 0;
         } else if (key === "End" && !mod) {
             selidx = columns < 3 ? this.childNodes.length - 1 : selidx + (selidx + columns - 1) % columns;
             action = 0;
-        } else if (key === "End" && mod === event_modkey.CTRL) {
+        } else if (key === "End" && mod === event_key.CTRL) {
             selidx = this.childNodes.length - 1;
             action = 0;
         } else if (key === " " && !mod) {
@@ -307,9 +325,9 @@ function sf_order() {
 
 handle_ui.on("js-settings-sf-move", function (evt) {
     var sf = this.closest(".settings-sf");
-    if (hasClass(this, "moveup") && sf.previousSibling) {
+    if (hasClass(this, "move-up") && sf.previousSibling) {
         sf.parentNode.insertBefore(sf, sf.previousSibling);
-    } else if (hasClass(this, "movedown") && sf.nextSibling) {
+    } else if (hasClass(this, "move-down") && sf.nextSibling) {
         sf.parentNode.insertBefore(sf, sf.nextSibling.nextSibling);
     } else if (hasClass(this, "delete")) {
         var msg, x;
@@ -329,7 +347,7 @@ demand_load.submission_field_library = demand_load.make(function (resolve) {
 });
 
 function add_dialog() {
-    var $d, grid, samples;
+    let $pu, grid, samples;
     function submit(evt) {
         var selidx = +grid.getAttribute("data-selected-index"),
             h = samples[selidx].sf_edit_html,
@@ -341,19 +359,17 @@ function add_dialog() {
         $(h).removeClass("hidden").appendTo("#settings-sform").awaken();
         $$("sf/" + next + "/name").focus();
         sf_order();
-        $d.close();
+        $pu.close();
         evt.preventDefault();
     }
     function create(library) {
         samples = library.samples;
-        const hc = popup_skeleton({className: "modal-dialog-wide"});
-        hc.push('<h2>Add field</h2>');
-        hc.push('<p>Choose a template for the new field.</p>');
-        hc.push('<div class="grid-select grid-select-autosubmit" role="listbox"></div>');
-        hc.push_actions(['<button type="submit" name="add" class="btn-primary">Add field</button>',
-            '<button type="button" name="cancel">Cancel</button>']);
-        $d = hc.show();
-        grid = $d[0].querySelector(".grid-select");
+        grid = $e("div", {"class": "grid-select grid-select-autosubmit", role: "listbox"});
+        $pu = $popup({className: "modal-dialog-wide"})
+            .append($e("h2", null, "Add submission field"), $e("p", null, "Choose a template for the new field."), grid)
+            .append_actions($e("button", {type: "submit", name: "add", "class": "btn-primary"}, "Add field"),
+                $e("button", {type: "button", name: "cancel"}, "Cancel"))
+            .show();
         for (let i = 0; i !== samples.length; ++i) {
             const e = $e("div", "settings-xf-view");
             e.innerHTML = samples[i].sf_view_html;
@@ -366,7 +382,7 @@ function add_dialog() {
         grid.addEventListener("keydown", grid_select_event);
         grid.addEventListener("click", grid_select_event);
         grid.addEventListener("dblclick", grid_select_event);
-        $d.find("form").on("submit", submit);
+        $pu.on("submit", submit);
     }
     demand_load.submission_field_library().then(create);
 }
@@ -401,8 +417,8 @@ function handle_sf_field_wizard_change() {
     let changed = false;
     function mark(e) {
         if (e.name === "sf_pdf_submission") {
-            hotcrp.fold("pdfupload", e.value == 1, 2);
-            hotcrp.fold("pdfupload", e.value != 0, 3);
+            fold("pdfupload", e.value == 1, 2);
+            fold("pdfupload", e.value != 0, 3);
         }
     }
     function apply1(type, sfx, value) {
@@ -534,6 +550,12 @@ handle_ui.on("js-settings-track-add", function () {
     this.form.elements["track/".concat(i, "/tag")].focus();
 });
 
+handle_ui.on("js-settings-track-delete", function () {
+    settings_delete(this.closest(".settings-tracks"),
+        "This track will be removed.");
+    check_form_differs(this.form);
+});
+
 handle_ui.on("js-settings-topics-copy", function () {
     var topics = [];
     $(this).closest(".has-copy-topics").find("input").each(function () {
@@ -656,7 +678,8 @@ var fieldorder = [], rftypes,
               "viridisr", "Yellow to purple", "viridis", "Purple to yellow",
               "orbu", "Orange to blue", "buor", "Blue to orange",
               "turbo", "Turbo", "turbor", "Turbo reversed",
-              "catx", "Category10", "none", "None"];
+              "observablex", "Observable10", "catx", "Category10",
+              "none", "None"];
 
 function rffinder(name) {
     return field_find(rftypes, name);
@@ -688,13 +711,36 @@ function rf_order() {
 }
 
 function rf_fill_control(form, name, value, setdefault) {
-    var elt = form.elements[name];
+    const elt = form.elements[name];
     elt && $(elt).val(value);
     elt && setdefault && elt.setAttribute("data-default-value", value);
 }
 
+function rf_fill_type(form, name, fld, setdefault) {
+    const select = form.elements[name], ftype = rffinder(fld.type);
+    if (!select || !ftype) {
+        // intrinsic field
+        return;
+    }
+    if (!fld.convertible_to) {
+        // no conversion allowed
+        select.closest(".entry").replaceChildren(
+            ftype.title,
+            hidden_input(select.name, ftype.name, {id: select.id})
+        );
+        return;
+    }
+    select.replaceChildren(make_option_element(ftype.name, ftype.title),
+        $e("hr"));
+    for (const rft of rftypes) {
+        if (fld.convertible_to.includes(rft.name))
+            select.add(make_option_element(rft.name, rft.title));
+    }
+    rf_fill_control(form, name, ftype.name, setdefault);
+}
+
 function rf_color() {
-    var c = this, sv = $(this).val(), i, scheme = make_color_scheme(9, sv, false);
+    var c = this, sv = $(this).val(), i, scheme = hotcrp.make_color_scheme(9, sv, false);
     hasClass(c.parentElement, "select") && (c = c.parentElement);
     while (c && !hasClass(c, "rf-scheme-example")) {
         c = c.nextSibling;
@@ -719,7 +765,7 @@ function rf_fill(pos, fld, setdefault) {
     var form = document.getElementById("f-settings"),
         rfid = "rf/" + pos;
     rf_fill_control(form, rfid + "/name", fld.name || "", setdefault);
-    rf_fill_control(form, rfid + "/type", fld.type, setdefault);
+    rf_fill_type(form, rfid + "/type", fld, setdefault);
     rf_fill_control(form, rfid + "/description", fld.description || "", setdefault);
     rf_fill_control(form, rfid + "/visibility", fld.visibility || "re", setdefault);
     rf_fill_control(form, rfid + "/values_text", values_to_text(fld), setdefault);
@@ -873,9 +919,9 @@ function rf_render_view(fld, example) {
 
 function rf_move() {
     var rf = this.closest(".settings-rf");
-    if (hasClass(this, "moveup") && rf.previousSibling) {
+    if (hasClass(this, "move-up") && rf.previousSibling) {
         rf.parentNode.insertBefore(rf, rf.previousSibling);
-    } else if (hasClass(this, "movedown") && rf.nextSibling) {
+    } else if (hasClass(this, "move-down") && rf.nextSibling) {
         rf.parentNode.insertBefore(rf, rf.nextSibling.nextSibling);
     }
     hotcrp.tooltip.close(this);
@@ -921,7 +967,7 @@ function rf_append(fld) {
     field_instantiate($f.children(".settings-xf-edit")[0], rffinder, rftype.name, rfproperties);
     $f.find(".js-settings-rf-delete").on("click", rf_delete);
     $f.find(".js-settings-rf-move").on("click", rf_move);
-    $f.find(".rf-id").val(fld.id);
+    $f.find(".is-id").val(fld.id);
     $f.appendTo("#settings-rform");
     rf_fill(pos, fld, true);
     $f.awaken();
@@ -983,14 +1029,14 @@ function rfs(data) {
                 e = document.getElementById(m[1] + "/values_text");
             }
             if (e && (entryi = e.closest(".entryi"))) {
-                append_feedback_near(entryi, mi);
+                feedback.append_item_near(entryi, mi);
                 if (mi.status > 1)
                     foldup.call(entryi, null, {n: 2, open: true});
             }
             if ((m = mi.field.match(/^([^/]*\/\d+)(?=$|\/)/))
                 && (e = document.getElementById(m[1] + "/view"))
                 && (e = e.querySelector("ul.feedback-list"))) {
-                append_feedback_to(e, mi);
+                feedback.append_item_near(e, mi);
             }
         }
     }
@@ -1012,14 +1058,14 @@ function rf_make_sample(fj) {
 }
 
 function add_dialog() {
-    var $d, grid, samples;
+    let $pu, grid, samples;
     function submit(evt) {
         var samp = samples[+grid.getAttribute("data-selected-index")],
             fld = Object.assign({}, samp.__base);
         delete fld.id;
         rf_add(fld);
         $$("rf/" + fieldorder.length + "/name").focus();
-        $d.close();
+        $pu.close();
         rf_order();
         check_form_differs("#f-settings");
         evt.preventDefault();
@@ -1027,14 +1073,12 @@ function add_dialog() {
     function create(library) {
         samples = library.samples;
         rftypes = library.types;
-        const hc = popup_skeleton({className: "modal-dialog-wide"});
-        hc.push('<h2>Add field</h2>');
-        hc.push('<p>Choose a template for the new field.</p>');
-        hc.push('<div class="grid-select grid-select-autosubmit" role="listbox"></div>');
-        hc.push_actions(['<button type="submit" name="add" class="btn-primary">Add field</button>',
-            '<button type="button" name="cancel">Cancel</button>']);
-        $d = hc.show();
-        grid = $d[0].querySelector(".grid-select");
+        grid = $e("div", {"class": "grid-select grid-select-autosubmit", role: "listbox"});
+        $pu = $popup({className: "modal-dialog-wide"})
+            .append($e("h2", null, "Add review field"), $e("p", null, "Choose a template for the new field."), grid)
+            .append_actions($e("button", {type: "submit", name: "add", "class": "btn-primary"}, "Add field"),
+                $e("button", {type: "button", name: "cancel"}, "Cancel"))
+            .show();
         for (let i = 0; i !== samples.length; ++i) {
             if (!samples[i].parse_value) {
                 samples[i] = rf_make_sample(samples[i]);
@@ -1050,7 +1094,7 @@ function add_dialog() {
         grid.addEventListener("keydown", grid_select_event);
         grid.addEventListener("click", grid_select_event);
         grid.addEventListener("dblclick", grid_select_event);
-        $d.find("form").on("submit", submit);
+        $pu.on("submit", submit);
     }
     demand_load.review_field_library().then(create);
 }
@@ -1094,17 +1138,17 @@ handle_ui.on("input.js-settings-response-name", function () {
         return;
     }
     var helt = this.parentElement.lastChild, s = this.value.trim();
-    if (helt.nodeType !== 1 || helt.className !== "f-h") {
+    if (helt.nodeType !== 1 || helt.className !== "f-d") {
         helt = document.createElement("div");
-        helt.className = "f-h";
+        helt.className = "f-d";
         this.parentElement.appendChild(helt);
     }
     if (s === "") {
         helt.replaceChildren("Example display: ‘Response’; example search: ‘has:response’");
     } else if (!/^[A-Za-z][-_A-Za-z0-9]*$/.test(s)) {
-        helt.replaceChildren(render_feedback_list([{status: 2, message: "<0>Round names must start with a letter and can contain only letters, numbers, and dashes"}]));
+        helt.replaceChildren(feedback.render_list([{status: 2, message: "<0>Round names must start with a letter and can contain only letters, numbers, and dashes"}]));
     } else if (/^(?:none|any|all|default|undefined|unnamed|.*response|response.*|draft.*|pri(?:mary)|sec(?:ondary)|opt(?:ional)|pc(?:review)|ext(?:ernal)|meta(?:review))$/i.test(s)) {
-        helt.replaceChildren(render_feedback_list([{status: 2, message: "<0>Round name ‘".concat(s, "’ is reserved")}]));
+        helt.replaceChildren(feedback.render_list([{status: 2, message: "<0>Round name ‘".concat(s, "’ is reserved")}]));
     } else {
         helt.replaceChildren("Example display: ‘", s, " Response’; example search: ‘has:", s, "response’");
     }
@@ -2750,7 +2794,7 @@ function make_json_validate() {
         for (i = 0; i !== tips.length; ++i) {
             if (tips[i].pos1 <= pos && pos <= tips[i].pos2) {
                 msgbub = make_bubble({anchor: "nw", color: "feedback", container: mainel.parentElement})
-                    .html(render_feedback_list([tips[i]]))
+                    .html(feedback.render_list([tips[i]]))
                     .near(node);
                 msgbub.span = node;
                 return;
@@ -2992,7 +3036,7 @@ function settings_describe(d) {
         $i.append(e);
     }
 
-    $i.find(".taghh, .badge").each(ensure_pattern_here);
+    $i.find(".taghh, .badge").each(hotcrp.ensure_pattern_here);
 }
 
 function settings_path_jump(el, path, use_key) {

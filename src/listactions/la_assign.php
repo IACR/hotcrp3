@@ -31,7 +31,10 @@ class Assign_ListAction extends ListAction {
     function run(Contact $user, Qrequest $qreq, SearchSelection $ssel) {
         $mt = $qreq->assignfn;
         if ($mt === "auto") {
-            $t = in_array($qreq->t, ["accepted", "s"]) ? $qreq->t : "all";
+            $t = $qreq->t;
+            if ($t !== "s" && $t !== "accepted") {
+                $t = "all";
+            }
             $q = join("+", $ssel->selection());
             $user->conf->redirect_hoturl("autoassign", "q={$q}&t={$t}&pap={$q}");
         }
@@ -42,28 +45,29 @@ class Assign_ListAction extends ListAction {
         } else if (($pc = $user->conf->user_by_email($mpc, USER_SLICE))) {
             $mpc = $pc->email;
         } else {
-            return MessageItem::error("<0>‘{$mpc}’ is not a PC member");
+            return JsonResult::make_parameter_error("markpc", "<0>‘{$mpc}’ is not a PC member");
         }
         if ($mpc === "none" && $mt !== "lead" && $mt !== "shepherd") {
-            return MessageItem::error("<0>PC member required");
+            return JsonResult::make_parameter_error("markpc", "<0>PC member required");
         }
         $mpc = CsvGenerator::quote($mpc);
 
         if (!in_array($mt, ["lead", "shepherd", "conflict", "clearconflict",
                             "optionalreview", "pcreview" /* backward compat */,
-                            "secondaryreview", "primaryreview", "clearreview"])) {
-            return MessageItem::error("<0>Unknown assignment type");
+                            "secondaryreview", "primaryreview", "clearreview"], true)) {
+            return JsonResult::make_parameter_error("assignfn", "<0>Unknown assignment type");
         }
 
         $text = "paper,action,user\n";
         foreach ($ssel->selection() as $pid) {
-            $text .= "$pid,$mt,$mpc\n";
+            $text .= "{$pid},{$mt},{$mpc}\n";
         }
         $assignset = new AssignmentSet($user);
         $assignset->set_override_conflicts(true);
         $assignset->enable_papers($ssel->selection());
         $assignset->parse($text);
-        $assignset->execute(true);
+        $assignset->execute();
+        $assignset->feedback_msg(AssignmentSet::FEEDBACK_ASSIGN);
         return null;
     }
 }

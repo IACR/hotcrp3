@@ -1,6 +1,6 @@
 <?php
 // settings/s_topic.php -- HotCRP settings > submission form page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class Topic_Setting {
     /** @var ?int */
@@ -142,9 +142,8 @@ class Topic_SettingParser extends SettingParser {
             return $this->_apply_req_newlist($si, $sv);
         } else if ($si->name === "topic") {
             return $this->_apply_req_topics($si, $sv);
-        } else {
-            return false;
         }
+        return false;
     }
 
     function store_value(Si $si, SettingValues $sv) {

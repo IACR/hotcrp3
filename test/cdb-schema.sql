@@ -31,6 +31,18 @@ CREATE TABLE `Conferences` (
 
 
 --
+-- Table structure for table `ConferenceUpdates`
+--
+
+DROP TABLE IF EXISTS `ConferenceUpdates`;
+CREATE TABLE `ConferenceUpdates` (
+  `confid` int(11) NOT NULL,
+  `user_update_at` bigint(11) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`confid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+--
 -- Table structure for table `ContactInfo`
 --
 
@@ -42,7 +54,6 @@ CREATE TABLE `ContactInfo` (
   `email` varchar(120) NOT NULL,
   `affiliation` varbinary(2048) NOT NULL DEFAULT '',
   `orcid` varbinary(64) DEFAULT NULL,
-  `disabled` tinyint(1) NOT NULL DEFAULT 0,
   `cflags` int(11) NOT NULL DEFAULT 0,
   `data` varbinary(32767) DEFAULT NULL,
   `password` varbinary(2048) DEFAULT NULL,
@@ -52,9 +63,24 @@ CREATE TABLE `ContactInfo` (
   `passwordUseTime` bigint(11) NOT NULL DEFAULT 0,
   `updateTime` bigint(11) NOT NULL DEFAULT 0,
   `demoBirthday` int(11) DEFAULT NULL,
+  `primaryContactId` int(11) NOT NULL DEFAULT 0,
   PRIMARY KEY (`contactDbId`),
   UNIQUE KEY `email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
+--
+-- Table structure for table `ContactPrimary`
+--
+
+DROP TABLE IF EXISTS `ContactPrimary`;
+CREATE TABLE `ContactPrimary` (
+  `contactId` int(11) NOT NULL,
+  `primaryContactId` int(11) NOT NULL,
+  PRIMARY KEY (`contactId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 
 
 --

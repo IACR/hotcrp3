@@ -1,12 +1,10 @@
 <?php
 // pc_color.php -- HotCRP helper classes for paper list content
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class Color_PaperColumn extends PaperColumn {
     /** @var array<string,HclColor> */
     private $colors = [];
-    /** @var ?string */
-    private $decoration;
     /** @var float */
     private $hdelta = 8.0;
     /** @var bool */
@@ -15,23 +13,21 @@ class Color_PaperColumn extends PaperColumn {
     function __construct(Conf $conf, $cj) {
         parent::__construct($conf, $cj);
     }
-    function add_decoration($decor) {
-        $known_decor = ["rgb" => "+8", "gbr" => "+128", "brg" => "+248",
-                        "rbg" => "-45", "grb" => "-165", "bgr" => "-285"];
-        $kdecor = $known_decor[$decor] ?? $decor;
-        if (preg_match('/\A[-+]?\d+\z/', $kdecor)
-            && ($n = (float) $kdecor) >= -360
-            && $n <= 360) {
-            $this->hdelta = abs($n);
-            $this->hrev = str_starts_with($kdecor, "-");
-            $this->__add_decoration($decor, [$this->decoration]);
-            $this->decoration = $decor;
-            return true;
-        } else {
-            return parent::add_decoration($decor);
-        }
+    function view_option_schema() {
+        return ["order!"];
     }
     function prepare(PaperList $pl, $visible) {
+        if (($v = $this->view_option("order"))) {
+            $knownv = ["rgb" => "+8", "gbr" => "+128", "brg" => "+248",
+                       "rbg" => "-45", "grb" => "-165", "bgr" => "-285"];
+            $v = $knownv[$v] ?? $v;
+            if (preg_match('/\A[-+]?\d+\z/', $v)
+                && ($num = (float) $v) >= -360
+                && $num <= 360) {
+                $this->hdelta = abs($num);
+                $this->hrev = str_starts_with($v, "-");
+            }
+        }
         return $visible === self::PREP_SORT;
     }
     /** @return ?OklchColor */
@@ -52,18 +48,21 @@ class Color_PaperColumn extends PaperColumn {
         }
         return $this->colors[$x];
     }
+    function sort_name() {
+        return $this->sort_name_with_options("order");
+    }
     function compare(PaperInfo $a, PaperInfo $b, PaperList $pl) {
         $alch = $this->color($a, $pl);
-        $bhcl = $this->color($b, $pl);
+        $blch = $this->color($b, $pl);
 
         // null colors are sorted at end
-        if ($alch === null || $bhcl === null) {
-            return ($alch ? 0 : 1) <=> ($bhcl ? 0 : 1);
+        if ($alch === null || $blch === null) {
+            return ($alch ? 0 : 1) <=> ($blch ? 0 : 1);
         }
 
         // gray colors are sorted after non-gray coors
         $agray = $alch->okl < 5 || $alch->okc < 5;
-        $bgray = $bhcl->okl < 5 || $bhcl->okc < 5;
+        $bgray = $blch->okl < 5 || $blch->okc < 5;
         if ($agray !== $bgray) {
             return $agray ? 1 : -1;
         }
@@ -73,7 +72,7 @@ class Color_PaperColumn extends PaperColumn {
         if (($ah -= $this->hdelta) < 0) {
             $ah += 360;
         }
-        $bh = is_nan($bhcl->okh) ? 0.0 : $bhcl->okh;
+        $bh = is_nan($blch->okh) ? 0.0 : $blch->okh;
         if (($bh -= $this->hdelta) < 0) {
             $bh += 360;
         }
@@ -89,14 +88,14 @@ class Color_PaperColumn extends PaperColumn {
 
         // then sort by quantized lightness
         $alb = (int) ($alch->okl / 2);
-        $blb = (int) ($bhcl->okl / 2);
+        $blb = (int) ($blch->okl / 2);
         if ($alb !== $blb) {
             return $blb <=> $alb;
         }
 
         // then sort by quantized chroma
         $acb = (int) ($alch->okc / 8);
-        $bcb = (int) ($bhcl->okc / 8);
+        $bcb = (int) ($blch->okc / 8);
         if ($acb !== $bcb) {
             return $bcb <=> $acb;
         }
@@ -105,7 +104,7 @@ class Color_PaperColumn extends PaperColumn {
         if ($ah !== $bh) {
             return $this->hrev ? $bh <=> $ah : $ah <=> $bh;
         } else {
-            return ($bhcl->okl <=> $alch->okl) ? : ($bhcl->okc <=> $alch->okc);
+            return ($blch->okl <=> $alch->okl) ? : ($blch->okc <=> $alch->okc);
         }
     }
 }

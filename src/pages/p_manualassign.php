@@ -62,8 +62,7 @@ class ManualAssign_Page {
             }
 
             $newrt = max($assrev, 0);
-            if ($rt !== $newrt
-                && ($newrt == 0 || $reviewer->can_accept_review_assignment_ignore_conflict($row))) {
+            if ($rt !== $newrt) {
                 $assignments[] = [
                     $row->paperId,
                     $reviewer->email,
@@ -80,7 +79,11 @@ class ManualAssign_Page {
             }
             $aset = new AssignmentSet($this->viewer);
             $aset->parse($text);
-            $aset->execute(true);
+            $aset->execute();
+            $aset->feedback_msg(AssignmentSet::FEEDBACK_ASSIGN);
+            if ($aset->has_error()) {
+                error_log($aset->full_feedback_text());
+            }
         }
 
         $this->conf->redirect_self($this->qreq);
@@ -167,9 +170,6 @@ class ManualAssign_Page {
             "q" => $this->qreq->q,
             "reviewer" => $reviewer
         ]))->set_urlbase("manualassign");
-        if (!empty($hlsearch)) {
-            $search->set_field_highlighter_query(join(" OR ", $hlsearch));
-        }
         $pl = new PaperList("reviewAssignment", $search, ["sort" => true], $this->qreq);
         $pl->apply_view_session($this->qreq);
         $pl->apply_view_qreq($this->qreq);
@@ -216,7 +216,7 @@ class ManualAssign_Page {
     }
 
 
-    function print(Contact $reviewer = null) {
+    function print(?Contact $reviewer = null) {
         $this->qreq->print_header("Assignments", "manualassign", ["subtitle" => "Manual"]);
         echo '<nav class="papmodes mb-5 clearfix"><ul>',
             '<li class="papmode"><a href="', $this->conf->hoturl("autoassign"), '">Automatic</a></li>',
@@ -306,7 +306,7 @@ class ManualAssign_Page {
         $overrides = $this->viewer->add_overrides(Contact::OVERRIDE_CONFLICT);
 
         $this->limits = PaperSearch::viewable_manager_limits($this->viewer);
-        if (!$this->qreq->t || !in_array($this->qreq->t, $this->limits)) {
+        if (!$this->qreq->t || !in_array($this->qreq->t, $this->limits, true)) {
             $this->qreq->t = $this->limits[0];
         }
         if (!$this->qreq->q || trim($this->qreq->q) == "(All)") {

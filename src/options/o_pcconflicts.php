@@ -1,6 +1,6 @@
 <?php
 // o_pcconflicts.php -- HotCRP helper class for PC conflicts intrinsic
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
 class PCConflicts_PaperOption extends PaperOption {
     /** @var ?string */
@@ -58,7 +58,7 @@ class PCConflicts_PaperOption extends PaperOption {
     function value_export_json(PaperValue $ov, PaperExport $pex) {
         $pcm = $this->conf->pc_members();
         $confset = $this->conf->conflict_set();
-        $can_view_authors = $pex->user->allow_view_authors($ov->prow);
+        $can_view_authors = $pex->viewer->allow_view_authors($ov->prow);
         $pcc = [];
         foreach (self::value_map($ov) as $k => $v) {
             if (($pc = $pcm[$k] ?? null) && Conflict::is_conflicted((int) $v)) {
@@ -150,7 +150,7 @@ class PCConflicts_PaperOption extends PaperOption {
     }
     function parse_json(PaperInfo $prow, $j) {
         $ja = [];
-        if (is_object($j) || is_associative_array($j)) {
+        if (is_object($j) || (is_array($j) && !array_is_list($j))) {
             foreach ((array) $j as $k => $v) {
                 $ja[strtolower($k)] = $v;
             }
@@ -172,37 +172,39 @@ class PCConflicts_PaperOption extends PaperOption {
         $emails = [];
         $values = [];
         foreach ($ja as $email => $v) {
-            if (is_string($email)
-                && (is_bool($v) || is_int($v) || is_string($v))) {
-                $ct = $confset->parse_json($v);
-                if ($ct === false) {
-                    $pv->msg("<0>Invalid conflict type ‘{$v}’", MessageSet::WARNING);
-                    $ct = Conflict::GENERAL;
-                }
-                $emails[] = $email;
-                $values[] = $ct;
-            } else {
+            if (!is_string($email)
+                || !(is_bool($v) || is_int($v) || is_string($v))) {
                 return PaperValue::make_estop($prow, $this, "<0>Validation error");
             }
+            $ct = $confset->parse_json($v);
+            if ($ct === false) {
+                $pv->warning("<0>Invalid conflict type ‘{$v}’");
+                $ct = Conflict::GENERAL;
+            }
+            $emails[] = $email;
+            $values[] = $ct;
+            $prow->conf->prefetch_user_by_email($email);
         }
 
-        // look up primary emails
-        $pemails = $this->conf->resolve_primary_emails($emails);
-
-        // apply conflicts, save result
+        // apply conflicts
         $vm = self::paper_value_map($prow);
         foreach ($vm as &$v) {
             $v &= ~CONFLICT_PCMASK;
         }
         unset($v);
+
         for ($i = 0; $i !== count($emails); ++$i) {
-            $pc = $prow->conf->user_by_email($pemails[$i], USER_SLICE);
-            if ($pc && $pc->isPC) {
-                $this->update_value_map($vm, $pc->contactId, $values[$i]);
+            $u = $prow->conf->user_by_email($emails[$i], USER_SLICE);
+            if ($u && !$u->isPC && $u->primaryContactId > 0) {
+                $u = $prow->conf->pc_member_by_primary_id($u->primaryContactId);
+            }
+            if ($u && $u->isPC) {
+                $this->update_value_map($vm, $u->contactId, $values[$i]);
             } else {
-                $pv->msg("<0>Email address ‘{$emails[$i]}’ does not match a PC member", MessageSet::WARNING);
+                $pv->warning("<0>Email address ‘{$emails[$i]}’ does not match a PC member");
             }
         }
+
         /** @phan-suppress-next-line PhanTypeMismatchArgument */
         $pv->set_value_data(array_keys($vm), array_values($vm));
         return $pv;
@@ -280,7 +282,7 @@ class PCConflicts_PaperOption extends PaperOption {
                         $confx = "<strong>No conflict</strong>";
                     }
                 } else {
-                    $confx = Ht::checkbox(null, 1, Conflict::is_conflicted($pct), ["disabled" => true]);
+                    $confx = Ht::checkbox("", "", Conflict::is_conflicted($pct), ["disabled" => true]);
                 }
                 $hidden = Ht::hidden("pcconf:{$id}", $pct, ["class" => "conflict-entry", "disabled" => true]);
             } else if ($this->selectors) {
@@ -339,23 +341,24 @@ class PCConflicts_PaperOption extends PaperOption {
         $confset = $this->selectors ? $this->conf->conflict_set() : null;
         $names = [];
         foreach ($ov->prow->conflict_type_list() as $cflt) {
-            if (Conflict::is_conflicted($cflt->conflictType)
-                && ($p = $pcm[$cflt->contactId] ?? null)) {
-                $t = $user->reviewer_html_for($p);
-                if ($p->affiliation) {
-                    $t .= " <span class=\"auaff\">(" . htmlspecialchars($p->affiliation) . ")</span>";
-                }
-                $ch = "";
-                if (Conflict::is_author($cflt->conflictType)) {
-                    $ch = "<strong>Author</strong>";
-                } else if ($confset) {
-                    $ch = $confset->unparse_html($cflt->conflictType);
-                }
-                if ($ch !== "") {
-                    $t .= " - {$ch}";
-                }
-                $names[$p->pc_index] = "<li class=\"odname\">{$t}</li>";
+            if (!Conflict::is_conflicted($cflt->conflictType)
+                || !($p = $pcm[$cflt->contactId] ?? null)) {
+                continue;
             }
+            $t = $user->reviewer_extended_html_for($p);
+            if ($p->affiliation) {
+                $t .= " <span class=\"auaff\">(" . htmlspecialchars($p->affiliation) . ")</span>";
+            }
+            $ch = "";
+            if (Conflict::is_author($cflt->conflictType)) {
+                $ch = "<strong>Author</strong>";
+            } else if ($confset) {
+                $ch = $confset->unparse_html($cflt->conflictType);
+            }
+            if ($ch !== "") {
+                $t .= " - {$ch}";
+            }
+            $names[$p->pc_index] = "<li class=\"odname\">{$t}</li>";
         }
         if (empty($names)) {
             $names[] = "<li class=\"odname\">None</li>";

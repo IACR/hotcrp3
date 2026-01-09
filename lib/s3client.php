@@ -120,9 +120,8 @@ class S3Client {
         if (!$this->reset_key) {
             $this->s3_scope = $this->s3_signing_key = "";
             return null;
-        } else {
-            return 403;
         }
+        return 403;
     }
 
     /** @param 'GET'|'POST'|'HEAD'|'PUT'|'DELETE' $method
@@ -276,9 +275,8 @@ class S3Client {
         if ($s3r->status === 200
             && ($fs = $s3r->response_header("content-length")) !== null) {
             return intval($fs);
-        } else {
-            return -1;
         }
+        return -1;
     }
 
     /** @return bool */
@@ -319,15 +317,14 @@ class S3Client {
     static function finish_get(S3Result $s3r) {
         if ($s3r->status === 200) {
             return $s3r->response_body();
-        } else {
-            if ($s3r->status !== 404 && $s3r->status !== 500) {
-                trigger_error("S3 warning: GET {$s3r->skey}: status {$s3r->status}", E_USER_WARNING);
-                if (self::$verbose) {
-                    trigger_error("S3 response: " . var_export($s3r->response_headers, true), E_USER_WARNING);
-                }
-            }
-            return null;
         }
+        if ($s3r->status !== 404 && $s3r->status !== 500) {
+            trigger_error("S3 warning: GET {$s3r->skey}: status {$s3r->status}", E_USER_WARNING);
+            if (self::$verbose) {
+                trigger_error("S3 response: " . var_export($s3r->response_headers, true), E_USER_WARNING);
+            }
+        }
+        return null;
     }
 
     /** @param string $skey
@@ -405,9 +402,8 @@ class S3Client {
         if ($s3r->status === 200
             && preg_match('/<UploadId>(.*?)<\/UploadId>/', $s3r->response_body(), $m)) {
             return $m[1];
-        } else {
-            return false;
         }
+        return false;
     }
 
     /** @param string $skey
@@ -462,6 +458,16 @@ class S3Client {
      * @return ?string */
     function get($skey) {
         return $this->start_get($skey)->finish();
+    }
+
+    /** @param string $skey
+     * @param string $accel */
+    function apply_content_redirect(Downloader $dl, $skey, $accel) {
+        list($url, $hdr) = $this->signed_headers($skey, "GET", []);
+        $dl->set_content_redirect($accel . $url);
+        foreach ($hdr as $h) {
+            $dl->header($h);
+        }
     }
 
     /** @param string $skey
@@ -535,7 +541,7 @@ class S3Client {
      * @param array{start-after?:int|string,max-keys?:int,continuation-token?:void} $args
      * @return Generator<SimpleXMLElement> */
     function ls_all($prefix, $args = []) {
-        $max_keys = $args["max_keys"] ?? -1;
+        $max_keys = $args["max-keys"] ?? -1;
         $xml = null;
         $xmlpos = 0;
         while ($max_keys !== 0) {
@@ -545,10 +551,10 @@ class S3Client {
                 $max_keys = max($max_keys - 1, -1);
                 continue;
             }
-            if ($xml && !isset($args["continuation_token"])) {
+            if ($xml && !isset($args["continuation-token"])) {
                 break;
             }
-            $args["max_keys"] = $max_keys < 0 ? 600 : min(600, $max_keys);
+            $args["max-keys"] = $max_keys < 0 ? 600 : min(600, $max_keys);
             $content = $this->ls($prefix, $args);
             $xml = new SimpleXMLElement($content);
             $xmlpos = 0;
@@ -557,9 +563,9 @@ class S3Client {
                 throw new Exception("Bad response from S3 List Objects");
             }
             if (isset($xml->IsTruncated) && (string) $xml->IsTruncated === "true") {
-                $args["continuation_token"] = (string) $xml->NextContinuationToken;
+                $args["continuation-token"] = (string) $xml->NextContinuationToken;
             } else {
-                unset($args["continuation_token"]);
+                unset($args["continuation-token"]);
             }
         }
     }

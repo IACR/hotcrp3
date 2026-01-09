@@ -59,22 +59,21 @@ class ResponseRound {
     }
 
     /** @return bool */
-    function relevant(Contact $user, PaperInfo $prow = null) {
+    function relevant(Contact $user, ?PaperInfo $prow = null) {
         if (($prow ? $user->allow_administer($prow) : $user->is_manager())
             && ($this->done || $this->condition !== null || $this->name !== "1")) {
             return true;
         } else if ($user->isPC) {
             return $this->open > 0;
-        } else {
-            return $this->active
-                && $this->open > 0
-                && $this->open < Conf::$now
-                && ($this->condition === null || $this->_condition_relevant($user, $prow));
         }
+        return $this->active
+            && $this->open > 0
+            && $this->open < Conf::$now
+            && ($this->condition === null || $this->_condition_relevant($user, $prow));
     }
 
     /** @return bool */
-    private function _condition_relevant(Contact $user, PaperInfo $prow = null) {
+    private function _condition_relevant(Contact $user, ?PaperInfo $prow) {
         foreach ($prow ? [$prow] : $user->authored_papers() as $row) {
             if ($this->test_condition($row))
                 return true;

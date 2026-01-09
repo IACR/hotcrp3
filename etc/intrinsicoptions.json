@@ -10,16 +10,16 @@
     },
     {
         "name": "Submission", "id": 0,
-        "type": "document",
+        "type": "document", "include_empty": true,
         "json_key": "submission",
         "form_order": 1001, "required": "submit",
         "display": "top",
         "function": "+Document_PaperOption",
-        "configurable": true, "properties": ["title", "description", "condition", "exists_if", "edit_condition", "editable_if", "required"]
+        "configurable": true, "properties": ["name", "description", "condition", "exists_if", "edit_condition", "editable_if", "required"]
     },
     {
         "name": "Final version", "id": -1,
-        "type": "document",
+        "type": "document", "include_empty": true,
         "json_key": "final",
         "form_order": 1002, "required": "submit", "final": true,
         "display": "top",
@@ -46,7 +46,7 @@
         "configurable": true, "properties": ["name", "description", "edit_condition", "editable_if", "max"]
     },
     {
-        "name": "Anonymous submission", "id": -1002,
+        "name": "Anonymity", "id": -1002,
         "type": "nonblind", "include_empty": true,
         "json_key": "nonblind",
         "form_order": 3002,

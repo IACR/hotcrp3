@@ -76,8 +76,8 @@ class FakeNames_Batch {
         return $this->random("a");
     }
     function country() {
-        $n = mt_rand(0, count(Countries::$list) - 1);
-        return Countries::$list[$n];
+        $n = mt_rand(0, count(Countries::$map) - 1);
+        return (array_keys(Countries::$map))[$n];
     }
 
     function new_fake_email() {
@@ -120,7 +120,7 @@ class FakeNames_Batch {
         $q = $qv = [];
         $email_map = [];
         foreach ($users as $c) {
-            $q[] = "update ContactInfo set firstName=?, lastName=?, unaccentedName=?, email=?, preferredEmail='', affiliation=?, country=?, password=? where contactId={$c->contactId}";
+            $q[] = "update ContactInfo set firstName=?, lastName=?, unaccentedName=?, email=?, affiliation=?, country=?, password=? where contactId={$c->contactId}";
             $qv[] = $f = $this->first();
             $qv[] = $l = $this->last();
             $aff = $this->affiliation();

@@ -1,15 +1,29 @@
 <?php
 // confinvariants.php -- HotCRP invariant checker
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+
+#[Attribute]
+class ConfInvariantLevel {
+    /** @var int */
+    public $level;
+    /** @param int $level */
+    function __construct($level) {
+        $this->level = $level;
+    }
+}
 
 class ConfInvariants {
     /** @var Conf */
     public $conf;
+    /** @var int */
+    public $level = 0;
+    /** @var bool */
+    public $color = false;
     /** @var array<string,true> */
     public $problems = [];
     /** @var string */
     public $prefix;
-    /** @var ?list<string> */
+    /** @var ?list<string|int|float> */
     private $irow;
     /** @var ?list<string> */
     private $msgbuf;
@@ -17,6 +31,20 @@ class ConfInvariants {
     function __construct(Conf $conf, $prefix = "") {
         $this->conf = $conf;
         $this->prefix = $prefix;
+    }
+
+    /** @param int $level
+     * @return $this */
+    function set_level($level) {
+        $this->level = $level;
+        return $this;
+    }
+
+    /** @param bool $color
+     * @return $this */
+    function set_color($color) {
+        $this->color = $color;
+        return $this;
     }
 
     function buffer_messages() {
@@ -62,17 +90,30 @@ class ConfInvariants {
         } else if ($text === null) {
             $text = $abbrev;
         }
-        $text = preg_replace_callback('/\{(\d+)\}/', function ($m) {
-            $v = $this->irow[$m[1]] ?? "";
-            if (!is_usascii($v)) {
-                $v = bin2hex($v);
-                if (str_starts_with($v, "736861322d") && strlen($v) === 74) {
-                    $v = "sha2-" . substr($v, 10);
+        $check = "";
+        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $trace) {
+            if (($trace["class"] ?? null) === "ConfInvariants"
+                && str_starts_with($trace["function"], "check_")
+                && $trace["function"] !== "check_all") {
+                $check = substr($trace["function"], 6) . ".";
+            }
+        }
+        $vs = [];
+        foreach ($this->irow ?? [] as $t) {
+            $t = $t ?? "<null>";
+            if (!is_usascii($t)) {
+                $t = bin2hex($t);
+                if (str_starts_with($t, "736861322d") && strlen($t) === 74) {
+                    $t = "sha2-" . substr($t, 10);
                 }
             }
-            return $v;
-        }, $text);
-        $msg = "{$this->prefix}{$this->conf->dbname} invariant violation: {$text}";
+            $vs[] = $t;
+        }
+        $msg = $this->prefix
+            . ($this->color ? "\x1b[1m" : "")
+            . "{$this->conf->dbname} violation"
+            . ($this->color ? "\x1b[m [{$check}\x1b[91;1m{$abbrev}\x1b[m]: " : " [{$abbrev}]: ")
+            . $this->conf->_($text, ...$vs);
         if ($this->msgbuf !== null) {
             $this->msgbuf[] = $msg . "\n";
         } else {
@@ -196,6 +237,27 @@ class ConfInvariants {
         return $this;
     }
 
+    /** @param 1|3 $rtype
+     * @return string */
+    static function reviewNeedsSubmit_query($rtype) {
+        if ($rtype === REVIEW_SECONDARY) {
+            return "select r.paperId, r.reviewId, r.contactId, r.reviewNeedsSubmit
+                from PaperReview r
+                left join (select paperId, requestedBy, count(reviewId) ct, count(reviewSubmitted) cs
+                       from PaperReview
+                       where reviewType>0 and reviewType<" . REVIEW_SECONDARY . "
+                       group by paperId, requestedBy) q
+                    on (q.paperId=r.paperId and q.requestedBy=r.contactId)
+                where r.reviewType=" . REVIEW_SECONDARY . "
+                and reviewSubmitted is null
+                and if(coalesce(q.ct,0)=0,1,if(q.cs=0,-1,0))!=r.reviewNeedsSubmit";
+        }
+        return "select r.paperId, r.reviewId, r.contactId, r.reviewNeedsSubmit
+            from PaperReview r
+            where reviewType>0 and reviewType!=" . REVIEW_SECONDARY . "
+            and if(reviewSubmitted or (reviewType=" . REVIEW_EXTERNAL . " and timeApprovalRequested<0),0,1)!=r.reviewNeedsSubmit";
+    }
+
     /** @return $this */
     function check_reviews() {
         // reviewType is defined correctly
@@ -224,23 +286,31 @@ class ConfInvariants {
             }
         }
 
-        // reviewNeedsSubmit is defined correctly
-        $any = $this->invariantq("select r.paperId, r.reviewId from PaperReview r
-            left join (select paperId, requestedBy, count(reviewId) ct, count(reviewSubmitted) cs
-                       from PaperReview where reviewType>0 and reviewType<" . REVIEW_SECONDARY . "
-                       group by paperId, requestedBy) q
-                on (q.paperId=r.paperId and q.requestedBy=r.contactId)
-            where r.reviewType=" . REVIEW_SECONDARY . " and reviewSubmitted is null
-            and if(coalesce(q.ct,0)=0,1,if(q.cs=0,-1,0))!=r.reviewNeedsSubmit
-            limit 1");
+        // reviewNeedsSubmit is defined correctly for secondary
+        $any = $this->invariantq(self::reviewNeedsSubmit_query(REVIEW_SECONDARY) . " limit 1");
         if ($any) {
-            $this->invariant_error("reviewNeedsSubmit", "bad reviewNeedsSubmit for review #{0}/{1}");
+            $this->invariant_error("reviewNeedsSubmit", "bad reviewNeedsSubmit {3} for secondary review #{0}/{1}");
+        }
+
+        // reviewNeedsSubmit is defined correctly for others
+        $any = $this->invariantq(self::reviewNeedsSubmit_query(REVIEW_EXTERNAL) . " limit 1");
+        if ($any) {
+            $this->invariant_error("reviewNeedsSubmit", "bad reviewNeedsSubmit {3} for non-secondary review #{0}/{1}");
         }
 
         // submitted and ordinaled reviews are displayed
         $any = $this->invariantq("select paperId, reviewId from PaperReview where timeDisplayed=0 and (reviewSubmitted is not null or reviewOrdinal>0) limit 1");
         if ($any) {
             $this->invariant_error("review_timeDisplayed", "submitted/ordinal review #{0}/{1} has no timeDisplayed");
+        }
+
+        // rflags is defined correctly
+        $skipf = ReviewInfo::RF_SELF_ASSIGNED | ReviewInfo::RF_CONTENT_EDITED | ReviewInfo::RF_AUSEEN | ReviewInfo::RF_AUSEEN_PREVIOUS | ReviewInfo::RF_AUSEEN_LIVE;
+        $any = $this->invariantq("select paperId, reviewId, rflags, concat(reviewType, ':', reviewModified, ':', timeApprovalRequested, ':', coalesce(reviewSubmitted,0), ':', reviewBlind) from PaperReview r
+            where (rflags&~?)!=1|(1<<reviewType)|if(reviewModified>0,256,0)|if(reviewModified>1,512,0)|if(timeApprovalRequested!=0,1024,0)|if(timeApprovalRequested<0,2048,0)|if(coalesce(reviewSubmitted>0),4096,0)|if(reviewBlind!=0,65536,0)
+            limit 1", $skipf);
+        if ($any) {
+            $this->invariant_error("rflags", "bad rflags for review #{0}/{1} [{2:x} v {3}]");
         }
 
         return $this;
@@ -386,11 +456,10 @@ class ConfInvariants {
         return $this;
     }
 
-    /** @return $this */
-    function check_users() {
-        // load paper authors
+    /** @return array<string,list<int>> */
+    static function author_lcemail_map(Conf $conf) {
         $authors = [];
-        $result = $this->conf->qe("select paperId, authorInformation from Paper");
+        $result = $conf->qe("select paperId, authorInformation from Paper");
         while (($row = $result->fetch_row())) {
             $pid = intval($row[0]);
             foreach (explode("\n", $row[1]) as $auline) {
@@ -403,15 +472,41 @@ class ConfInvariants {
             }
         }
         Dbl::free($result);
+        return $authors;
+    }
+
+    /** @return $this */
+    function check_users() {
+        // load paper authors
+        $authors = self::author_lcemail_map($this->conf);
+
+        // load primary contact links
+        $primap = [];
+        $isprimary = [];
+        $result = $this->conf->qe("select contactId, primaryContactId from ContactPrimary");
+        while (($cp = $result->fetch_object())) {
+            $cp->contactId = intval($cp->contactId);
+            $cp->primaryContactId = intval($cp->primaryContactId);
+            if ($cp->contactId <= 0 || $cp->primaryContactId <= 0) {
+                $this->invariant_error("contactprimary_id", "ContactPrimary {$cp->contactId}->{$cp->primaryContactId} has nonpositive ID");
+                continue;
+            }
+            if (isset($primap[$cp->primaryContactId])) {
+                $this->invariant_error("contactprimary_conflict", "primary user {$cp->primaryContactId} is also secondary");
+            } else if (isset($isprimary[$cp->contactId])) {
+                $this->invariant_error("contactprimary_conflict", "secondary user {$cp->contactId} is also primary");
+            }
+            $primap[$cp->contactId] = $cp;
+            $isprimary[$cp->primaryContactId][] = $cp;
+        }
+        Dbl::free($result);
 
         // load users
-        $primary = [];
-        $result = $this->conf->qe("select " . $this->conf->user_query_fields() . " from ContactInfo");
+        $result = $this->conf->qe("select " . $this->conf->user_query_fields() . ", unaccentedName from ContactInfo");
         while (($u = $result->fetch_object())) {
             $u->contactId = intval($u->contactId);
             $u->primaryContactId = intval($u->primaryContactId);
             $u->roles = intval($u->roles);
-            $u->disabled = intval($u->disabled);
             $u->cflags = intval($u->cflags);
             unset($authors[strtolower($u->email)]);
 
@@ -431,7 +526,7 @@ class ConfInvariants {
 
             // whitespace is simplified
             $t = " ";
-            foreach ([$u->firstName, $u->lastName, $u->email, $u->affiliation] as $s) {
+            foreach ([$u->firstName, $u->lastName, $u->email, $u->affiliation, $u->unaccentedName] as $s) {
                 if ($s !== "")
                     $t .= "{$s} ";
             }
@@ -443,22 +538,12 @@ class ConfInvariants {
 
             // roles have only expected bits
             if (($u->roles & ~Contact::ROLE_DBMASK) !== 0) {
-                $this->invariant_error("user_roles", "user {$u->email} has funky roles {$u->roles}");
-            }
-
-            // disabled has only expected bits
-            if (($u->disabled & Contact::CFM_DISABLEMENT & ~Contact::CFM_DB) !== 0) {
-                $this->invariant_error("user_disabled", sprintf("user {$u->email}/{$u->contactId} bad disabled %x", $u->disabled));
+                $this->invariant_error("roles", "user {$u->email} has funky roles {$u->roles}");
             }
 
             // cflags has only expected bits
             if (($u->cflags & ~Contact::CFM_DB) !== 0) {
                 $this->invariant_error("user_cflags", sprintf("user {$u->email}/{$u->contactId} bad cflags %x", $u->cflags));
-            }
-
-            // cflags reflects disabled
-            if ($u->disabled !== ($u->cflags & Contact::CFM_DISABLEMENT)) {
-                $this->invariant_error("user_cflags_disabled", sprintf("user {$u->email}/{$u->contactId} disabled %x unreflected in cflags %x", $u->disabled, $u->cflags));
             }
 
             // contactTags is a valid tag string
@@ -468,36 +553,44 @@ class ConfInvariants {
                 $this->invariant_error("user_tag_strings", "bad user tags ‘{$u->contactTags}’ for {$u->email}/{$u->contactId}");
             }
 
-            // primary contactIds are not negative
-            if ($u->primaryContactId < 0) {
-                $this->invariant_error("primary_user_negative", "primary user ID for {$u->email} is negative");
-            } else if ($u->primaryContactId !== 0) {
-                $primary[$u->contactId] = $u->primaryContactId;
+            // cflags CF_PRIMARY means not secondary
+            $uprimary = ($u->cflags & Contact::CF_PRIMARY) !== 0;
+            if ($uprimary && $u->primaryContactId !== 0) {
+                $this->invariant_error("user_cflags_primary", "user {$u->email}/{$u->contactId} bad primary cflags");
             }
+
+            // cflags reflects ContactPrimary
+            if (!$uprimary && isset($isprimary[$u->contactId])) {
+                $this->invariant_error("user_cflags_primary", "user {$u->email}/{$u->contactId} not marked primary, has secondary");
+            }
+
+            // primaryContactId reflects ContactPrimary
+            $cp = $primap[$u->contactId] ?? null;
+            $cp_primary = $cp ? $cp->primaryContactId : 0;
+            if ($u->primaryContactId !== $cp_primary) {
+                $this->invariant_error("contactprimary_user", "user {$u->email}/{$u->contactId} primary disagreement (user {$u->primaryContactId}, ContactPrimary {$cp_primary})");
+            }
+            unset($isprimary[$u->contactId], $primap[$u->contactId]);
         }
         Dbl::free($result);
 
-        // primary contactIds can be resolved in at most 2 rounds
-        $tprimary = $primary;
-        for ($i = 0; $i !== 2 && !empty($tprimary); ++$i) {
-            $nprimary = [];
-            foreach ($tprimary as $uid => $puid) {
-                if (isset($primary[$puid])) {
-                    $nprimary[$uid] = $primary[$puid];
-                }
+        // no remaining ContactPrimary elements
+        if (!empty($primap) || !empty($isprimary)) {
+            $badcp = null;
+            foreach ($primap as $cp) {
+                $badcp = $cp;
+                break;
             }
-            $tprimary = $nprimary;
-        }
-        if (!empty($tprimary)) {
-            $baduid = (array_keys($tprimary))[0];
-            $this->invariant_error("primary_resolvable", "primary user ID for #{$baduid} cannot be quickly resolved");
+            foreach ($isprimary as $cpl) {
+                $badcp = $cpl[0];
+                break;
+            }
+            $this->invariant_error("contactprimary_surplus", "surplus ContactPrimary {$badcp->contactId}->{$badcp->primaryContactId}");
         }
 
         // authors are all accounted for
-        if (false) { // XXX currently violated by email changes
-            foreach ($authors as $lemail => $pids) {
-                $this->invariant_error("author_contacts", "author {$lemail} of #{$pids[0]} lacking from database");
-            }
+        foreach ($authors as $lemail => $pids) {
+            $this->invariant_error("author_contacts", "author {$lemail} of #{$pids[0]} lacking from database");
         }
 
         return $this;
@@ -556,6 +649,79 @@ class ConfInvariants {
         }
 
         return $this;
+    }
+
+    /** @return $this */
+    function check_cdb() {
+        $cdb = Conf::main_contactdb();
+        if (!$cdb) {
+            return $this;
+        }
+
+        $confid = $this->conf->cdb_confid();
+        if ($confid < 0) {
+            $this->invariant_error("cdb_confid", "Conf::cdb_confid is -1");
+        }
+        return $this;
+    }
+
+    /** @return \Generator<ConfInvariant_CdbRole> */
+    static function generate_cdb_roles(Conf $conf) {
+        $result = $conf->qe("select u.contactId, email, cflags, roles, cf.ct, r.rt, cdbRoles
+            from ContactInfo u
+            left join (select contactId, max(conflictType) ct from PaperConflict group by contactId) cf using (contactId)
+            left join (select contactId, max(reviewType) rt from PaperReview group by contactId) r using (contactId)");
+        $disnonpc = $conf->disable_non_pc();
+        while (($row = $result->fetch_row())) {
+            $cflags = (int) $row[2];
+            $roles = (int) $row[3]
+                | ((int) $row[4] >= CONFLICT_AUTHOR ? Contact::ROLE_AUTHOR : 0)
+                | ((int) $row[5] > 0 ? Contact::ROLE_REVIEWER : 0);
+            if (($cflags & Contact::CFM_DISABLEMENT & ~Contact::CF_PLACEHOLDER) !== 0
+                || !Contact::cdb_allows_email($row[1])
+                || ($disnonpc && ($roles & Contact::ROLE_PCLIKE) === 0)) {
+                $roles = 0;
+            }
+            yield new ConfInvariant_CdbRole((int) $row[0], $row[1], (int) $row[6], $roles);
+        }
+        $result->close();
+    }
+
+    /** @return $this */
+    #[ConfInvariantLevel(1)]
+    function check_cdb_roles() {
+        $cdb = Conf::main_contactdb();
+        if (!$cdb || $this->level < 1 || ($confid = $this->conf->cdb_confid()) <= 0) {
+            return $this;
+        }
+
+        $result = Dbl::qe($cdb, "select email, roles from ContactInfo join Roles using (contactDbId) where confid=?", $confid);
+        $cdbr = [];
+        while (($row = $result->fetch_row())) {
+            $cdbr[strtolower($row[0])] = (int) $row[1];
+        }
+        $result->close();
+
+        foreach (self::generate_cdb_roles($this->conf) as $err) {
+            if ($err->cdbRoles !== $err->computed_roles) {
+                $this->irow = [$err->email, $err->computed_roles, $err->cdbRoles];
+                $this->invariant_error("cdbRoles", "user {0} has cdbRoles 0x{2:x}, expected 0x{1:x}");
+            }
+            $lemail = strtolower($err->email);
+            $cdb_cdbr = $cdbr[$lemail] ?? null;
+            if ($cdb_cdbr !== null) {
+                unset($cdbr[$lemail]);
+            }
+            if (($cdb_cdbr ?? 0) !== $err->computed_roles) {
+                $this->irow = [$err->email, $err->computed_roles, $cdb_cdbr];
+                $this->invariant_error("cdbRoles", "user {0} has contactdb roles {2:jx}, expected {1:jx}");
+            }
+        }
+
+        foreach ($cdbr as $lemail => $roles) {
+            $this->irow = [$lemail, null, $roles];
+            $this->invariant_error("cdbRoles", "user {0} has contactdb roles {2:jx}, expected {1:jx}");
+        }
     }
 
     /** @return $this */
@@ -646,5 +812,23 @@ class ConfInvariant_AutomaticTagChecker {
         } else {
             return $this->value_constant;
         }
+    }
+}
+
+class ConfInvariant_CdbRole {
+    /** @var int */
+    public $contactId;
+    /** @var string */
+    public $email;
+    /** @var int */
+    public $cdbRoles;
+    /** @var int */
+    public $computed_roles;
+
+    function __construct($cid, $email, $cdbRoles, $computed_roles) {
+        $this->contactId = $cid;
+        $this->email = $email;
+        $this->cdbRoles = $cdbRoles;
+        $this->computed_roles = $computed_roles;
     }
 }

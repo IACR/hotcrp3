@@ -1,6 +1,6 @@
 <?php
 // s3verifyall.php -- HotCRP maintenance script
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
     require_once(dirname(__DIR__) . "/src/init.php");
@@ -107,7 +107,7 @@ class S3VerifyAll_Batch {
                     fwrite(STDOUT, "$last_key: ");
                 }
                 $content = $s3doc->get($last_key);
-                $doc->set_content($content);
+                $doc->set_simple_content($content);
                 $chash = $doc->content_binary_hash($khash);
                 if ($chash !== $khash) {
                     if (!$this->verbose) {

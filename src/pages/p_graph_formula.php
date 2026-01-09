@@ -57,8 +57,8 @@ class Graph_Formula_Page {
 
         if ($fg->fx_format() === Fexpr::FSEARCH) {
             $h2 = "";
-        } else if ($fg->type === FormulaGraph::RAWCDF) {
-            $h2 = "Cumulative count of {$xhtml}";
+        } else if ($fg->type === FormulaGraph::OGIVE) {
+            $h2 = "Cumulative frequency of {$xhtml}";
         } else if ($fg->type & FormulaGraph::CDF) {
             $h2 = "{$xhtml} CDF";
         } else if (($fg->type & FormulaGraph::BARCHART)
@@ -102,14 +102,14 @@ class Graph_Formula_Page {
             '<label for="x_entry">X axis</label>',
             $fgm->feedback_html_at("fx"),
             Ht::entry("x", (string) $this->qreq->x, ["id" => "x_entry", "size" => 32, "class" => "w-99", "spellcheck" => false]),
-            '<div class="f-h"><a href="', $this->conf->hoturl("help", "t=formulas"), '">Formula</a> or “search”</div>',
+            '<div class="f-d"><a href="', $this->conf->hoturl("help", "t=formulas"), '">Formula</a> or “search”</div>',
             '</div>';
         // Y axis
         echo '<div class="', $fgm->control_class("fy", "f-i maxw-480"), '">',
             '<label for="y_entry">Y axis</label>',
             $fgm->feedback_html_at("fy"),
             Ht::entry("y", (string) $this->qreq->y, ["id" => "y_entry", "size" => 32, "class" => "w-99", "spellcheck" => false]),
-            '<div class="f-h"><a href="', $this->conf->hoturl("help", "t=formulas"), '">Formula</a> or “cdf”, “count”, “fraction”, “box <em>formula</em>”, “bar <em>formula</em>”</div>',
+            '<div class="f-d"><a href="', $this->conf->hoturl("help", "t=formulas"), '">Formula</a> or “cdf”, “count”, “fraction”, “box <em>formula</em>”, “bar <em>formula</em>”</div>',
             '</div>',
             '</div>';
         // Series

@@ -3,7 +3,7 @@
 // Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
 
 class Assign_API {
-    static function assign(Contact $user, Qrequest $qreq, PaperInfo $prow = null) {
+    static function assign(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
         if (!isset($qreq->assignments)) {
             return JsonResult::make_missing_error("assignments");
         }
@@ -18,8 +18,8 @@ class Assign_API {
         }
         $aset->parse(CsvParser::make_json($a));
         $aset->execute();
-        $jr = $aset->json_result();
 
+        $jr = $aset->json_result();
         if ($jr["ok"] && $qreq->search) {
             Search_API::apply_search($jr, $user, $qreq, $qreq->search);
             // include tag information

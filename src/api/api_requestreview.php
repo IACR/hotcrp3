@@ -1,6 +1,6 @@
 <?php
 // api_requestreview.php -- HotCRP review-request API calls
-// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
 
 class RequestReview_API {
     /** @param Contact $user
@@ -15,8 +15,11 @@ class RequestReview_API {
         }
 
         if (($whyNot = $user->perm_request_review($prow, $round, true))) {
-            return JsonResult::make_error(403, "<5>" . $whyNot->unparse_html());
+            return JsonResult::make_message_list(403, $whyNot->message_list());
         }
+
+        // check proposal:
+        // - check reviewer email validity
         if (!isset($qreq->email)) {
             return JsonResult::make_missing_error("email");
         }
@@ -24,32 +27,25 @@ class RequestReview_API {
         if ($email === "" || $email === "newanonymous") {
             return self::requestreview_anonymous($user, $qreq, $prow);
         }
-
         $reviewer = $user->conf->user_by_email($email);
-        if (!$reviewer && ($email === "" || !validate_email($email))) {
+        if (!$reviewer && !validate_email($email)) {
             return JsonResult::make_parameter_error("email", "<0>Invalid email address");
         }
 
-        $name_args = Author::make_keyed([
-            "firstName" => $qreq->firstName,
-            "lastName" => $qreq->lastName,
-            "name" => $qreq->name,
-            "affiliation" => $qreq->affiliation,
-            "email" => $email
-        ]);
-        $reason = trim($qreq->reason ?? "");
-
-        // check proposal:
-        // - check existing review
+        // - check for existing review
         if ($reviewer && $prow->review_by_user($reviewer)) {
             return JsonResult::make_parameter_error("email", "<0>{$email} is already a reviewer");
         }
-        // - check existing request
-        $request = $user->conf->fetch_first_object("select * from ReviewRequest where paperId=? and email=?", $prow->paperId, $email);
+
+        // - check for existing request
+        $request = self::request_by_paper_email($prow, $email);
         if ($request && !$user->allow_administer($prow)) {
             return JsonResult::make_parameter_error("email", "<0>{$email} is already a requested reviewer");
+        } else if ($request) {
+            self::update_qreq_from_request($qreq, $request);
         }
-        // - check existing refusal
+
+        // - check for existing refusal
         if ($reviewer) {
             $refusal = ($prow->review_refusals_by_user($reviewer))[0] ?? null;
         } else {
@@ -61,61 +57,82 @@ class RequestReview_API {
             if ($reviewer
                 && ($refusal->refusedBy == $reviewer->contactId
                     || ($refusal->refusedBy === null && $refusal->reason !== "request denied by chair"))) {
-                $ml[] = new MessageItem("email", "<5>" . $reviewer->name_h(NAME_P) . " has declined to review this submission", 2);
+                $ml[] = MessageItem::error_at("email", "<5>" . $reviewer->name_h(NAME_P) . " has declined to review this submission");
             } else {
-                $ml[] = new MessageItem("email", "<0>An administrator denied a previous request for {$email} to review this submission", 2);
+                $ml[] = MessageItem::error_at("email", "<0>An administrator denied a previous request for {$email} to review this submission");
             }
             if ($refusal->reason !== "" && $refusal->reason !== "request denied by chair") {
-                $ml[] = new MessageItem("email", "<5>They offered this reason: “" . htmlspecialchars($refusal->reason) . "”", MessageSet::INFORM);
+                $ml[] = MessageItem::inform_at("email", "<5>They offered this reason: “" . htmlspecialchars($refusal->reason) . "”");
             }
             if ($user->allow_administer($prow)) {
-                $ml[] = new MessageItem("override", "", 2);
+                $ml[] = MessageItem::error_at("override", "");
             }
             return new JsonResult(["ok" => false, "message_list" => $ml]);
         }
-        // - check conflict
-        if ($reviewer
-            && ($prow->has_conflict($reviewer)
-                || ($reviewer->isPC && !$reviewer->can_accept_review_assignment($prow)))) {
+
+        // - check for conflict
+        if ($reviewer && $prow->has_conflict($reviewer)) {
             return JsonResult::make_parameter_error("email", "<0>{$email} cannot be asked to review this submission");
         }
 
-        // check for potential conflict
-        $xreviewer = $reviewer
-            ?? $user->conf->cdb_user_by_email($email)
-            ?? Contact::make_keyed($user->conf, $name_args->unparse_nea_json());
-        $potconf = $prow->potential_conflict_html($xreviewer);
+        // construct reviewer contact (maybe not saved)
+        $xreviewer = $reviewer ?? $user->conf->cdb_user_by_email($email);
+        if (!$xreviewer) {
+            $name_args = Author::make_keyed([
+                "firstName" => $qreq->given_name ?? $qreq->firstName,
+                "lastName" => $qreq->family_name ?? $qreq->lastName,
+                "name" => $qreq->name,
+                "affiliation" => $qreq->affiliation,
+                "email" => $email
+            ])->simplify_whitespace();
+            $xreviewer = Contact::make_keyed($user->conf, $name_args->unparse_nea_json());
+        }
 
-        // check requester
+        // load requester, reason
         if ($request && $user->can_administer($prow)) {
             $requester = $user->conf->user_by_id($request->requestedBy, USER_SLICE) ?? $user;
         } else {
             $requester = $user;
         }
+        $reason = trim($qreq->reason ?? "");
+
+        // load potential conflict
+        $potconf = $prow->potential_conflict_html($xreviewer);
+        $notrack = $reviewer
+            && $reviewer->is_pc_member()
+            && !$reviewer->pc_track_assignable($prow);
 
         // check whether to make a proposal
         $extrev_chairreq = $user->conf->setting("extrev_chairreq");
         if ($user->can_administer($prow)
-            ? $potconf && !$qreq->override
+            ? ($potconf || $notrack) && !$qreq->override
             : $extrev_chairreq === 1
-              || ($extrev_chairreq === 2 && $potconf)) {
+              || ($extrev_chairreq === 2 && ($potconf || $notrack))) {
             $prow->conf->qe("insert into ReviewRequest set paperId=?, email=?, firstName=?, lastName=?, affiliation=?, requestedBy=?, timeRequested=?, reason=?, reviewRound=? on duplicate key update paperId=paperId",
                 $prow->paperId, $email, $xreviewer->firstName, $xreviewer->lastName,
                 $xreviewer->affiliation, $user->contactId, Conf::$now, $reason, $round);
             $ml = [];
             if ($user->can_administer($prow)) {
-                $ml[] = new MessageItem("email", "<5>" . $xreviewer->name_h(NAME_E) . " has a potential conflict with this submission, so you must approve this request for it to take effect", MessageSet::WARNING_NOTE);
-                $ml[] = new MessageItem("email", "<5>" . PaperInfo::potential_conflict_tooltip_html($potconf), MessageSet::INFORM);
+                if ($potconf) {
+                    $ml[] = MessageItem::warning_note_at("email", $prow->conf->_("<0>{} has a potential conflict with this {submission}, so you must approve this request for it to take effect", $xreviewer->name(NAME_E)));
+                    $ml[] = MessageItem::inform_at("email", "<5>" . PaperInfo::potential_conflict_tooltip_html($potconf));
+                } else {
+                    $ml[] = MessageItem::warning_note_at("email", $prow->conf->_("<0>{} could not normally be assigned to review this {submission}, so you must approve this request for it to take effect", $xreviewer->name(NAME_E)));
+                }
             } else if ($extrev_chairreq === 2) {
-                $ml[] = new MessageItem("email", "<5>" . $xreviewer->name_h(NAME_E) . " has a potential conflict with this submission, so an administrator must approve your proposed external review before it can take effect", MessageSet::WARNING_NOTE);
-                if ($user->can_view_authors($prow)) {
-                    $ml[] = new MessageItem("email", "<5>" . PaperInfo::potential_conflict_tooltip_html($potconf), MessageSet::INFORM);
+                if ($potconf || !$user->can_view_pc()) {
+                    $ml[] = MessageItem::warning_note_at("email", $prow->conf->_("<0>{} has a potential conflict with this {submission}, so an administrator must approve your review request for it to take effect", $xreviewer->name(NAME_E)));
+                    if ($potconf && $user->can_view_authors($prow)) {
+                        $ml[] = MessageItem::inform_at("email", "<5>" . PaperInfo::potential_conflict_tooltip_html($potconf));
+                    }
+                } else {
+                    $ml[] = MessageItem::warning_note_at("email", $prow->conf->_("<0>{} could not normally be assigned to review this {submission}, so an administrator must approve your review request for it to take effect", $xreviewer->name(NAME_E)));
                 }
             } else {
-                $ml[] = new MessageItem("email", "<5>Proposed an external review from " . $xreviewer->name_h(NAME_E), MessageSet::WARNING_NOTE);
-                $ml[] = new MessageItem("email", "<0>An administrator must approve this proposal for it to take effect.", MessageSet::INFORM);
+                $ml[] = MessageItem::warning_note_at("email", "<5>Proposed an external review from " . $xreviewer->name_h(NAME_E));
+                $ml[] = MessageItem::inform_at("email", "<0>An administrator must approve this proposal for it to take effect.");
             }
-            $user->log_activity("Review proposal added for $email", $prow);
+            $user->log_activity("Review proposal added for {$email}", $prow);
             $prow->conf->update_automatic_tags($prow, "review");
             HotCRPMailer::send_administrators("@proposereview", $prow,
                                               ["requester_contact" => $requester,
@@ -135,7 +152,7 @@ class RequestReview_API {
         }
 
         // assign review
-        $user->assign_review($prow->paperId, $reviewer->contactId, REVIEW_EXTERNAL,
+        $user->assign_review($prow->paperId, $reviewer, REVIEW_EXTERNAL,
                              ["mark_notify" => true,
                               "requester_contact" => $requester,
                               "requested_email" => $reviewer->email,
@@ -147,8 +164,28 @@ class RequestReview_API {
             "requester_contact" => $requester, "reason" => $reason
         ]);
 
-        $mi = new MessageItem("email", "<5>Requested an external review from " . $reviewer->name_h(NAME_E), MessageSet::SUCCESS);
+        $mi = MessageItem::success_at("email", "<0>Requested a review from " . $reviewer->name(NAME_E));
         return new JsonResult(["ok" => true, "action" => "request", "message_list" => [$mi]]);
+    }
+
+    /** @return ReviewRequestInfo */
+    static private function request_by_paper_email(PaperInfo $prow, $email) {
+        $result = $prow->conf->qe("select * from ReviewRequest where paperId=? and email=?", $prow->paperId, $email);
+        $request = ReviewRequestInfo::fetch($result, $prow->conf);
+        $result->close();
+        return $request;
+    }
+
+    static private function update_qreq_from_request(Qrequest $qreq, ReviewRequestInfo $request) {
+        if (!isset($qreq->given_name) && !isset($qreq->firstName) && !isset($qreq->name)) {
+            $qreq->given_name = $request->firstName;
+        }
+        if (!isset($qreq->family_name) && !isset($qreq->lastName) && !isset($qreq->name)) {
+            $qreq->family_name = $request->lastName;
+        }
+        if (!isset($qreq->affiliation)) {
+            $qreq->affiliation = $request->affiliation;
+        }
     }
 
     /** @param Contact $user
@@ -243,7 +280,7 @@ class RequestReview_API {
         } else {
             return $user->contactXid === $remrow->contactId
                 || ($remrow->email && strcasecmp($user->email, $remrow->email) === 0)
-                || $user->capability("@ra{$prow->paperId}") == $remrow->contactId;
+                || $user->reviewer_capability($prow) === $remrow->contactId;
         }
     }
 
@@ -251,9 +288,12 @@ class RequestReview_API {
      * @param Qrequest $qreq
      * @return ?PaperInfo */
     static private function review_refusal_paper($user, $qreq) {
-        if (ctype_digit($qreq->p ?? "X")
-            && ($prow = $user->conf->paper_by_id(intval($qreq->p), $user))
-            && $prow->review_refusals_by_user($user)) {
+        $pid = stoi($qreq->p);
+        if ($pid === null) {
+            return null;
+        }
+        $prow = $user->conf->paper_by_id($pid, $user);
+        if ($prow && $prow->review_refusals_by_user($user)) {
             return $prow;
         }
         return null;
@@ -272,52 +312,41 @@ class RequestReview_API {
         }
 
         // check `r` parameter, set redirect
-        if (!ctype_digit($qreq->r ?? "X")) {
+        $r = stoi($qreq->r);
+        if ($r === null) {
             return JsonResult::make_parameter_error("r");
         }
-        $r = intval($qreq->r);
         $review_site_relative = $prow->conf->hoturl_raw("review", ["p" => $prow->paperId, "r" => $r], Conf::HOTURL_SITEREL);
-        if ($qreq->redirect === "1") {
-            $qreq->redirect = $review_site_relative;
-        }
 
         $rrow = $prow->review_by_id($r);
         $refrow = $prow->review_refusal_by_id($r);
         if (!$rrow && !$refrow) {
-            if ($user->can_administer($prow)
-                || $user->can_view_review($prow, null)) {
+            if ($user->can_view_submitted_review($prow)) {
                 return JsonResult::make_not_found_error("r", "<0>No such review");
-            } else {
-                return JsonResult::make_permission_error("r");
             }
+            return JsonResult::make_permission_error("r");
         } else if (!self::allow_accept_decline($user, $prow, $rrow ?? $refrow)) {
             return JsonResult::make_permission_error("r");
         }
 
         if (!$rrow) {
-            $prow->conf->qe("insert into PaperReview set paperId=?, reviewId=?, contactId=?, requestedBy=?, timeRequested=?, reviewType=?, reviewRound=?, data=?",
-                $prow->paperId, $refrow->refusedReviewId, $refrow->contactId,
-                $refrow->requestedBy, $refrow->timeRequested,
-                $refrow->refusedReviewType, $refrow->reviewRound, $refrow->data);
+            $rxrow = ReviewInfo::make_reconstruct_refusal($refrow);
+            $rxrow->insert_full();
             $prow->conf->qe("delete from PaperReviewRefused where refusedReviewId=?",
                 $refrow->refusedReviewId);
-            $rrow = $prow->fresh_review_by_id($refrow->refusedReviewId);
+            $rrow = $prow->fresh_review_by_id($r);
+            if ($rrow->reviewType < REVIEW_SECONDARY && $rrow->requestedBy > 0) {
+                $prow->conf->update_review_delegation($prow->paperId, $rrow->requestedBy, 1);
+            }
+            if ($rrow->reviewToken) {
+                $prow->conf->update_rev_tokens_setting(1);
+            }
+            $prow->conf->update_automatic_tags($prow, "review");
         }
 
-        if ($rrow->reviewStatus < ReviewInfo::RS_ACCEPTED) {
-            $prow->conf->qe("update PaperReview set reviewModified=1, timeRequestNotified=greatest(?,timeRequestNotified)
-                where paperId=? and reviewId=? and reviewModified<=0",
-                Conf::$now, $prow->paperId, $rrow->reviewId); /* XXX PaperReviewHistory? */
-            $user->log_activity_for($rrow->contactId, "Review {$rrow->reviewId} accepted", $prow);
-
-            // send mail to requesters
-            // XXX delay this mail by a couple minutes
-            if ($rrow->requestedBy > 0
-                && ($requser = $user->conf->user_by_id($rrow->requestedBy))) {
-                HotCRPMailer::send_to($requser, "@acceptreviewrequest", [
-                    "prow" => $prow, "reviewer_contact" => $rrow->reviewer()
-                ]);
-            }
+        if ($rrow->reviewStatus < ReviewInfo::RS_ACKNOWLEDGED) {
+            $rv = (new ReviewValues($rrow->conf))->set_req_ready(false);
+            $rv->check_and_save($user, $prow, $rrow);
         }
 
         return new JsonResult([
@@ -342,15 +371,11 @@ class RequestReview_API {
         $prow->ensure_reviewer_names();
 
         // check `r` parameter, set redirect
-        if (!ctype_digit($qreq->r ?? "X")) {
+        $r = stoi($qreq->r);
+        if ($r === null) {
             return JsonResult::make_parameter_error("r");
         }
-        $r = intval($qreq->r);
         $review_site_relative = $prow->conf->hoturl_raw("review", ["p" => $prow->paperId, "r" => $r], Conf::HOTURL_SITEREL);
-        $redirect_in = $qreq->redirect;
-        if ($redirect_in === "1") {
-            $qreq->redirect = $review_site_relative;
-        }
 
         $reason = trim($qreq->reason ?? "");
         if ($reason === "" || $reason === "Optional explanation") {
@@ -360,43 +385,51 @@ class RequestReview_API {
         $rrow = $prow->review_by_id($r);
         $refrow = $prow->review_refusal_by_id($r);
         if (!$rrow && !$refrow) {
-            if ($user->can_administer($prow)
-                || $user->can_view_review($prow, null)) {
+            if ($user->can_view_submitted_review($prow)) {
                 return JsonResult::make_not_found_error("r", "<0>Review not found");
-            } else {
-                return JsonResult::make_permission_error("r");
             }
+            return JsonResult::make_permission_error("r");
         } else if (!self::allow_accept_decline($user, $prow, $rrow ?? $refrow)) {
             return JsonResult::make_permission_error("r");
         } else if ($rrow && $rrow->reviewStatus >= ReviewInfo::RS_DELIVERED) {
             return JsonResult::make_permission_error("r", "<0>Review has already been submitted");
         } else if ($rrow && $rrow->reviewType >= REVIEW_SECONDARY) {
             $jr = JsonResult::make_permission_error("r", "<0>Primary and secondary reviews can’t be declined");
-            $jr->content["message_list"][] = new MessageItem("r", "Contact the PC chairs directly if you really cannot finish this review.", MessageSet::INFORM);
+            $jr->content["message_list"][] = MessageItem::inform_at("r", "Contact the PC chairs directly if you really cannot finish this review.");
             return $jr;
         }
         $rrid = $rrow ? $rrow->reviewId : $refrow->refusedReviewId;
 
         // commit refusal to database
         if ($rrow) {
-            $prow->conf->qe("insert into PaperReviewRefused set paperId=?, email=?, contactId=?, requestedBy=?, timeRequested=?, refusedBy=?, timeRefused=?, reason=?, refusedReviewType=?, refusedReviewId=?, reviewRound=?, data=?
+            $prow->conf->qe("insert into PaperReviewRefused
+                set paperId=?, email=?, contactId=?,
+                    requestedBy=?, timeRequested=?, refusedBy=?,
+                    timeRefused=?, reason=?, refusedReviewType=?,
+                    refusedReviewId=?, reviewRound=?
                 on duplicate key update reason=coalesce(?,reason)",
                 $prow->paperId, $rrow->reviewer()->email, $rrow->contactId,
-                $rrow->requestedBy, $rrow->timeRequested,
-                $user->contactId, Conf::$now, $reason, $rrow->reviewType,
-                $rrid, $rrow->reviewRound, $rrow->data_string(),
+                $rrow->requestedBy, $rrow->timeRequested, $user->contactId,
+                Conf::$now, $reason, $rrow->reviewType,
+                $rrid, $rrow->reviewRound,
                 $reason);
+
+            // record snapshot of review, then delete review
+            $rrow->set_prop("reviewType", REVIEW_REFUSAL);
+            $rrow->snapshot_fval_prop();
+            $rrow->save_prop();
             $prow->conf->qe("delete from PaperReview where paperId=? and reviewId=?",
                 $prow->paperId, $rrid);
 
             if ($rrow->reviewType < REVIEW_SECONDARY && $rrow->requestedBy > 0) {
-                $user->update_review_delegation($prow->paperId, $rrow->requestedBy, -1);
+                $prow->conf->update_review_delegation($prow->paperId, $rrow->requestedBy, -1);
             }
             if ($rrow->reviewToken) {
                 $prow->conf->update_rev_tokens_setting(-1);
             }
             $prow->conf->update_automatic_tags($prow, "review");
-            $user->log_activity_for($rrow->contactId, "Review $rrow->reviewId declined", $prow);
+            $user->log_activity_for($rrow->contactId, "Review {$rrow->reviewId} declined", $prow);
+            $user->update_cdb_roles();
 
             // send mail to requesters
             // XXX delay this mail by a couple minutes
@@ -414,9 +447,6 @@ class RequestReview_API {
             if ($user->contactXid === $rrow->contactId
                 && ($tok = ReviewAccept_Capability::make($rrow, true))) {
                 $review_site_relative = $prow->conf->hoturl_raw("review", ["p" => $prow->paperId, "r" => $r, "cap" => $tok->salt], Conf::HOTURL_SITEREL);
-                if ($redirect_in === "1") {
-                    $qreq->redirect = $review_site_relative;
-                }
             }
         } else if (isset($qreq->reason)) {
             $prow->conf->qe("update PaperReviewRefused set reason=? where paperId=? and refusedReviewId=?", $reason, $prow->paperId, $rrid);
@@ -437,20 +467,15 @@ class RequestReview_API {
      * @param PaperInfo $prow
      * @return JsonResult */
     static function claimreview($user, $qreq, $prow) {
-        if (!ctype_digit($qreq->r ?? "X")) {
+        $r = stoi($qreq->r);
+        if ($r === null) {
             return JsonResult::make_parameter_error("r");
         }
-        $r = intval($qreq->r);
         $review_site_relative = $prow->conf->hoturl_raw("review", ["p" => $prow->paperId, "r" => $r], Conf::HOTURL_SITEREL);
-        $redirect_in = $qreq->redirect;
-        if ($redirect_in === "1") {
-            $qreq->redirect = $review_site_relative;
-        }
 
         $rrow = $prow->review_by_id($r);
         if (!$rrow) {
-            if ($user->can_administer($prow)
-                || $user->can_view_review($prow, null)) {
+            if ($user->can_view_submitted_review($prow)) {
                 return JsonResult::make_not_found_error("r", "<0>Review not found");
             } else {
                 return JsonResult::make_permission_error("r");
@@ -483,9 +508,6 @@ class RequestReview_API {
 
         if ($destu->contactXid !== $user->contactXid) {
             $review_site_relative = "u/{$useridx}/{$review_site_relative}";
-            if ($redirect_in === "1") {
-                $qreq->redirect = $review_site_relative;
-            }
         }
         return new JsonResult([
             "ok" => true,
@@ -539,7 +561,7 @@ class RequestReview_API {
         foreach ($rrows as $rrow) {
             $user->conf->qe("delete from PaperReview where paperId=? and reviewId=?",
                 $prow->paperId, $rrow->reviewId);
-            $user->update_review_delegation($prow->paperId, $rrow->requestedBy, -1);
+            $user->conf->update_review_delegation($prow->paperId, $rrow->requestedBy, -1);
             if ($rrow->reviewToken) {
                 $user->conf->update_rev_tokens_setting(0);
             }
@@ -586,9 +608,9 @@ class RequestReview_API {
         }
 
         if (!$prow
-            && ctype_digit($qreq->p ?? "X")
+            && ($pid = stoi($qreq->p)) > 0
             && strcasecmp($email, $user->email) === 0) {
-            $xprow = $user->conf->paper_by_id(intval($qreq->p), $user);
+            $xprow = $user->conf->paper_by_id($pid, $user);
             if ($xprow && $xprow->review_refusals_by_user($user)) {
                 $prow = $xprow;
             }

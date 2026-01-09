@@ -1,6 +1,6 @@
 <?php
 // search/st_conflict.php -- HotCRP helper class for searching for papers
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 final class Conflict_SearchTerm extends SearchTerm {
     /** @var Contact */
@@ -83,7 +83,7 @@ final class Conflict_SearchTerm extends SearchTerm {
         return $this->ccm->test($n);
     }
     function script_expression(PaperInfo $row, $about) {
-        if ($about !== self::ABOUT_PAPER) {
+        if (($about & self::ABOUT_PAPER) === 0) {
             return $this->test($row, null);
         } else if (!$this->ispc) {
             return null;

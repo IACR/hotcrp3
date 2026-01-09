@@ -48,7 +48,9 @@ class MeetingTracker {
     }
 
 
-    /** @param Qrequest $qreq */
+    /** @param Qrequest $qreq
+     * @return never
+     * @throws JsonCompletion */
     static function trackerstatus_api(Contact $user, $qreq = null, $prow = null) {
         $tracker = self::lookup($user->conf);
         json_exit([
@@ -94,185 +96,6 @@ class MeetingTracker {
             $x = MeetingTracker_ConfigSet::load($user->conf)->apply_track_api($args, $xlist, $user, $qreq);
         } while ($x === false);
         return $x === true ? null : $x;
-    }
-
-    /** @param Qrequest $qreq
-     * @return JsonResult */
-    static function trackerconfig_api(Contact $user, $qreq) {
-        if (!$user->is_track_manager() || !$qreq->valid_post()) {
-            return JsonResult::make_permission_error();
-        }
-
-        $tracker = self::lookup($user->conf);
-        $position_at = $tracker->next_position_at();
-        $message_list = [];
-        $changed = false;
-        $new_trackerid = false;
-        $qreq->open_session();
-        $tagger = new Tagger($user);
-
-        for ($i = 1; isset($qreq["tr{$i}-id"]); ++$i) {
-            // Parse arguments
-            $trackerid = $qreq["tr{$i}-id"];
-            if (ctype_digit($trackerid)) {
-                $trackerid = intval($trackerid);
-            }
-
-            $name = $qreq["tr{$i}-name"];
-            if (isset($name)) {
-                $name = simplify_whitespace($name);
-            }
-
-            $logo = $qreq["tr{$i}-logo"];
-            if (isset($logo)) {
-                $logo = trim($logo);
-            }
-            if ($logo === "☞") {
-                $logo = "";
-            }
-
-            $vis = $qreq["tr{$i}-vis"];
-            $vperm = "";
-            if (isset($vis)) {
-                if ($vis !== ""
-                    && ($vis[0] === "+" || $vis[0] === "-")
-                    && !isset($qreq["tr{$i}-vistype"])) {
-                    $vistype = $vis[0];
-                    $vis = ltrim(substr($vis, 1));
-                } else {
-                    $vistype = trim($qreq["tr{$i}-vistype"] ?? "");
-                }
-                if (str_starts_with($vis, "#")) {
-                    $vis = ltrim(substr($vis, 1));
-                }
-                if (strcasecmp($vistype, "none") === 0
-                    || ($vistype === "+" && strcasecmp($vis, "none") === 0)) {
-                    $vperm = "+none";
-                } else if ($vistype === ""
-                           || ($vistype === "+" && strcasecmp($vis, "pc")) === 0) {
-                    // $vperm === ""
-                } else if ($vistype !== "+" && $vistype !== "-") {
-                    $message_list[] = MessageItem::error_at("tr{$i}-vis", "<0>Internal error on visibility type");
-                } else if ($vis === ""
-                           || strcasecmp($vis, "pc") === 0) {
-                    $message_list[] = MessageItem::error_at("tr{$i}-vis", "<0>PC tag required");
-                } else if (($vt = $tagger->check($vis, Tagger::NOPRIVATE | Tagger::NOVALUE))) {
-                    if (!$user->conf->pc_tag_exists($vt)) {
-                        $message_list[] = MessageItem::error_at("tr{$i}-vis", "<0>Unknown PC tag");
-                    }
-                    $vperm = $vistype . $vt;
-                } else {
-                    $message_list[] = MessageItem::error_at("tr{$i}-vis", $tagger->error_ftext(true));
-                }
-                if ($vperm !== ""
-                    && !$user->privChair
-                    && !$user->has_permission($vis)) {
-                    $message_list[] = MessageItem::error_at("tr{$i}-vis", "<0>You may not configure a tracker that you wouldn’t be able to see. Try “Whole PC”.");
-                }
-            }
-
-            $hide_conflicts = null;
-            if ($qreq["tr{$i}-hideconflicts"] || $qreq["has_tr{$i}-hideconflicts"]) {
-                $hide_conflicts = !!$qreq["tr{$i}-hideconflicts"];
-            }
-
-            $xlist = $permissionizer = null;
-            if ($qreq["tr{$i}-listinfo"]) {
-                $xlist = SessionList::decode_info_string($user, $qreq["tr{$i}-listinfo"], "p");
-                if ($xlist) {
-                    $permissionizer = new MeetingTracker_Permissionizer($user->conf, $xlist->ids);
-                }
-            }
-
-            $p = trim($qreq["tr{$i}-p"] ?? "");
-            if ($p !== "" && !ctype_digit($p)) {
-                $message_list[] = MessageItem::error_at("tr{$i}-p", "<0>Bad paper number");
-            }
-            $position = false;
-            if ($p !== "" && $xlist) {
-                $position = array_search((int) $p, $xlist->ids);
-            }
-
-            $stop = $qreq->stopall || !!$qreq["tr{$i}-stop"];
-
-            // Save tracker
-            if ($trackerid === "new") {
-                if ($stop) {
-                    /* ignore */
-                } else if (!$xlist || !str_starts_with($xlist->listid, "p/")) {
-                    $message_list[] = MessageItem::error_at("tr{$i}-name", "<0>Internal error");
-                } else if (!$permissionizer || !$permissionizer->check_admin_perm($user)) {
-                    $my_tracks = [];
-                    foreach ($user->conf->track_tags() as $tag) {
-                        if (($perm = $user->conf->track_permission($tag, Track::ADMIN))
-                            && $user->has_permission($perm))
-                            $my_tracks[] = "#{$tag}";
-                    }
-                    $message_list[] = MessageItem::error_at("tr{$i}-p", "<0>You can’t start a tracker on this list because you don’t administer all of its submissions. (You administer " . plural_word(count($my_tracks), "track") . " " . commajoin($my_tracks) . ".)");
-                } else {
-                    do {
-                        $new_trackerid = mt_rand(1, 9999999);
-                    } while ($tracker->search($new_trackerid) !== false);
-
-                    $tr = MeetingTracker_Config::make($user, $qreq, $new_trackerid, $xlist, Conf::$now, $position, $position_at);
-                    $tr->name = $name ?? "";
-                    if (!isset($vis) && $vperm === "") {
-                        $vperm = $permissionizer->default_visibility();
-                    }
-                    $tr->visibility = $vperm;
-                    $tr->admin_perm = $permissionizer->admin_perm();
-                    $tr->logo = $logo ?? "";
-                    $tr->hide_conflicts = !!($hide_conflicts ?? $user->conf->opt("trackerHideConflicts") ?? true);
-                    $tracker->ts[] = $tr;
-                    $changed = true;
-                }
-            } else if (($match = $tracker->search($trackerid)) !== false) {
-                $tr = $tracker->ts[$match];
-                if (($name ?? $tr->name) === $tr->name
-                    && (!isset($vis) || $vperm === $tr->visibility)
-                    && ($logo ?? $tr->logo) === $tr->logo
-                    && ($hide_conflicts ?? $tr->hide_conflicts) === $tr->hide_conflicts
-                    && !$stop) {
-                    /* do nothing */
-                } else if (!MeetingTracker_Permissionizer::check_admin_perm_list($user, $tr->admin_perm)) {
-                    if ($qreq["tr{$i}-changed"]) {
-                        $message_list[] = MessageItem::error_at("tr{$i}-name", "<0>You can’t administer this tracker");
-                    }
-                } else {
-                    $tr->name = $name ?? $tr->name;
-                    $tr->visibility = isset($vis) ? $vperm : $tr->visibility;
-                    $tr->logo = $logo ?? $tr->logo;
-                    $tr->hide_conflicts = $hide_conflicts ?? $tr->hide_conflicts;
-
-                    if ($stop) {
-                        array_splice($tracker->ts, $match, 1);
-                    }
-
-                    $changed = true;
-                }
-            } else {
-                if (!$stop && $qreq["tr{$i}-changed"]) {
-                    $message_list[] = MessageItem::error_at("tr{$i}-name", "<0>This tracker no longer exists");
-                }
-            }
-        }
-
-        if (empty($message_list) && $changed) {
-            $tracker->set_position_at($position_at);
-            if (!$tracker->update($tracker->next_eventid())) {
-                $message_list[] = MessageItem::error("<0>Your changes were ignored because another user has changed the tracker settings. Please reload and try again.");
-            }
-        }
-        if (empty($message_list)) {
-            $j = (object) ["ok" => true];
-            if ($new_trackerid !== false) {
-                $j->new_trackerid = $new_trackerid;
-            }
-        } else {
-            $j = (object) ["ok" => false, "message_list" => $message_list];
-        }
-        self::my_deadlines($j, $user);
-        return new JsonResult($j);
     }
 
 
@@ -335,7 +158,7 @@ class MeetingTracker {
                     if ($prow->managerContactId == $user->contactId) {
                         $p->is_manager = true;
                     }
-                    if ($prow->has_reviewer($user)) {
+                    if ($prow->has_active_reviewer($user)) {
                         $p->is_reviewer = true;
                     }
                     if ($prow->conflictType > CONFLICT_MAXUNCONFLICTED) {
@@ -393,7 +216,7 @@ class MeetingTracker {
                     "ts" => $tis
                 ];
             }
-            if (($perm = $user->conf->track_permission("", Track::VIEWTRACKER))) {
+            if (($perm = $user->conf->xtrack_permission("viewtracker"))) {
                 $dl->tracker->global_visibility = $perm;
             }
             $dl->tracker_status = $tracker->status();
@@ -694,7 +517,7 @@ class MeetingTracker_ConfigSet implements JsonSerializable {
     function update($new_eventid) {
         $new_data = json_encode_db($this);
         if ($this->_was_empty) {
-            $result = $this->conf->qe("insert ignore into Settings set name=?, value=?, data=?",
+            $result = $this->conf->qe("insert into Settings set name=?, value=?, data=? on duplicate key update value=value",
                     self::SNAME, $new_eventid, $new_data);
         } else if ($new_eventid !== $this->eventid) {
             $result = $this->conf->qe("update Settings set value=?, data=? where name=? and value=?",
@@ -1071,9 +894,9 @@ class MeetingTracker_Permissionizer {
         for ($i = 0; $i !== count($requirements); ) {
             $req = $requirements[$i];
             if ($req === $perms
-                || (count($req) === 1 && in_array($req[0], $perms))) {
+                || (count($req) === 1 && in_array($req[0], $perms, true))) {
                 return;
-            } else if ($nperms === 1 && in_array($perms[0], $req)) {
+            } else if ($nperms === 1 && in_array($perms[0], $req, true)) {
                 array_splice($requirements, $i, 1);
             } else {
                 ++$i;
@@ -1091,7 +914,7 @@ class MeetingTracker_Permissionizer {
 
         // otherwise, non-privChair users can administer some papers
         // check if user can view tracker
-        $vtperm = $this->conf->track_permission("", Track::VIEWTRACKER);
+        $vtperm = $this->conf->xtrack_permission("viewtracker");
         if ($vtperm === "+none") {
             return;
         } else if ($vtperm) {
@@ -1154,7 +977,7 @@ class MeetingTracker_Permissionizer {
 
     /** @return string */
     function default_visibility() {
-        if (($p = $this->conf->track_permission("", Track::VIEWTRACKER))) {
+        if (($p = $this->conf->xtrack_permission("viewtracker"))) {
             return $p;
         }
         foreach ($this->track_tag_combinations() as $ttcombo) {

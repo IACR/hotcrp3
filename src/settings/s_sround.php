@@ -15,6 +15,7 @@ class Sround_Setting {
     public $submit;
     public $grace;
     public $freeze;
+    public $deleted = false;
 
     static function make_json($jx) {
         $sr = new Sround_Setting;
@@ -100,7 +101,7 @@ class Sround_SettingParser extends SettingParser {
         $namesi = $sv->si("submission/{$ctr}/tag");
         echo '<legend>', $sv->label($namesi->name, "Submission class"), ' &nbsp;',
             $sv->entry($namesi->name, ["class" => "uii uich js-settings-submission-round-name want-focus want-delete-marker"]),
-            Ht::button(Icons::ui_use("trash"), ["name" => "submission/{$ctr}/deleter", "class" => "ui js-settings-submission-round-delete ml-2 need-tooltip", "aria-label" => "Delete review round", "tabindex" => -1]);
+            Ht::button(Icons::ui_use("trash"), ["name" => "submission/{$ctr}/deleter", "class" => "ui js-settings-submission-round-delete ml-2 btn-licon-s need-tooltip", "aria-label" => "Delete submission class", "tabindex" => -1]);
         /*if ($id > 0 && ($round_map[$id - 1] ?? 0) > 0) {
             echo '<span class="ml-3 d-inline-block">',
                 '<a href="', $sv->conf->hoturl("search", ["q" => "re:" . ($id > 1 ? $sv->conf->round_name($id - 1) : "unnamed")]), '" target="_blank" rel="noopener">',
@@ -131,7 +132,7 @@ class Sround_SettingParser extends SettingParser {
 
         echo '</div><template id="settings-submission-round-new" class="hidden">';
         self::print_round($sv, '$');
-        echo '</template><hr class="form-sep form-nearby">',
+        echo '</template><hr class="form-sep nearby">',
             Ht::button("Add submission class", ["class" => "ui js-settings-submission-round-new"]);
     }
 
@@ -173,7 +174,9 @@ class Sround_SettingParser extends SettingParser {
         foreach ($srs as $sr) {
             $srj[] = $sr->export_json();
         }
-        $sv->save("submission_rounds", empty($srj) ? "" : json_encode_db($srj));
+        if ($sv->update("submission_rounds", empty($srj) ? "" : json_encode_db($srj))) {
+            $sv->request_store_value($si);
+        }
         return true;
     }
 

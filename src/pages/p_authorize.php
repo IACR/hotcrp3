@@ -1,6 +1,10 @@
 <?php
 // pages/p_authorize.php -- HotCRP OAuth 2.0 authorization provider page
-// Copyright (c) 2022-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2022-2025 Eddie Kohler; see LICENSE.
+
+namespace HotCRP;
+use Conf, ComponentSet, Contact, Ht, JsonResult, Qrequest, Redirection;
+use TokenInfo, Signin_Page;
 
 class OAuthClient {
     /** @var string */
@@ -73,7 +77,7 @@ class Authorize_Page {
     /** @var TokenInfo */
     private $token;
 
-    function __construct(Contact $viewer, Qrequest $qreq, ComponentSet $cs = null) {
+    function __construct(Contact $viewer, Qrequest $qreq, ?ComponentSet $cs = null) {
         $this->conf = $viewer->conf;
         $this->viewer = $viewer;
         $this->qreq = $qreq;
@@ -107,11 +111,11 @@ class Authorize_Page {
 
     private function handle_request(OAuthClient $client) {
         $scope = trim($this->qreq->scope ?? "");
-        if (!preg_match('/\A[ !#-\x5b\x5d-\x7e]+\z/', $scope)) {
+        if (!preg_match('/\A[ !\#-\x5b\x5d-\x7e]+\z/', $scope)) {
             $this->redirect_error("invalid_scope");
         }
         $scope_list = explode(" ", $scope);
-        if (!in_array("openid", $scope_list)) {
+        if (!in_array("openid", $scope_list, true)) {
             $this->redirect_error("invalid_scope", "Scope `openid` required");
         }
 
@@ -133,7 +137,7 @@ class Authorize_Page {
                 if ($p !== "")
                     $prompts[] = $p;
             }
-            if (in_array("none", $prompts)) {
+            if (in_array("none", $prompts, true)) {
                 $this->redirect_error("interaction_required");
             }
         }
@@ -149,8 +153,8 @@ class Authorize_Page {
             ->change_data("state", $this->qreq->state)
             ->change_data("nonce", $this->qreq->nonce)
             ->change_data("client_id", $client->client_id)
-            ->change_data("redirect_uri", $this->qreq->redirect_uri);
-        $this->token->create();
+            ->change_data("redirect_uri", $this->qreq->redirect_uri)
+            ->insert();
 
         $this->client = $client;
         $this->qreq->print_header("Sign in", "authorize", ["action_bar" => "", "hide_header" => true, "body_class" => "body-signin"]);
@@ -181,7 +185,7 @@ class Authorize_Page {
         $buttons = [];
         $nav = $this->qreq->navigation();
         $top = "";
-        foreach (Contact::session_users($this->qreq) as $i => $email) {
+        foreach (Contact::session_emails($this->qreq) as $i => $email) {
             if ($email === "") {
                 continue;
             }
@@ -206,7 +210,8 @@ class Authorize_Page {
 
     private function handle_authconfirm() {
         if (!$this->qreq->code
-            || !($tok = TokenInfo::find_active($this->qreq->code, TokenInfo::OAUTHCODE, $this->conf))
+            || !($tok = TokenInfo::find($this->qreq->code, $this->conf))
+            || !$tok->is_active(TokenInfo::OAUTHCODE)
             || !($client = $this->find_client($tok->data("client_id")))) {
             $this->print_error_exit("<0>Invalid or expired authentication request");
         }
@@ -279,7 +284,7 @@ class Authorize_Page {
         $this->qreq->print_header("Sign in", "authorize", ["action_bar" => "", "hide_header" => true, "body_class" => "body-error"]);
         $this->conf->error_msg($m);
         $this->qreq->print_footer();
-        exit;
+        exit(0);
     }
 
     function go() {
@@ -303,7 +308,7 @@ class Authorize_Page {
         // `redirect_uri` must be present and match a configured value
         if (!isset($this->qreq->redirect_uri)) {
             $this->print_error_exit("<0>Authorization parameter <code>redirect_uri</code> missing");
-        } else if (!in_array($this->qreq->redirect_uri, $client->redirect_uri)) {
+        } else if (!in_array($this->qreq->redirect_uri, $client->redirect_uri, true)) {
             $this->print_error_exit("<0>Invalid authorization parameter <code>redirect_uri</code>");
         }
 
@@ -361,7 +366,8 @@ class Authorize_Page {
 
         // look up code
         if (!$this->qreq->code
-            || !($tok = TokenInfo::find_active($this->qreq->code, TokenInfo::OAUTHCODE, $this->conf))
+            || !($tok = TokenInfo::find($this->qreq->code, $this->conf))
+            || !$tok->is_active(TokenInfo::OAUTHCODE)
             || !$tok->data("id_token")
             || $tok->data("client_id") !== $this->qreq->client_id
             || $tok->data("redirect_uri") !== $this->qreq->redirect_uri) {

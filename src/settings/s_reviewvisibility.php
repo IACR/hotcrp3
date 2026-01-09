@@ -1,6 +1,6 @@
 <?php
 // settings/s_reviewvisibility.php -- HotCRP settings > decisions page
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
 
 class ReviewVisibility_SettingParser extends SettingParser {
     function set_oldv(Si $si, SettingValues $sv) {
@@ -34,7 +34,9 @@ class ReviewVisibility_SettingParser extends SettingParser {
         $srch = new PaperSearch($sv->conf->root_user(), $q);
         foreach ($srch->message_list() as $mi) {
             $sv->append_item_at($name, $mi);
-            $parent_setting && $sv->msg_at($parent_setting, "", $mi->status);
+            if ($parent_setting) {
+                $sv->append_item_at($parent_setting, new MessageItem($mi->status));
+            }
         }
         foreach ($srch->main_term()->preorder() as $qe) {
             if ($qe instanceof Tag_SearchTerm) {
@@ -43,7 +45,9 @@ class ReviewVisibility_SettingParser extends SettingParser {
                         && !$sv->conf->tags()->is_readonly($tag)) {
                         $sv->warning_at($name, "<5>PC members can change the tag ‘" . htmlspecialchars($tag) . "’. Tags referenced in visibility conditions should usually be " . $sv->setting_link("read-only", "tag_readonly") . ".");
                         $sv->warning_at("tag_readonly");
-                        $parent_setting && $sv->msg_at($parent_setting, "", 1);
+                        if ($parent_setting) {
+                            $sv->append_item_at($parent_setting, new MessageItem(1));
+                        }
                     }
                 }
             }
@@ -73,10 +77,13 @@ class ReviewVisibility_SettingParser extends SettingParser {
             . '<label for="review_visibility_author_condition" class="mr-2 uic js-settings-radioitem-click">Yes, for submissions matching this search:</label>'
             . '<div>' . $sv->feedback_at("review_visibility_author_condition")
             . $sv->feedback_at("review_visibility_author_tags")
-            . $sv->entry("review_visibility_author_condition", ["class" => "uii js-settings-radioitem-click papersearch need-suggest"])
+            . $sv->entry("review_visibility_author_condition", [
+                "class" => "uii js-settings-radioitem-click papersearch need-suggest",
+                "spellcheck" => false, "autocomplete" => "off"
+            ])
             . "</div></div>";
 
-        $hint = '<div class="f-hx if-response-active';
+        $hint = '<p class="f-d mt-0 if-response-active';
         if (!$sv->conf->setting("resp_active")) {
             $hint .= ' hidden';
         }
@@ -86,26 +93,11 @@ class ReviewVisibility_SettingParser extends SettingParser {
         } else {
             $hint .= 'Authors who can edit responses can see reviews independent of this setting.';
         }
-        $hint .= '</div>';
+        $hint .= '</p>';
 
         $sv->print_radio_table("review_visibility_author", $opts,
             'Can <strong>authors see reviews</strong> for their submissions?' . $hint);
         echo Ht::hidden("has_review_visibility_author_condition", 1);
-    }
-
-    static function print_author_exchange_comments(SettingValues $sv) {
-        echo '<div class="has-fold fold', $sv->vstr("comment_allow_author") ? "o" : "c", '">';
-        if ((int) $sv->vstr("review_blind") === Conf::BLIND_NEVER) {
-            $hint = "";
-        } else {
-            $hint = "Visible reviewer comments will be identified by “Reviewer A”, “Reviewer B”, etc.";
-        }
-        $sv->print_checkbox("comment_allow_author", "Authors can <strong>exchange comments</strong> with reviewers", [
-            "class" => "uich js-foldup",
-            "hint_class" => "fx",
-            "hint" => $hint
-        ]);
-        echo "</div>\n";
     }
 
     static function crosscheck(SettingValues $sv) {

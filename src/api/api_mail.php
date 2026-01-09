@@ -3,14 +3,14 @@
 // Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
 
 class Mail_API {
-    static function mailtext(Contact $user, Qrequest $qreq, PaperInfo $prow = null) {
+    static function mailtext(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
         if (!$user->isPC
             || ($prow && !$user->can_view_paper($prow))) {
             return JsonResult::make_permission_error();
         }
 
         $recipient = null;
-        if (($args = $qreq->subset_as_array("firstName", "first", "lastName", "last", "affiliation", "email"))) {
+        if (($args = $qreq->subset_as_array("given_name", "firstName", "first", "family_name", "lastName", "last", "affiliation", "email"))) {
             $recipient = Contact::make_keyed($user->conf, $args);
         }
 
@@ -26,8 +26,8 @@ class Mail_API {
         $rid = $qreq->r;
         if ($prow) {
             if (isset($rid)
-                && ctype_digit($rid)
-                && ($rrow = $prow->review_by_id(intval($rid)))
+                && ($ridn = stoi($rid)) > 0
+                && ($rrow = $prow->review_by_id($ridn))
                 && $user->can_view_review($prow, $rrow)) {
                 $mailinfo["rrow"] = $rrow;
             } else if ($qreq->template === "requestreview") {
@@ -95,7 +95,7 @@ class Mail_API {
         return $user->privChair || $user->contactId === (int) $logrow->contactId;
     }
 
-    static function maillog(Contact $user, Qrequest $qreq, PaperInfo $prow = null) {
+    static function maillog(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
         if (!$qreq->mailid || !ctype_digit($qreq->mailid)) {
             return JsonResult::make_missing_error("mailid");
         } else if (!$user->privChair) {

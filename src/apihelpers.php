@@ -4,8 +4,9 @@
 
 class APIHelpers {
     /** @param ?string $text
+     * @param ?string $field
      * @return Contact */
-    static function parse_user($text, Contact $viewer) {
+    static function parse_user($text, Contact $viewer, $field = null) {
         if (!isset($text)
             || $text === ""
             || strcasecmp($text, "me") === 0
@@ -13,15 +14,15 @@ class APIHelpers {
             || ($viewer->has_email() && strcasecmp($text, $viewer->email) === 0)) {
             return $viewer;
         }
-        if (ctype_digit($text)) {
-            $u = $viewer->conf->user_by_id(intval($text), USER_SLICE);
+        if (ctype_digit($text) && ($uid = stoi($text)) > 0) {
+            $u = $viewer->conf->user_by_id($uid, USER_SLICE);
         } else {
             $u = $viewer->conf->user_by_email($text, USER_SLICE);
         }
         if ($u) {
             return $u;
         } else if ($viewer->isPC) {
-            JsonResult::make_error(404, "<0>User not found")->complete();
+            JsonResult::make_not_found_error($field, "<0>User not found")->complete();
         } else {
             JsonResult::make_permission_error()->complete();
         }

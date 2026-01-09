@@ -151,16 +151,14 @@ class FormatSpec {
             $spageno = (string) $pageno;
             return $pages->$spageno ?? false;
         } else if (is_array($pages)) {
-            if (is_associative_array($pages)) {
-                return $pages[$pageno] ?? false;
-            } else {
-                return !in_array($pageno, $pages);
+            if (array_is_list($pages)) {
+                return !in_array($pageno, $pages, true);
             }
+            return $pages[$pageno] ?? false;
         } else if (is_int($pages)) {
             return $pages != $pageno;
-        } else {
-            return is_bool($pages) ? !$pages : true;
         }
+        return is_bool($pages) ? !$pages : true;
     }
 
     /** @param string $k
@@ -367,6 +365,9 @@ interface FormatChecker {
     function prepare(CheckFormat $cf, FormatSpec $spec);
     /** @return void */
     function check(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc);
+    /** @return bool */
+    function append_report(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc,
+                           MessageSet $ms);
     /** @return ?string */
     function report(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc);
 }

@@ -1,6 +1,5 @@
 <?php
 require 'lib.php';
-require_once '../finalLib.php';
 // This allows the submit server to update a paper to record
 // the final version was uploaded, or the slides were uploaded,
 // or a video was uploaded.

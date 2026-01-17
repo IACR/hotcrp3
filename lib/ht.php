@@ -372,6 +372,8 @@ class Ht {
         }
         $js["class"] = trim(($js["class"] ?? "") . " pseudohidden");
         $js["value"] = $value;
+        $js["aria-hidden"] = "true";
+        $js["tabindex"] = -1;
         return self::submit($name, "", $js);
     }
 
@@ -529,9 +531,8 @@ class Ht {
     static function link($html, $href, $js = null) {
         if ($js === null && is_array($href)) {
             return self::make_link($html, null, $href);
-        } else {
-            return self::make_link($html, $href, $js);
         }
+        return self::make_link($html, $href, $js);
     }
 
     /** @param string $html
@@ -713,9 +714,8 @@ class Ht {
             return "msg msg-warning";
         } else if ($status === -3 /* MessageSet::SUCCESS */) {
             return "msg msg-confirm";
-        } else {
-            return "msg msg-info";
         }
+        return "msg msg-info";
     }
 
     /** @param string $msg
@@ -732,11 +732,10 @@ class Ht {
                 }
             }
         }
-        if ($mx !== "") {
-            return "<div class=\"" . self::msg_class($status) . "\">{$mx}</div>";
-        } else {
+        if ($mx === "") {
             return "";
         }
+        return "<div class=\"" . self::msg_class($status) . "\">{$mx}</div>";
     }
 
     /** @param MessageItem|iterable<MessageItem>|MessageSet ...$mls
@@ -753,7 +752,7 @@ class Ht {
      * @param MessageItem|iterable<MessageItem>|MessageSet ...$mls
      * @return array{string,int} */
     static function fmt_feedback_msg_content($fmt, ...$mls) {
-        $mlx = MessageSet::fmt_list($fmt, ...$mls);
+        $mlx = MessageSet::make_fmt_list($fmt, ...$mls);
         if (($h = MessageSet::feedback_html($mlx)) !== "") {
             return [$h, MessageSet::list_status($mlx)];
         }

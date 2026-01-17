@@ -123,8 +123,7 @@ class Developer_UserInfo {
 
     /** @param int $n */
     function print_bearer_token(UserStatus $us, TokenInfo $tok, $n) {
-        $data = json_decode($tok->data ?? "{}", true) ?? [];
-        $note = $data["note"] ?? "";
+        $note = $tok->data("note") ?? "";
         echo '<div class="f-i w-text"><label class="f-c">',
             $note === "" ? "[Unnamed token]" : htmlspecialchars($note);
         $this->print_bearer_token_deleter($us, $tok, $n);
@@ -139,8 +138,7 @@ class Developer_UserInfo {
 
     /** @param int $n */
     function print_fresh_bearer_token(UserStatus $us, TokenInfo $tok, $n) {
-        $data = json_decode($tok->data ?? "{}", true) ?? [];
-        $note = $data["note"] ?? "";
+        $note = $tok->data("note") ?? "";
         echo '<div class="form-section form-outline-section mb-4 tag-yellow">',
             '<div class="f-i w-text mb-0"><label class="f-c">',
             $note === "" ? "[Unnamed token]" : htmlspecialchars($note),
@@ -232,7 +230,7 @@ class Developer_UserInfo {
             $token->set_invalid_at(0)->set_expires_at(0);
         } else {
             $expiry = (ctype_digit($exp) ? intval($exp) : 30) * 86400;
-            $token->set_invalid_after($expiry)->set_expires_after($expiry + 604800);
+            $token->set_invalid_in($expiry)->set_expires_in($expiry + 604800);
         }
 
         $sites = $us->qreq["bearer_token/new/sites"] ?? "here";

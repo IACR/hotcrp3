@@ -207,17 +207,24 @@ class TagInfo {
             return $this->autosearch;
         } else if (($this->flags & self::TFM_VOTES) !== 0) {
             return "#*~" . $this->tag;
-        } else {
-            return null;
         }
+        return null;
     }
     /** @return ?SearchTerm */
     function automatic_search_term() {
         if ($this->_autosearch_term === null
             && ($q = $this->automatic_search()) !== null) {
-            $this->_autosearch_term = (new PaperSearch($this->conf->root_user(), ["q" => $q, "t" => "all"]))
-                ->set_expand_automatic(true)
-                ->main_term();
+            $ua = $this->conf->set_updating_automatic_tags(true);
+            $this->_autosearch_term = new False_SearchTerm;
+            $this->_autosearch_term->set_float("circular_reference", true);
+
+            $srch = new PaperSearch($this->conf->root_user(), ["q" => $q, "t" => "all"]);
+            $this->_autosearch_term = $srch->main_term();
+            if ($srch->has_problem_at("circular_reference")) {
+                $this->_autosearch_term = new False_SearchTerm;
+                $this->_autosearch_term->set_float("circular_reference", iterator_to_array($srch->message_list_at("circular_reference")));
+            }
+            $this->conf->set_updating_automatic_tags($ua);
         }
         return $this->_autosearch_term;
     }
@@ -229,9 +236,8 @@ class TagInfo {
             return "count.pc(#_~{$this->tag}) || null";
         } else if (($this->flags & self::TF_ALLOTMENT) !== 0) {
             return "sum.pc(#_~{$this->tag}) || null";
-        } else {
-            return null;
         }
+        return null;
     }
 }
 
@@ -832,9 +838,8 @@ class TagMap {
     function is_chair($tag) {
         if ($tag[0] === "~") {
             return $tag[1] === "~";
-        } else {
-            return !!$this->find_having($tag, TagInfo::TF_CHAIR);
         }
+        return !!$this->find_having($tag, TagInfo::TF_CHAIR);
     }
     /** @param string $tag
      * @return bool */
@@ -1873,10 +1878,9 @@ class Tagger {
         } else if (!$always) {
             return "";
         } else if ($base === $tv) {
-            $q = "#{$base}";
-        } else {
-            $q = "order:#{$base}";
+            return "#{$base}";
         }
+        return "order:#{$base}";
     }
 
     /** @param list<string>|string $viewable

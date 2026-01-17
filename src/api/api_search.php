@@ -1,6 +1,6 @@
 <?php
 // api_search.php -- HotCRP search-related API calls
-// Copyright (c) 2008-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
 
 class Search_API {
     /** @return JsonResult|PaperSearch */
@@ -43,16 +43,44 @@ class Search_API {
         if ($pl instanceof JsonResult) {
             return $pl;
         }
+        $format = 0;
+        if ($qreq->format || $qreq->f) {
+            if (!isset($qreq->format)) {
+                return JsonResult::make_missing_error("format");
+            } else if (!isset($qreq->f)) {
+                return JsonResult::make_missing_error("f");
+            } else if ($qreq->format === "html") {
+                $format = PaperList::FORMAT_HTML;
+            } else if ($qreq->format === "text" || $qreq->format === "csv") {
+                $format = PaperList::FORMAT_CSV;
+            } else if ($qreq->format === "json") {
+                $format = PaperList::FORMAT_JSON;
+            } else {
+                return JsonResult::make_parameter_error("format");
+            }
+            $pl->parse_view($qreq->f, PaperList::VIEWORIGIN_MAX);
+        }
         $ih = $pl->ids_and_groups();
-        $jr = new JsonResult([
-            "ok" => true,
-            "message_list" => $pl->search->message_list(),
-            "ids" => $ih[0],
-            "groups" => $ih[1],
-            "search_params" => $pl->encoded_search_params()
-        ]);
-        if (friendly_boolean($qreq->hotlist) !== false) { // XXX should be `=== true`
+        $jr = JsonResult::make_ok();
+        if ($pl->search->has_message()) {
+            $jr->set("message_list", $pl->search->message_list());
+        }
+        $jr->set("ids", $ih[0]);
+        $jr->set("groups", $ih[1]);
+        $jr->set("search_params", $pl->encoded_search_params());
+        if (friendly_boolean($qreq->hotlist)) {
             $jr->set("hotlist", $pl->session_list_object()->info_string());
+        }
+        if ($format > 0) {
+            foreach ($pl->format_json($format, PaperList::VIEWORIGIN_MAX) as $k => $v) {
+                $jr->set($k, $v);
+            }
+        }
+        if (isset($qreq->session)
+            && $qreq->valid_token()
+            && !$qreq->is_head()
+            && friendly_boolean($qreq->session) === null) {
+            Session_API::change_session($qreq, $qreq->session);
         }
         return $jr;
     }
@@ -131,9 +159,12 @@ class Search_API {
         if (($qreq->action ?? "") === "") {
             return JsonResult::make_missing_error("action");
         }
-        $qreq->p = $qreq->p ?? "all";
-        $ssel = SearchSelection::make($qreq, $user, "p");
-        $action = ListAction::lookup($qreq->action, $user, $qreq, $ssel, ListAction::LOOKUP_API);
+        if (!isset($qreq->p)) {
+            $ssel = SearchSelection::make_default($qreq, $user);
+        } else {
+            $ssel = SearchSelection::make($qreq, $user, "p");
+        }
+        $action = ListAction::lookup($qreq->action, $user, $qreq, $ssel, ListAction::F_API);
         if ($action instanceof ListAction) {
             $action = $action->run($user, $qreq, $ssel);
         }
@@ -142,27 +173,45 @@ class Search_API {
 
     static function searchactions(Contact $user) {
         $fjs = [];
-        $cs = ListAction::components($user);
+        $cs = ListAction::components($user, ListAction::F_API);
         foreach ($cs->members("") as $rf) {
             if (str_starts_with($rf->name, "__")) {
                 continue;
             }
-            foreach ($cs->members($rf->name) as $uf) {
+            $ufs = make_array($rf, ...$cs->members($rf->name));
+            foreach ($ufs as $uf) {
                 if (str_starts_with($uf->name, "__")
-                    || !($uf->allow_api ?? false)
                     || (isset($uf->allow_if) && !$cs->allowed($uf->allow_if, $uf))
+                    || ($uf->api ?? null) === false
                     || !isset($uf->function)) {
                     continue;
                 }
-                $fj = ["action" => $uf->name];
-                if (isset($uf->description)) {
-                    $fj["description"] = $uf->description;
-                }
+                $fj = ["name" => $uf->name];
                 if ($uf->get ?? false) {
                     $fj["get"] = true;
                 }
                 if ($uf->post ?? false) {
                     $fj["post"] = true;
+                }
+                if (isset($uf->title)) {
+                    if ($uf !== $rf && isset($rf->title)) {
+                        $fj["title"] = $rf->title . "/" . $uf->title;
+                    } else {
+                        $fj["title"] = $uf->title;
+                    }
+                }
+                if (isset($uf->description)) {
+                    $fj["description"] = $uf->description;
+                }
+                if (isset($uf->parameters)) {
+                    if (is_string($uf->parameters)) {
+                        $vos = new ViewOptionSchema(...explode(" ", $uf->parameters));
+                    } else {
+                        $vos = new ViewOptionSchema(...$uf->parameters);
+                    }
+                    foreach ($vos->help_order() as $vot) {
+                        $fj["parameters"][] = $vot->unparse_export();
+                    }
                 }
                 $fjs[] = $fj;
             }

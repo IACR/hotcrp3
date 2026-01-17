@@ -1,9 +1,9 @@
 <?php
 // init.php -- HotCRP initialization (test or site)
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 declare(strict_types=1);
-const HOTCRP_VERSION = "3.1";
+const HOTCRP_VERSION = "3.2";
 
 // All positive review types must be 1 digit
 const REVIEW_META = 5;
@@ -348,7 +348,16 @@ function initialize_user($qreq, $kwarg = null) {
     $nav = $qreq->navigation();
     if (str_starts_with($nav->shifted_path, "u/")) {
         // use explicit account index
-        $uindex = (int) substr($nav->shifted_path, 2);
+        $s = substr($nav->shifted_path, 2, -1);
+        if (ctype_digit($s)) {
+            $uindex = (int) $s;
+        } else if (($e = $conf->opt["publicUserPaths"][$s] ?? null)) {
+            $us = [$e];
+            $nus = 1;
+            $uindex = 0;
+        } else {
+            $uindex = -1;
+        }
     } else if ($nus > 1) {
         // no explicit account index, but a choice among accounts
         if ($reqemail !== "") {
@@ -405,12 +414,12 @@ function initialize_user($qreq, $kwarg = null) {
 
     // look up and activate user
     $muser = ($conf->fresh_user_by_email($uemail)
-              ?? Contact::make_email($conf, $uemail, true))
+              ?? Contact::make_email_cflags($conf, $uemail, 0))
         ->activate($qreq, true, $uindex);
     Contact::set_main_user($muser);
     $qreq->set_user($muser);
 
-    // author view capability documents should not be indexed
+    // author view capability pages should not be indexed
     if ($muser->email === ""
         && $muser->has_author_view_capability()
         && !$conf->opt("allowIndexPapers")) {

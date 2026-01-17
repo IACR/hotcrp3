@@ -2722,7 +2722,7 @@ class Formula implements JsonSerializable {
         $t .= $state->statement_text();
         if ($expr !== null) {
             if ($sortable & 3) {
-                $t .= "\n  \$x = $expr;";
+                $t .= "\n  \$x = {$expr};";
             }
             if ($sortable & 1) {
                 $t .= "\n  \$x = is_bool(\$x) ? (int) \$x : \$x;";
@@ -2736,9 +2736,14 @@ class Formula implements JsonSerializable {
         return $t;
     }
 
-    /** @param int $sortable
+    static private function protect_string($s) {
+        return str_replace("?>", "? >", simplify_whitespace($s));
+    }
+
+   /** @param int $sortable
      * @return callable(PaperInfo,?int,Contact):mixed */
-    private function _compile_function($sortable) {
+  /** KSM disabled this because we don't need the capability. */
+  private function IACR_DISABLE_compile_function($sortable) {
         if ($this->check()) {
             $state = new FormulaCompiler($this->user);
             $expr = $this->_parse->fexpr->compile($state);

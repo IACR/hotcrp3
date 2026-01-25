@@ -92,10 +92,14 @@ function get_iacr_url($optionId, $paperId) {
           $res = $stmt->bindParam(':optionId', $pubtype_id, PDO::PARAM_INT);
           $res = $stmt->execute();
           $row = $stmt->fetch(PDO::FETCH_ASSOC);
-          $pubtype = $row['value'];
-          error_log('pubtype was ' . $pubtype);
-          // These match what create_conf.py will create in the PaperOption table and the enum values
-          // publish.iacr.org expects.
+          if ($row) {
+            $pubtype = $row['value'];
+            error_log('pubtype was ' . $pubtype);
+            // These match what create_conf.py will create in the PaperOption table and the enum values
+            // publish.iacr.org expects.
+          } else {
+            $pubtype = 1;
+          }
           $pubtype_values = array(1 => 'RESEARCH',
                                   2 => 'SOK',
                                   3 => 'ERRATA');

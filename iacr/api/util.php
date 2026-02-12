@@ -68,6 +68,7 @@ function get_iacr_url($optionId, $paperId) {
                                  $email,
                                  'hc',
                                  $dbName);
+  error_log('paper_msg=' . $paper_msg);
   $querydata = array('venue' => $iacrType,
                      'year' => $Opt['year'],
                      'paperId' => $paperId,
@@ -94,12 +95,12 @@ function get_iacr_url($optionId, $paperId) {
           $row = $stmt->fetch(PDO::FETCH_ASSOC);
           if ($row) {
             $pubtype = $row['value'];
-            error_log('pubtype was ' . $pubtype);
-            // These match what create_conf.py will create in the PaperOption table and the enum values
-            // publish.iacr.org expects.
           } else {
-            $pubtype = 1;
+            $pubtype = 1; // default for RESEARCH.
           }
+          error_log('pubtype was ' . $pubtype);
+          // These match what create_conf.py will create in the PaperOption table and the enum values
+          // publish.iacr.org expects.
           $pubtype_values = array(1 => 'RESEARCH',
                                   2 => 'SOK',
                                   3 => 'ERRATA');

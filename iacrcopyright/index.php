@@ -64,10 +64,7 @@ try {
     exit;
   }
   if ($stmt->fetchColumn() > 0) {
-    showError("You already signed the copyright agreement");
-    $stmt = null;
-    $db = null;
-    return;
+     $warning = "You already signed the copyright agreement";
   }
   $stmt = null;
   // leave $db open
@@ -90,7 +87,7 @@ $substitutions = array('[$action]' => $action,
    '[$subId]' => $prow->paperId,
    '[$correspondingAuthor]' => $Me->firstName . ' ' . $Me->lastName
    );
-// We use one of two different copyright forms.
+// We use one of several different forms.
 switch($Opt["iacrType"]) {
   case "tosc":
     $substitutions['[$longName]'] = "IACR Transactions on Symmetric Cryptology";
@@ -216,7 +213,7 @@ if ($document->loadHTML($copyright)) {
   exit;
 }
 
-$sql = "INSERT INTO copyright (paperId,shortName,longName,title,authorInformation,corresponding_author,form,signedBy1,signedBy2,signedBy3,agency,country) VALUES (:paperId,:shortName,:longName,:title,:authorInformation,:corresponding_author,:form,:signedBy1,:signedBy2,:signedBy3,:agency,:country)";
+$sql = "REPLACE INTO copyright (paperId,shortName,longName,title,authorInformation,corresponding_author,form,signedBy1,signedBy2,signedBy3,agency,country) VALUES (:paperId,:shortName,:longName,:title,:authorInformation,:corresponding_author,:form,:signedBy1,:signedBy2,:signedBy3,:agency,:country)";
 try {
   if (!$stmt = $db->prepare($sql)) {
     showError("unable to prepare SQL: $sql");
@@ -250,7 +247,7 @@ try {
   // the hotcrp database.
   $optionId = getCopyrightOptionId();
   if ($optionId === NULL) die('No copyright id');
-  $Conf->q("INSERT INTO PaperOption set paperId=?,optionId=?,value=?", $prow->paperId, $optionId, 1);
+  $Conf->q("REPLACE INTO PaperOption set paperId=?,optionId=?,value=?", $prow->paperId, $optionId, 1);
 
   echo "<html><body><h3>Your copyright form was successfully submitted</h3>";
   echo "<p><strong><a href=\"" . $Conf->hoturl("paper/" . $prow->paperId . "/edit") . "\">Return</strong></p>";

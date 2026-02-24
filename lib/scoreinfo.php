@@ -41,7 +41,7 @@ class ScoreInfo {
         "counts", "average", "median", "variance", "maxmin", "my"
     ];
     /** @readonly */
-    static public $score_sort_enum = "counts,C,M,count;average,A,avg,av,ave,mean;median,E,med;variance,V,var;maxmin,D,max-min;my,Y,myscore";
+    static public $score_sort_enum = "counts,C,M,count|average,A,avg,av,ave,mean|median,E,med|variance,V,var|maxmin,D,max-min|my,Y,myscore";
 
     /** @param ?string $x
      * @return null|'counts'|'average'|'median'|'variance'|'maxmin'|'my' */
@@ -49,7 +49,7 @@ class ScoreInfo {
         if ($x === null || in_array($x, self::$score_sorts, true)) {
             return $x;
         }
-        return ViewOptionSchema::validate_enum($x, self::$score_sort_enum);
+        return ViewOptionType::parse_enum($x, self::$score_sort_enum);
     }
 
     /** @return list<string> */

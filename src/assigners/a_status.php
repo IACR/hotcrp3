@@ -94,19 +94,9 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
         $m = $state->remove(new Status_Assignable($prow->paperId));
         $res = $m[0];
         if ($this->xtype === "submit") {
-            if ($res->_submitted === 0) {
-                if (($whynot = $state->user->perm_finalize_paper($prow))) {
-                    return new AssignmentError($whynot);
-                }
-                $res->_submitted = ($res->_withdrawn > 0 ? -Conf::$now : Conf::$now);
-            }
+            $this->apply_submit($res, $prow, $state);
         } else if ($this->xtype === "unsubmit") {
-            if ($res->_submitted !== 0) {
-                if (($whynot = $state->user->perm_edit_paper($prow))) {
-                    return new AssignmentError($whynot);
-                }
-                $res->_submitted = 0;
-            }
+            $this->apply_unsubmit($res, $prow, $state);
         } else if ($this->xtype === "withdraw") {
             if ($res->_withdrawn === 0) {
                 assert($res->_submitted >= 0);
@@ -131,22 +121,64 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                 $res->_notify = $notify;
             }
         } else if ($this->xtype === "revive") {
-            if ($res->_withdrawn !== 0) {
-                assert($res->_submitted <= 0);
-                if (($whynot = $state->user->perm_revive_paper($prow))) {
-                    return new AssignmentError($whynot);
-                }
-                $res->_withdrawn = 0;
-                if ($res->_submitted === -100) {
-                    $res->_submitted = Conf::$now;
-                } else {
-                    $res->_submitted = -$res->_submitted;
-                }
-                $res->_withdraw_reason = null;
-            }
+            $this->apply_revive($res, $prow, $state);
         }
         $state->add($res);
         return true;
+    }
+    private function apply_submit(Status_Assignable $res, PaperInfo $prow,
+                                  AssignmentState $state) {
+        if ($res->_withdrawn !== 0) {
+            $state->paper_error("<0>#{$prow->paperId} has been withdrawn");
+        } else if ($res->_submitted !== 0) {
+            // already submitted
+        } else if (($whynot = $state->user->perm_finalize_paper($prow))) {
+            $state->paper_error("<5>" . $whynot->unparse_html());
+        } else {
+            $this->check_submit($res, $prow, $state);
+        }
+    }
+    private function apply_unsubmit(Status_Assignable $res, PaperInfo $prow,
+                                    AssignmentState $state) {
+        if ($res->_withdrawn !== 0) {
+            $state->paper_error("<0>#{$prow->paperId} has been withdrawn");
+        } else if ($res->_submitted === 0) {
+            // already unsubmitted
+        } else if (($whynot = $state->user->perm_unsubmit_paper($prow))) {
+            $state->paper_error("<5>" . $whynot->unparse_html());
+        } else {
+            $res->_submitted = 0;
+        }
+    }
+    private function apply_revive(Status_Assignable $res, PaperInfo $prow,
+                                  AssignmentState $state) {
+        if ($res->_withdrawn === 0) {
+            // already withdrawn
+        } else if (($whynot = $state->user->perm_revive_paper($prow))) {
+            $state->paper_error("<5>" . $whynot->unparse_html());
+        } else if ($res->_submitted === 0) {
+            $res->_withdrawn = 0;
+        } else {
+            $this->check_submit($res, $prow, $state);
+        }
+    }
+    private function check_submit(Status_Assignable $res, PaperInfo $prow,
+                                  AssignmentState $state) {
+        $prow->set_prop("timeWithdrawn", $res->_withdrawn);
+        $prow->set_prop("timeSubmitted", $res->_submitted);
+        $pstatus = new PaperStatus($state->user);
+        $j = (object) ["submitted" => true, "draft" => false, "withdrawn" => false];
+        if ($pstatus->prepare_save_paper_json($j, $prow)) {
+            $res->_submitted = $prow->timeSubmitted;
+        } else {
+            foreach ($pstatus->message_list() as $mi) {
+                if ($mi->message !== "")
+                    $state->paper_error($mi->message);
+            }
+            $res->_submitted = 0;
+        }
+        $res->_withdrawn = 0;
+        $prow->abort_prop();
     }
 }
 
@@ -162,9 +194,8 @@ class Status_Assigner extends Assigner {
             return "Withdrawn";
         } else if ($this->item->get($type, "_submitted")) {
             return "Submitted";
-        } else {
-            return "Not ready";
         }
+        return "Not ready";
     }
     function unparse_display(AssignmentSet $aset) {
         return '<del>' . $this->status_html(true) . '</del> '
@@ -200,17 +231,15 @@ class Status_Assigner extends Assigner {
             $aset->user->log_activity($submitted > 0 ? "Paper submitted" : "Paper unsubmitted", $this->pid);
         }
         if (($submitted > 0) !== ($old_submitted > 0)) {
-            $aset->register_cleanup_function("papersub", function ($vals) use ($aset) {
+            $aset->register_cleanup_function("papersub", function ($aset, $vals) {
                 $aset->conf->update_papersub_setting(min($vals));
             }, $submitted > 0 ? 1 : 0);
-            $aset->register_cleanup_function("paperacc", function ($vals) use ($aset) {
+            $aset->register_cleanup_function("paperacc", function ($aset, $vals) {
                 $aset->conf->update_paperacc_setting(min($vals));
             }, 0);
         }
         if ($withdrawn > 0 && $old_withdrawn <= 0 && ($this->item["_notify"] ?? true)) {
-            $aset->register_cleanup_function("withdraw {$this->pid}", function () use ($aset) {
-                $this->notify_for_withdraw($aset);
-            });
+            $aset->register_cleanup_function("withdraw {$this->pid}", [$this, "notify_for_withdraw"]);
         }
     }
 

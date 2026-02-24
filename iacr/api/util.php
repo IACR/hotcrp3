@@ -68,6 +68,7 @@ function get_iacr_url($optionId, $paperId) {
                                  $email,
                                  'hc',
                                  $dbName);
+  error_log('paper_msg=' . $paper_msg);
   $querydata = array('venue' => $iacrType,
                      'year' => $Opt['year'],
                      'paperId' => $paperId,
@@ -77,9 +78,9 @@ function get_iacr_url($optionId, $paperId) {
                      'app' => 'hc');
   switch($optionId) {
     case PaperOption::IACR_FINAL_ID:
-      if ($iacrType !== 'cic') {
+      if ($iacrType !== 'cic' && $iacrType !== 'tosc') {
         return 'https://iacr.org/submit/upload/paper.php?' . http_build_query($querydata);
-      } else { // 'cic' goes to publish.iacr.org instead.
+      } else { // 'cic' and 'tosc' go to publish.iacr.org instead.
         // we need acceptance date and submission date.
         try {
           $db = new PDO("mysql:host=localhost;dbname=$dbName;charset=utf8",
@@ -92,7 +93,11 @@ function get_iacr_url($optionId, $paperId) {
           $res = $stmt->bindParam(':optionId', $pubtype_id, PDO::PARAM_INT);
           $res = $stmt->execute();
           $row = $stmt->fetch(PDO::FETCH_ASSOC);
-          $pubtype = $row['value'];
+          if ($row) {
+            $pubtype = $row['value'];
+          } else {
+            $pubtype = 1; // default for RESEARCH.
+          }
           error_log('pubtype was ' . $pubtype);
           // These match what create_conf.py will create in the PaperOption table and the enum values
           // publish.iacr.org expects.
@@ -121,7 +126,7 @@ function get_iacr_url($optionId, $paperId) {
           $db = null;
           $iacr_paperid = iacr_paperid($paperId);
           $authmsg = $iacr_paperid . $Opt['shortName'] . $paperId . 'candidate' . $submitted . $accepted;
-          $authmsg = $authmsg . 'cic' . $Opt['volume'] . $Opt['issue'] . $pubtype;
+          $authmsg = $authmsg . $iacrType . $Opt['volume'] . $Opt['issue'] . $pubtype;
           $auth = hash_hmac('sha256', $authmsg, $Opt['publish_shared_key']);
           $querydata = array('paperid' => $iacr_paperid,
                              'auth' => $auth,
@@ -133,8 +138,11 @@ function get_iacr_url($optionId, $paperId) {
                              'email' => $email,
                              'hotcrp' => $Opt['shortName'],
                              'hotcrp_id' => $paperId,
-                             'journal' => 'cic',
+                             'journal' => $iacrType,
                              'pubtype' => $pubtype);
+          if (str_starts_with($Opt['shortName'], 'fake')) {
+            return 'https://publishtest.iacr.org/submit?' . http_build_query($querydata);
+          }
           return 'https://publish.iacr.org/submit?' . http_build_query($querydata);
         } catch (PDOException $e) {
           $submitted = 'error';

@@ -149,7 +149,7 @@ class Paper_Page {
     function handle_update() {
         $conf = $this->conf;
         // XXX lock tables
-        $is_new = $this->prow->paperId <= 0;
+        $is_new = $this->prow->is_new();
         $was_submitted = $this->prow->timeSubmitted > 0;
         $is_final = $this->prow->phase() === PaperInfo::PHASE_FINAL
             && $this->qreq["status:phase"] === "final";
@@ -166,7 +166,7 @@ class Paper_Page {
             if ($this->ps->has_error_at("status:if_unmodified_since")) {
                 $this->handle_if_unmodified_since();
             } else {
-                $this->ps->prepend_item(MessageItem::error("<0>Changes not saved; please correct these errors and try again."));
+                $this->ps->prepend_item(MessageItem::error("<5><strong>Changes not saved.</strong> Please correct these issues and try again."));
             }
             $conf->feedback_msg($this->ps->decorated_message_list());
             return;
@@ -174,20 +174,17 @@ class Paper_Page {
 
         // check deadlines
         // NB PaperStatus also checks deadlines now; this is likely redundant.
-        if ($is_new) {
-            // we know that can_start_paper implies can_finalize_paper
-            $whynot = $this->user->perm_start_paper($this->prow);
-        } else {
-            $whynot = $this->user->perm_edit_paper($this->prow);
-            if ($whynot
-                && !$is_final
-                && !count(array_diff($this->ps->changed_keys(), ["contacts", "status"]))) {
-                $whynot = $this->user->perm_finalize_paper($this->prow);
-            }
+        $whynot = $this->user->perm_edit_paper($this->prow);
+        if ($whynot
+            && !$is_new
+            && !$is_final
+            && !count(array_diff($this->ps->changed_keys(), ["contacts", "status"]))) {
+            $whynot = $this->user->perm_finalize_paper($this->prow);
         }
         if ($whynot) {
             $conf->feedback_msg($whynot->set("expand", true)->message_list());
             $this->useRequest = !$is_new; // XXX used to have more complex logic
+            $this->ps->abort_save();
             return;
         }
 
@@ -234,7 +231,7 @@ class Paper_Page {
             } else {
                 $ml[] = MessageItem::urgent_note($conf->_("<0>Please correct these issues and save again."));
             }
-        } else if ($this->ps->has_problem()
+        } else if (($this->ps->has_problem() || $this->ps->has_urgent_note())
                    && $this->user->can_edit_paper($new_prow)) {
             $ml[] = MessageItem::warning_note($conf->_("<0>Please check these issues before completing the {submission}."));
         }
@@ -258,7 +255,6 @@ class Paper_Page {
         if (!$this->ps->has_error() || $new_prow->is_new()) {
             $conf->redirect_self($this->qreq, ["p" => $new_prow->paperId, "m" => "edit"]);
         }
-        $this->useRequest = false;
     }
 
     function handle_updatecontacts() {
@@ -293,7 +289,6 @@ class Paper_Page {
         if (!$this->ps->has_error()) {
             $conf->redirect_self($this->qreq);
         }
-        $this->useRequest = false;
     }
 
     private function prepare_edit_mode() {
@@ -415,12 +410,12 @@ class Paper_Page {
         $pp->load_prow();
 
         // new papers: maybe fix user, maybe error exit
-        if ($pp->prow->paperId === 0) {
+        if ($pp->prow->is_new()) {
             if (!$pp->prow->submission_round()->time_register(true)
                 && $user->privChair) {
                 $user->add_overrides(Contact::OVERRIDE_CONFLICT);
             }
-            if (($perm = $user->perm_start_paper($pp->prow))) {
+            if (($perm = $user->perm_edit_paper($pp->prow))) {
                 $pp->error_exit($perm);
             }
         }

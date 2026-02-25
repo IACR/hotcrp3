@@ -141,6 +141,7 @@ class PaperOption implements JsonSerializable {
         // IACR START
         "iacrcb" => "+IACRCB_PaperOption",
         "iacrlink" => "+IACRLink_PaperOption",
+        "iacrdropdown" => "+IACRDropdown_PaperOption",
         // IACR END
         "attachments" => "+Attachments_PaperOption",
         "topics" => "+Topics_PaperOption"
@@ -1284,6 +1285,35 @@ Class IACRLink_PaperOption extends PaperOption {
       echo '</div>';
     }
 }
+
+class IACRDropdown_PaperOption extends Selector_PaperOption {
+
+    function print_web_edit(PaperTable $pt, $ov, $reqov) {
+      $pt->print_editable_option_papt($this, null,
+                                      $this->type === "iacrdropdown"
+                                    ? ["for" => $this->readable_formid()]
+                                    : ["id" => $this->readable_formid(), "for" => false, "fieldset" => true]);
+      echo '<div class="papev">';
+      $sel = [];
+      if (!$ov->value) {
+        $sel[0] = "(Choose one)";
+      }
+      foreach ($this->values() as $i => $s) {
+        if ($s !== null)
+          $sel[$i + 1] = $s;
+      }
+      echo Ht::select($this->formid, $sel, $reqov->value,
+                      ["id" => $this->readable_formid(),
+                       "class" => get_class($this), // To recognize IACRDropdown_PaperOption
+                       "data-default-value" => $ov->value ?? 0]);
+      echo "</div>", $this->type === "dropdown" ? "</div>" : "</fieldset>", "\n\n";
+    }
+
+    function present_script_expression() {
+        return ["type" => "iacrdropdown", "formid" => $this->formid];
+    }
+}
+
 // IACR END
 
 trait Multivalue_OptionTrait {

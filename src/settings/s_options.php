@@ -273,6 +273,7 @@ class Options_SettingParser extends SettingParser {
             $ij = $this->basic_intrinsic_json($this->sfs->option_id);
             $content = "Intrinsic field (" . htmlspecialchars($ij->name) . ")";
          } elseif ($this->sfs->option_id == PaperOption::IACR_FINAL_ID ||
+                   $this->sfs->option_id == PaperOption::IACR_PUBTYPE_ID ||
                    $this->sfs->option_id == PaperOption::IACR_COPYRIGHT_ID) {
             $content = "IACR field";
         } else {

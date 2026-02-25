@@ -4,12 +4,6 @@
         "function": "+Checkbox_PaperOption"
     },
   {
-    "name": "iacrdropdown",
-    "title": "IACR dropdown",
-    "order": 135,
-    "function": "+IACRSelect_PaperOption"
-  },
-  {
     "name": "iacrcb",
     "title": "IACR Checkbox",
     "order": 150,
@@ -27,6 +21,13 @@
         "conversions": [{"from": "radio"}, {"to": "radio"}],
         "properties": ["common", "values"]
     },
+  {
+    "name": "iacrdropdown",
+    "title": "IACR dropdown",
+    "order": 135,
+    "function": "+IACRDropdown_PaperOption",
+    "properties": ["common", "values"]
+  },
     {
         "name": "radio", "title": "Radio buttons", "order": 300,
         "function": "+Selector_PaperOption",

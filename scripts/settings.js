@@ -3149,3 +3149,16 @@ hotcrp.settings = {
 };
 
 })();
+
+addEventListener("load", (ev) => {
+  // I don't know how to select the right one reliably with css.
+  document.querySelectorAll('div.option-3777 textarea').forEach((el) => {
+    if (el.id.endsWith('/values_text')) {
+      el.readOnly = true;
+      let warning = document.createElement('p');
+      warning.style.color='red';
+      warning.innerText = 'The choices may not be changed because downstream software depends on the ordering. You may change the description to tell authors which are acceptable.';
+      el.after(warning);
+    }
+  });
+});

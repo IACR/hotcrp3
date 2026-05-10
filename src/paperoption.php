@@ -20,6 +20,7 @@ class PaperOption implements JsonSerializable {
     const IACR_SLIDES_ID = 3555;
     const IACR_VIDEO_ID = 3666;
     const IACR_PUBTYPE_ID = 3777;
+    const IACR_RESUBMISSION_ID = 3888;
     // IACR end
     /** @var Conf
      * @readonly */

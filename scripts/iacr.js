@@ -24,3 +24,19 @@ function iacrSubmitAndUploadCheckboxes() {
     removeClickEventOnCheckbox(checkboxes[i]);
   }
 }
+
+addEventListener("load", (ev) => {
+  let urlfield = document.querySelector('textarea#resubmission');
+  if (urlfield) {
+    urlfield.addEventListener('input', () => {
+      reg = new RegExp('^https://submit.iacr.org/[a-zA-Z0-9_]+/paper/[0-9]{1,4}$');
+      console.log(urlfield.value);
+      if (reg.test(urlfield.value)) {
+        urlfield.setCustomValidity('');
+      } else {
+        urlfield.setCustomValidity('The URL should have the form https://submit.iacr.org/<venue>/paper/<number>')
+      }
+      urlfield.reportValidity();
+    });
+  }
+});

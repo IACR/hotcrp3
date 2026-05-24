@@ -458,7 +458,7 @@
     },
     {
         "name": "decisions/decision-types", "order": 400,
-        "title": "Decision types",
+        "title": "Decision types (do not change a name after a decision is assigned)",
         "print_function": "Decision_SettingParser::print",
         "settings": ["decision"]
     },

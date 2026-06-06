@@ -39,7 +39,7 @@ try {
       $paper['authors'][] = $name;
       $paper['affiliations'][] = $author->affiliation;
     }
-    if ($Opt['iacrType'] == 'cic') {
+    if ($Opt['iacrType'] == 'cic' || $Opt['iacrType'] == 'tosc') {
       $paper['paperid'] = iacr_paperid($paper['paperId']);
     }
     unset($paper['authorInformation']);

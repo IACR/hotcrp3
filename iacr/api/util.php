@@ -282,10 +282,9 @@ function get_iacr_url($optionId, $paperId) {
           // publish.iacr.org expects.
           $pubtype_values = array(1 => 'RESEARCH',
                                   2 => 'SOK',
-                                  3 => 'ADDENDUM',
-                                  4 => 'CORRIGENDUM',
-                                  5 => 'PREFACE',
-                                  6 => 'ERRATUM');
+                                  3 => 'CORRIGENDUM',
+                                  4 => 'ADDENDUM',
+                                  5 => 'PREFACE');
           $pubtype = $pubtype_values[$pubtype];
           $sql = "SELECT timeSubmitted FROM Paper WHERE paperId=:paperId";
           $stmt = $db->prepare($sql);

@@ -1,6 +1,6 @@
 <?php
 // tagsearchmatcher.php -- HotCRP helper class for tag search
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class TagSearchMatcher {
     /** @var Contact */
@@ -71,24 +71,23 @@ class TagSearchMatcher {
             } else {
                 $cids = ContactSearch::make_pc($c, $this->user)->user_ids();
             }
-            if (empty($cids)) {
-                $this->_errors[] = "<0>#{$tag} matches no users";
+            if (!$this->user->can_view_some_peruser_tag()) {
+                if (in_array($this->user->contactId, $cids, true)) {
+                    $cids = [$this->user->contactId];
+                } else {
+                    $this->_errors[] = "<0>You can’t search other users’ twiddle tags";
+                    return false;
+                }
+            } else if (empty($cids)) {
+                $this->_errors[] = "<0>No PC members match ‘{$c}’";
                 return false;
             }
-            if ($this->user->can_view_some_peruser_tag()) {
-                $xcids = $cids;
-            } else if (in_array($this->user->contactId, $cids, true)) {
-                $xcids = [$this->user->contactId];
-            } else {
-                $this->_errors[] = "<0>You can’t search other users’ twiddle tags";
-                return false;
-            }
-            if (count($xcids) > 1 && !$allow_star_any) {
+            if (count($cids) > 1 && !$allow_star_any) {
                 $this->_errors[] = "<0>Wildcard searches like #{$tag} aren’t allowed here";
                 return false;
             }
-            if (count($xcids) === 1 || $this->_avoid_regex) {
-                foreach ($xcids as $xcid) {
+            if (count($cids) === 1 || $this->_avoid_regex) {
+                foreach ($cids as $xcid) {
                     $this->add_tag($xcid . $checktag);
                 }
             } else if ($c === "*") {
@@ -96,7 +95,7 @@ class TagSearchMatcher {
                 $this->add_tag_regex(" \\d+{$ct}#", "[0-9]+" . str_replace("\\S*", ".*", $ct));
             } else {
                 $ct = str_replace("\\*", "\\S*", preg_quote($checktag));
-                $cidt = join("|", $xcids);
+                $cidt = join("|", $cids);
                 $this->add_tag_regex(" (?:{$cidt}){$ct}#", "({$cidt})" . str_replace("\\S*", ".*", $ct));
             }
         } else {
@@ -105,7 +104,8 @@ class TagSearchMatcher {
         return true;
     }
 
-    /** @param string $tag */
+    /** @param string $tag
+     * @return $this */
     function add_tag($tag) {
         if ($tag === "any" || $tag === "none") {
             $this->_mtype = $tag === "any" ? -1 : -2;
@@ -127,6 +127,16 @@ class TagSearchMatcher {
             }
         }
         $this->_re = null;
+        return $this;
+    }
+
+    /** @param list<string> $tag_list
+     * @return $this */
+    function add_tag_list($tag_list) {
+        foreach ($tag_list as $tag) {
+            $this->add_tag($tag);
+        }
+        return $this;
     }
 
     /** @param string $regex
@@ -157,6 +167,11 @@ class TagSearchMatcher {
         return $this->_valm;
     }
 
+
+    /** @return bool */
+    function is_empty() {
+        return $this->_mtype === 0 && empty($this->_tagpat) && empty($this->_valm);
+    }
 
     /** @return ?string */
     function single_tag() {
@@ -209,7 +224,7 @@ class TagSearchMatcher {
 
     private function sqlexpr_tagpart($table) {
         if ($this->_mtype > 0) {
-            return Dbl::format_query($this->user->conf->dblink, "$table.tag?a", $this->_tagpat);
+            return Dbl::format_query($this->user->conf->dblink, "{$table}.tag?a", $this->_tagpat);
         } else if ($this->_mtype === 0
                    && (!empty($this->_sql_tagregex) || !empty($this->_tagpat))) {
             $res = $this->_sql_tagregex;
@@ -219,22 +234,30 @@ class TagSearchMatcher {
             $regex = count($res) > 1 ? "^(" . join("|", $res) . ")$" : "^{$res[0]}$";
             $dbl = $this->user->conf->dblink;
             return Dbl::format_query($dbl, "{$table}.tag regexp " . Dbl::utf8ci($dbl, "?"), $regex);
-        } else {
-            return null;
         }
+        return null;
     }
 
     /** @return ?string */
     function sqlexpr($table) {
-        if (($setp = $this->sqlexpr_tagpart($table)) !== null) {
-            $s = [$setp];
-            foreach ($this->_valm as $valm) {
-                $s[] = "{$table}.tagIndex" . $valm->comparison();
-            }
-            return "(" . join(" and ", $s) . ")";
-        } else {
+        $setp = $this->sqlexpr_tagpart($table);
+        if ($setp === null) {
             return null;
         }
+        $s = [$setp];
+        foreach ($this->_valm as $valm) {
+            $s[] = "{$table}.tagIndex" . $valm->comparison();
+        }
+        return "(" . join(" and ", $s) . ")";
+    }
+
+    /** @return ?string */
+    function exists_sqlexpr($base_table = "Paper") {
+        $sqle = $this->sqlexpr("PaperTag");
+        if ($sqle === null) {
+            return null;
+        }
+        return "exists (select * from PaperTag where paperId={$base_table}.paperId and {$sqle})";
     }
 
     /** @return bool */
@@ -268,9 +291,8 @@ class TagSearchMatcher {
             return stripos($taglist, " {$this->_tagpat[0]}#") !== false;
         } else if ($this->_mtype === -2) {
             return !preg_match($this->regex(), $taglist);
-        } else {
-            return preg_match($this->regex(), $taglist);
         }
+        return preg_match($this->regex(), $taglist);
     }
 
     /** @param int|float $value
@@ -288,31 +310,30 @@ class TagSearchMatcher {
     function test($taglist) {
         if (empty($this->_valm)) {
             return $this->test_ignore_value($taglist);
-        } else {
-            $pos = 0;
-            while (true) {
-                if ($this->_mtype === 2) {
-                    if ($pos === 0) {
-                        $pos = stripos($taglist, " {$this->_tagpat[0]}#");
-                    } else {
-                        $pos = false;
-                    }
+        }
+        $pos = 0;
+        while (true) {
+            if ($this->_mtype === 2) {
+                if ($pos === 0) {
+                    $pos = stripos($taglist, " {$this->_tagpat[0]}#");
                 } else {
-                    if (preg_match($this->regex(), $taglist, $m, PREG_OFFSET_CAPTURE, $pos)) {
-                        $pos = $m[0][1];
-                    } else {
-                        $pos = false;
-                    }
+                    $pos = false;
                 }
-                if ($pos === false) {
-                    return false;
+            } else {
+                if (preg_match($this->regex(), $taglist, $m, PREG_OFFSET_CAPTURE, $pos)) {
+                    $pos = $m[0][1];
+                } else {
+                    $pos = false;
                 }
-                $pos = strpos($taglist, "#", $pos);
-                if ($this->test_value((float) substr($taglist, $pos + 1))) {
-                    return true;
-                }
-                ++$pos;
             }
+            if ($pos === false) {
+                return false;
+            }
+            $pos = strpos($taglist, "#", $pos);
+            if ($this->test_value((float) substr($taglist, $pos + 1))) {
+                return true;
+            }
+            ++$pos;
         }
     }
 
@@ -322,11 +343,10 @@ class TagSearchMatcher {
             return $this->_tagpat;
         } else if ($this->_mtype === -2) {
             return [];
-        } else {
-            $t0 = array_map(function ($t) { return " {$t}#"; },
-                            (AllTags_API::run($this->user))["tags"]);
-            $t1 = preg_grep($this->regex(), $t0);
-            return array_map(function ($t) { return substr($t, 1, -1); }, $t1);
         }
+        $t0 = array_map(function ($t) { return " {$t}#"; },
+                        (AllTags_API::run($this->user))["tags"]);
+        $t1 = preg_grep($this->regex(), $t0);
+        return array_map(function ($t) { return substr($t, 1, -1); }, $t1);
     }
 }

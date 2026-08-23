@@ -26,6 +26,7 @@ class Decision_SettingParser extends SettingParser {
     }
 
     function prepare_oblist(Si $si, SettingValues $sv) {
+        assert($si->name === "decision");
         $m = [];
         foreach ($sv->conf->decision_set() as $dec) {
             if ($dec->id !== 0) {
@@ -67,10 +68,10 @@ class Decision_SettingParser extends SettingParser {
         Icons::stash_defs("trash");
         echo Ht::unstash();
         if ($editable) {
-            echo Ht::button(Icons::ui_use("trash"), ["class" => "fx ui js-settings-decision-delete btn-licon-s ml-2 need-tooltip", "name" => "decision/{$ctr}/deleter", "aria-label" => "Delete decision", "tabindex" => "-1"]);
+            echo Ht::button(Icons::ui_use("trash", "m"), ["class" => "fx ui js-settings-decision-delete btn-licon-s ml-2 need-tooltip", "name" => "decision/{$ctr}/deleter", "aria-label" => "Delete decision", "tabindex" => "-1"]);
         }
         if ($count) {
-            echo Ht::link(plural($count, "submission"), $sv->conf->hoturl("search", ["q" => "dec:" . SearchWord::quote($sv->oldv("decision/{$ctr}/name"))]), ["class" => "ml-2"]);
+            echo $sv->conf->hotlink(plural($count, "submission"), "search", ["q" => "dec:" . SearchWord::quote($sv->oldv("decision/{$ctr}/name"))], ["class" => "ml-2"]);
         }
         if ($sv->has_error_at("decision/{$ctr}/category")) {
             echo '<label class="d-inline-block checki ml-2"><span class="checkc">',
@@ -190,12 +191,12 @@ class Decision_SettingParser extends SettingParser {
         $need_paperacc = false;
         if (!empty($dels)
             && ($pids = Dbl::fetch_first_columns($sv->conf->dblink, "select paperId from Paper where outcome?a", $dels))) {
-            $sv->conf->qe("update Paper set outcome=0 where outcome?a", $dels);
+            $sv->conf->qe("update Paper set outcome=0, timeAcceptNotified=0 where outcome?a", $dels);
             $sv->user->log_activity("Decision set: Unspecified", $pids);
             $need_paperacc = true;
         }
         if (!empty($changes)) {
-            $sv->conf->qe("update Paper set outcome=(CASE outcome " . join(" ", $changes) . " ELSE outcome END)");
+            $sv->conf->qe("update Paper set outcome=(CASE outcome " . join(" ", $changes) . " ELSE outcome END), timeAcceptNotified=IF(outcome>0,timeAcceptNotified,0)");
             $need_paperacc = true;
         }
         if ($need_paperacc) {

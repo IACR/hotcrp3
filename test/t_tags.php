@@ -1,6 +1,6 @@
 <?php
 // t_tags.php -- HotCRP tests
-// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Tags_Tester {
     /** @var Conf
@@ -21,6 +21,9 @@ class Tags_Tester {
         $this->u_chair = $conf->checked_user_by_email("chair@_.com");
         $this->u_varghese = $conf->checked_user_by_email("varghese@ccrc.wustl.edu");
         $this->u_floyd = $conf->checked_user_by_email("floyd@ee.lbl.gov");
+
+        $this->conf->qe("delete from PaperTag where tag='fart' or tag='chairtest' or tag=':poop:' or tag='chairtest1'");
+        $this->conf->qe("insert into PaperTag (paperId, tag, tagIndex) values (1,'fart',4), (2,'fart',5), (3,'fart',6), (4,'fart',10), (5,'fart',9), (6,'fart',7), (7,'fart',11), (8,'fart',4.5)");
     }
 
     function test_mutual_automatic_search() {
@@ -95,7 +98,7 @@ class Tags_Tester {
     function test_tag_patterns() {
         $sv = new SettingValues($this->u_chair);
         xassert_eqq($sv->oldv("tag_readonly"), "accept pcpaper reject");
-        xassert_eqq($sv->oldv("tag_sitewide"), "");
+        xassert_eqq($sv->oldv("tag_admin_open"), "");
         $sv->add_json_string('{
             "tag_readonly": "t*",
             "tag_hidden": "top",
@@ -106,21 +109,26 @@ class Tags_Tester {
         $ti = $this->conf->tags()->find("tan");
         xassert($ti->is(TagInfo::TF_READONLY));
         xassert(!$ti->is(TagInfo::TF_HIDDEN));
-        xassert($ti->is(TagInfo::TF_SITEWIDE));
+        xassert($ti->is(TagInfo::TF_ADMIN_PUBLIC));
         $ti = $this->conf->tags()->find("top");
         xassert($ti->is(TagInfo::TF_READONLY));
         xassert($ti->is(TagInfo::TF_HIDDEN));
-        xassert($ti->is(TagInfo::TF_SITEWIDE));
+        xassert($ti->is(TagInfo::TF_ADMIN_PUBLIC));
         $ti = $this->conf->tags()->find("tan");
         xassert($ti->is(TagInfo::TF_READONLY));
         xassert(!$ti->is(TagInfo::TF_HIDDEN));
-        xassert($ti->is(TagInfo::TF_SITEWIDE));
+        xassert($ti->is(TagInfo::TF_ADMIN_PUBLIC));
 
         $sv = (new SettingValues($this->u_chair))->add_json_string('{
             "tag_readonly": "accept pcpaper reject",
             "tag_sitewide": ""
         }');
         xassert($sv->execute());
+    }
+
+    function test_implicit_tag_patterns() {
+        $ti = $this->conf->tags()->find("~~fxxxk");
+        xassert($ti && $ti->is(TagInfo::TF_CHAIR_HIDDEN));
     }
 
     function test_assign_delete_create() {
@@ -152,7 +160,7 @@ class Tags_Tester {
         xassert_eqq($p1->tag_value("testtag"), 2.0);
 
         // set -> clear -> set resets value
-        xassert_assign($this->u_chair, "action,paper,tag\ntag,1,testtag\ntag,1,testtag#clear\ntag,1,testtag\n");
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,1,testtag\ntag,1,testtag#unset\ntag,1,testtag\n");
         $p1->load_tags();
         xassert($p1->has_tag("testtag"));
         xassert_eqq($p1->tag_value("testtag"), 0.0);
@@ -295,6 +303,62 @@ class Tags_Tester {
         $this->conf->qe("delete from PaperTagAnno where tag in ('t','tt','tu')");
     }
 
+    // Order annotations carry chair-authored prose (legends) and scheduling
+    // metadata (session title, time, location, session chair). `GET /taganno`
+    // must not hand them to a caller who cannot view the tag they annotate.
+
+    /** Install one annotation on $tag and return the API response as JSON text.
+     * @param string $tag
+     * @return string */
+    private function taganno_probe($tag, Contact $user) {
+        $this->conf->qe("delete from PaperTagAnno where tag=?", $tag);
+        $this->conf->qe("insert into PaperTagAnno (tag,annoId,tagIndex,heading,infoJson) values (?,1,10,?,?)",
+            $tag, "SECRET LEGEND", "{\"session_chair\":\"SECRET CHAIR\"}");
+        $this->conf->tags()->ensure($tag)->invalidate_order_anno();
+        $jr = call_api_result("taganno", $user, TestQreq::get(["tag" => $tag]));
+        return json_encode($jr->content);
+    }
+
+    function test_taganno_api_hides_tags_from_nonpc() {
+        // van authors #1 but is not on the PC, so no tag is visible to him
+        $u_author = $this->conf->checked_user_by_email("van@ee.lbl.gov");
+        xassert(!$u_author->isPC);
+        xassert(!$u_author->can_view_tags(null));
+        xassert(!$u_author->can_view_tag_somewhere("discuss"));
+        $t = $this->taganno_probe("discuss", $u_author);
+        xassert_not_str_contains($t, "SECRET LEGEND");
+        xassert_not_str_contains($t, "SECRET CHAIR");
+        $this->conf->qe("delete from PaperTagAnno where tag='discuss'");
+    }
+
+    function test_taganno_api_hides_hidden_tags_from_pc() {
+        $this->conf->save_setting("tag_hidden", 1, "secretorder");
+        Contact::update_rights();
+        $this->conf->invalidate_caches("tags");
+        // varghese is a plain PC member: an admin-only tag is not his to read
+        xassert(!$this->u_varghese->can_view_hidden_tags());
+        xassert(!$this->u_varghese->can_view_tag_somewhere("secretorder"));
+        $t = $this->taganno_probe("secretorder", $this->u_varghese);
+        xassert_not_str_contains($t, "SECRET LEGEND");
+        xassert_not_str_contains($t, "SECRET CHAIR");
+        // ...while an administrator still sees them, so a fix must not overreach
+        $t = $this->taganno_probe("secretorder", $this->u_chair);
+        xassert_str_contains($t, "SECRET LEGEND");
+        $this->conf->qe("delete from PaperTagAnno where tag='secretorder'");
+        $this->conf->save_setting("tag_hidden", null);
+        Contact::update_rights();
+        $this->conf->invalidate_caches("tags");
+    }
+
+    function test_taganno_api_set_stays_gated() {
+        // the write path is already gated; keep it that way
+        $u_author = $this->conf->checked_user_by_email("van@ee.lbl.gov");
+        $jr = call_api_result("=taganno", $u_author,
+            ["tag" => "discuss", "anno" => json_encode([["annoid" => "new", "legend" => "X"]])]);
+        xassert_eqq($jr->status, 403);
+        xassert_eqq($this->conf->fetch_ivalue("select count(*) from PaperTagAnno where tag='discuss'"), 0);
+    }
+
     function test_next() {
         $root = $this->conf->root_user();
         $p4 = $this->conf->checked_paper_by_id(4);
@@ -343,6 +407,7 @@ class Tags_Tester {
     }
 
     function test_copy_tag_pattern() {
+        $result = $this->conf->qe("select paperId, tagIndex from PaperTag where tag='fart'");
         xassert_search_all($this->u_chair, "#fart", "1 8 2 3 6 5 4 7");
         xassert_search_all($this->u_chair, "#xfart", "");
         xassert_assign($this->u_chair, "action,paper,tag,new_tag\ncopytag,all,*art,x*art\n");
@@ -405,7 +470,468 @@ class Tags_Tester {
         xassert_assign_fail($this->u_chair, "action,paper,tag,new_tag,tag_value\ncopytag,all,{$vcid}*,{$fcid}*,max\n");
     }
 
-    function test_track_data() {
-        xassert_eqq(Track::BITS_REQUIRED, (1 << Track::HIDDENTAG) | (1 << Track::ADMIN));
+    function test_assign_sorted_search() {
+        $root = $this->conf->root_user();
+        xassert_assign($this->u_chair, "action,paper,tag,tag_value\ntag,1-10 sort:title,tiorder,seqnext\ntag,1,XFART,4\n");
+        xassert_search_all($this->u_chair, "order:tiorder", "3 10 7 8 4 1 9 2 5 6");
+    }
+
+    function test_checktag() {
+        xassert_assign($this->u_chair, "action,paper,tag\nchecktag,3,tiorder#1");
+        xassert_assign_fail($this->u_chair, "action,paper,tag\nchecktag,3,tiorder#0");
+        xassert_assign($this->u_chair, "action,paper,tag\nchecktag,3 4 5,tiorder#some");
+        xassert_assign($this->u_chair, "action,paper,tag\nchecktag,5,#xnone");
+        xassert_assign_fail($this->u_chair, "action,paper,tag\nchecktag,5 6,#xnone");
+        xassert_assign_fail($this->u_chair, "action,paper,tag\nchecktag,3,-tiorder");
+
+        xassert_assign($this->u_chair, "action,paper,tag\ncheckedittags,1,fart#4 tiorder#6 XFART#4 ORdEr#1\n");
+        xassert_assign_fail($this->u_chair, "action,paper,tag\ncheckedittags,1,fart#4 tiorder#6 XFART#4\n");
+        xassert_assign($this->u_chair, "action,paper,tag\ndeletetag,1,order\ncheckedittags,1,fart#4 tiorder#6 XFART#4\n");
+        xassert_assign($this->u_chair, "action,paper,tag\ncheckedittags,1,fart#4 tiorder#6 XFART#4\ntag,1,~~chair#0\n");
+
+        // checktag respects tag visibility
+        xassert_assign($this->u_chair, "action,paper,tag\nchecktag,1,~~chair#0");
+        xassert_assign_fail($this->u_varghese, "action,paper,tag\nchecktag,1,~~chair#0");
+
+        // can have multiple values; works if any match
+        xassert_assign($this->u_chair, "action,paper,tag\ncheckedittags,1,fart#none #fart#4 tiorder#5 fart#1 tiorder#6 XFART#4 ~~chair#0\n");
+    }
+
+    function test_pc_can_view_conflicted() {
+        $pset = $this->conf->paper_set(["paperId" => [1, 4]]);
+        xassert($pset[1]->has_viewable_tag("fart", $this->u_chair));
+        xassert($pset[1]->has_viewable_tag("fart", $this->u_varghese));
+        xassert($pset[4]->has_viewable_tag("fart", $this->u_chair));
+        xassert(!$pset[4]->has_viewable_tag("fart", $this->u_varghese));
+
+        $this->conf->save_refresh_setting("tag_seeall", 1);
+
+        $pset = $this->conf->paper_set(["paperId" => [1, 4]]);
+        xassert($pset[1]->has_viewable_tag("fart", $this->u_chair));
+        xassert($pset[1]->has_viewable_tag("fart", $this->u_varghese));
+        xassert($pset[4]->has_viewable_tag("fart", $this->u_chair));
+        xassert($pset[4]->has_viewable_tag("fart", $this->u_varghese));
+
+        $this->conf->save_refresh_setting("tag_seeall", null);
+    }
+
+    function test_chair_tags() {
+        xassert(!$this->u_varghese->can_manage($this->conf->checked_paper_by_id(1)));
+
+        $this->conf->save_setting("tag_hidden", 1, "ch");
+        $this->conf->save_setting("tag_sitewide", 1, "~~ch2 dx");
+        $this->conf->save_setting("tag_chair", 1, "dx");
+        $this->conf->save_refresh_setting("tracks", 1, '{"redt":{"admin":"+red","hiddentag":"+red"}}');
+        Contact::update_rights();
+        xassert_assign($this->u_chair, "action,paper,tag,user\ntag,1,redt\ntag,1-4,~~ch\ntag,1-4,ch\ntag,1-4,~~ch2\ntag,1-4,dx\nadministrator,2,,huitema@bellcore.com\nconflict,2,,chair@_.com\n");
+        Contact::update_rights();
+        $u_guerin = $this->conf->checked_user_by_email("rguerin@ibm.com");
+        xassert($this->u_chair->privChair);
+        xassert(!$this->u_varghese->privChair);
+        $u_huitema = $this->conf->checked_user_by_email("huitema@bellcore.com");
+        xassert($u_huitema->privChair);
+
+        $pset = $this->conf->paper_set(["paperId" => [1, 2, 3, 4]]);
+        xassert($this->u_varghese->can_manage($pset[1]));
+        xassert(!$this->u_varghese->can_manage($pset[2]));
+        xassert($this->u_chair->can_manage($pset[1]));
+        xassert(!$this->u_chair->can_manage($pset[2]));
+        xassert(!$this->u_chair->allow_manage($pset[2]));
+        xassert($pset[2]->has_conflict($this->u_chair));
+
+        xassert_search($this->u_chair, "#~~ch", "1 3 4");
+        xassert_search($this->u_chair, "#~~ch2", "1 2 3 4");
+        xassert_search($this->u_chair, "#dx", "1 2 3 4");
+        xassert(!$this->u_chair->is_override_conflict());
+
+        // chair can see ~~ch on nonconflicted/nonadministered papers
+        // chair can see ~~ch2 (which is admin-public) on all papers
+        xassert($this->u_chair->can_view_tag_somewhere("~~ch"));
+        xassert($this->u_chair->can_edit_tag_somewhere("~~ch"));
+        xassert($this->u_chair->can_view_tag($pset[1], "~~ch"));
+        xassert($this->u_chair->can_edit_tag($pset[1], "~~ch", null, 1));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_chair), " ~~ch#");
+        xassert(!$this->u_chair->can_view_tag($pset[2], "~~ch"));
+        xassert(!$this->u_chair->can_edit_tag($pset[2], "~~ch", null, 1));
+        xassert_not_str_contains($pset[2]->viewable_tags($this->u_chair), " ~~ch#");
+        xassert($this->u_chair->can_view_tag($pset[2], "~~ch2"));
+        xassert($this->u_chair->can_edit_tag($pset[2], "~~ch2", null, 1));
+        xassert_str_contains($pset[2]->viewable_tags($this->u_chair), " ~~ch2#");
+        xassert($this->u_chair->can_view_tag($pset[2], "dx"));
+        xassert($this->u_chair->can_edit_tag($pset[2], "dx", null, 1));
+
+        // huitema is chair but not conflicted
+        xassert($u_huitema->can_view_tag_somewhere("~~ch"));
+        xassert($u_huitema->can_edit_tag_somewhere("~~ch"));
+        xassert($u_huitema->can_view_tag($pset[1], "~~ch"));
+        xassert($u_huitema->can_edit_tag($pset[1], "~~ch", null, 1));
+        xassert_str_contains($pset[1]->viewable_tags($u_huitema), " ~~ch#");
+        xassert($u_huitema->can_view_tag($pset[2], "~~ch"));
+        xassert($u_huitema->can_edit_tag($pset[2], "~~ch", null, 1));
+        xassert_str_contains($pset[2]->viewable_tags($u_huitema), " ~~ch#");
+        xassert($u_huitema->can_view_tag($pset[1], "~~ch2"));
+        xassert($u_huitema->can_edit_tag($pset[1], "~~ch2", null, 1));
+        xassert_str_contains($pset[1]->viewable_tags($u_huitema), " ~~ch2#");
+
+        // varghese is administrator, but can't see chair-hidden or chair-public
+        xassert_search($this->u_varghese, "#~~ch", "");
+        xassert(!$this->u_varghese->can_view_tag_somewhere("~~ch"));
+        xassert(!$this->u_varghese->can_edit_tag_somewhere("~~ch"));
+        xassert(!$this->u_varghese->can_view_tag($pset[1], "~~ch"));
+        xassert(!$this->u_varghese->can_edit_tag($pset[1], "~~ch", null, 1));
+        xassert_not_str_contains($pset[1]->viewable_tags($this->u_varghese), " ~~ch#");
+        xassert(!$this->u_varghese->can_view_tag_somewhere("~~ch2"));
+        xassert(!$this->u_varghese->can_edit_tag_somewhere("~~ch2"));
+        xassert(!$this->u_varghese->can_view_tag($pset[1], "~~ch2"));
+        xassert(!$this->u_varghese->can_edit_tag($pset[1], "~~ch2", null, 1));
+        xassert_not_str_contains($pset[1]->viewable_tags($this->u_varghese), " ~~ch2#");
+
+        // guerin is normal user, of course can't see chair
+        xassert_search($u_guerin, "#~~ch", "");
+        xassert(!$u_guerin->can_view_tag_somewhere("~~ch"));
+        xassert(!$u_guerin->can_edit_tag_somewhere("~~ch"));
+        xassert(!$u_guerin->can_view_tag($pset[1], "~~ch"));
+        xassert(!$u_guerin->can_edit_tag($pset[1], "~~ch", null, 1));
+        xassert_not_str_contains($pset[1]->viewable_tags($u_guerin), "~~ch#");
+
+        xassert_search($this->u_chair, "#ch", "1 3 4");
+        xassert($this->u_chair->can_view_tag_somewhere("ch"));
+        xassert($this->u_chair->can_edit_tag_somewhere("ch"));
+        xassert($this->u_chair->can_view_tag($pset[1], "ch"));
+        xassert($this->u_chair->can_edit_tag($pset[1], "ch", null, 1));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_chair), " ch#");
+        xassert_search($this->u_varghese, "#ch", "1");
+        xassert($this->u_varghese->can_view_tag_somewhere("ch"));
+        xassert($this->u_varghese->can_edit_tag_somewhere("ch"));
+        xassert($this->u_varghese->can_view_tag($pset[1], "ch"));
+        xassert($this->u_varghese->can_edit_tag($pset[1], "ch", null, 1));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_varghese), " ch#");
+        xassert_search($u_guerin, "#ch", "");
+        xassert(!$u_guerin->can_view_tag_somewhere("ch"));
+        xassert(!$u_guerin->can_edit_tag_somewhere("ch"));
+        xassert(!$u_guerin->can_view_tag($pset[1], "ch"));
+        xassert(!$u_guerin->can_edit_tag($pset[1], "ch", null, 1));
+        xassert_not_str_contains($pset[1]->viewable_tags($u_guerin), " ch#");
+
+        xassert_search($this->u_chair, "#redt", "1");
+        xassert($this->u_chair->can_view_tag_somewhere("redt"));
+        xassert($this->u_chair->can_edit_tag_somewhere("redt"));
+        xassert($this->u_chair->can_view_tag($pset[1], "redt"));
+        xassert($this->u_chair->can_edit_tag($pset[1], "redt", 0, null));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_chair), " redt#");
+        xassert_search($this->u_varghese, "#redt", "1");
+        xassert($this->u_varghese->can_view_tag_somewhere("redt"));
+        xassert(!$this->u_varghese->can_edit_tag_somewhere("redt"));
+        xassert($this->u_varghese->can_view_tag($pset[1], "redt"));
+        xassert(!$this->u_varghese->can_edit_tag($pset[1], "redt", 0, null));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_varghese), " redt#");
+        xassert_search($u_guerin, "#redt", "1");
+        xassert($u_guerin->can_view_tag_somewhere("redt"));
+        xassert(!$u_guerin->can_edit_tag_somewhere("redt"));
+        xassert($u_guerin->can_view_tag($pset[1], "redt"));
+        xassert(!$u_guerin->can_edit_tag($pset[1], "redt", 0, null));
+        xassert_str_contains($pset[1]->viewable_tags($u_guerin), " redt#");
+
+        $this->conf->save_refresh_setting("tracks", 1, '{"redt":{"admin":"+red"}}');
+        Contact::update_rights();
+        xassert($this->u_varghese->can_manage($pset[1]));
+
+        xassert_search($this->u_chair, "#ch", "1 3 4");
+        xassert($this->u_chair->can_view_tag_somewhere("ch"));
+        xassert($this->u_chair->can_view_tag($pset[1], "ch"));
+        xassert($this->u_chair->can_edit_tag($pset[1], "ch", null, 1));
+        xassert($this->u_chair->can_edit_tag_somewhere("ch"));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_chair), "ch");
+        xassert_search($this->u_varghese, "#ch", "1");
+        xassert($this->u_varghese->can_view_tag_somewhere("ch"));
+        xassert($this->u_varghese->can_view_tag($pset[1], "ch"));
+        xassert($this->u_varghese->can_view_hidden_tags($pset[1]));
+        xassert($this->u_varghese->can_edit_tag($pset[1], "ch", null, 1));
+        xassert($this->u_varghese->can_edit_tag_somewhere("ch"));
+        xassert_str_contains($pset[1]->viewable_tags($this->u_varghese), "ch");
+        xassert_search($u_guerin, "#ch", "");
+        xassert(!$u_guerin->can_view_tag_somewhere("ch"));
+        xassert(!$u_guerin->can_view_tag($pset[1], "ch"));
+        xassert(!$u_guerin->can_edit_tag($pset[1], "ch", null, 1));
+        xassert(!$u_guerin->can_edit_tag_somewhere("ch"));
+        xassert_not_str_contains($pset[1]->viewable_tags($u_guerin), "ch");
+
+        // what about administrators and explicitly sitewide chair tags?
+
+        xassert_assign($this->conf->root_user(), "action,paper,tag,user\ncleartag,1-4,ch ~~ch ~~ch2 redt dx\nclearadministrator,1-4\nclearconflict,1-4,,chair@_.com\n");
+        $this->conf->save_setting("tag_hidden", null);
+        $this->conf->save_setting("tag_sitewide", null);
+        $this->conf->save_refresh_setting("tracks", null);
+        Contact::update_rights();
+        xassert(!$this->u_varghese->can_manage($pset[1]));
+    }
+
+    function test_chair_conflict_tags() {
+        xassert_assign($this->u_chair, "action,paper,tag,user\nconflict,1-4,,huitema@bellcore.com\nadministrator,4,,lixia@cs.ucla.edu\nclearadministrator,2\n");
+        $u_huitema = $this->conf->checked_user_by_email("huitema@bellcore.com");
+
+        $pset = $this->conf->paper_set(["paperId" => [1, 2, 3, 4]]);
+        xassert(!$u_huitema->can_view_tags($pset[1]));
+        xassert(!$u_huitema->can_view_tags($pset[2]));
+        xassert(!$u_huitema->can_view_tags($pset[3]));
+        xassert(!$u_huitema->can_view_tags($pset[4]));
+        xassert(!$u_huitema->can_edit_tag($pset[1], "~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[2], "~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[3], "~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[4], "~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[1], "~~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[2], "~~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[3], "~~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[4], "~~ch", null, 0));
+        xassert(!$u_huitema->can_manage($pset[1]));
+        xassert(!$u_huitema->can_manage($pset[2]));
+        xassert(!$u_huitema->can_manage($pset[3]));
+        xassert(!$u_huitema->can_manage($pset[4]));
+        $u_huitema->add_overrides(Contact::OVERRIDE_CONFLICT);
+        xassert($u_huitema->can_view_tags($pset[1]));
+        xassert($u_huitema->can_view_tags($pset[2]));
+        xassert($u_huitema->can_view_tags($pset[3]));
+        xassert(!$u_huitema->can_view_tags($pset[4]));
+        xassert($u_huitema->can_edit_tag($pset[1], "~ch", null, 0));
+        xassert($u_huitema->can_edit_tag($pset[2], "~ch", null, 0));
+        xassert($u_huitema->can_edit_tag($pset[3], "~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[4], "~ch", null, 0));
+        xassert($u_huitema->can_edit_tag($pset[1], "~~ch", null, 0));
+        xassert($u_huitema->can_edit_tag($pset[2], "~~ch", null, 0));
+        xassert($u_huitema->can_edit_tag($pset[3], "~~ch", null, 0));
+        xassert(!$u_huitema->can_edit_tag($pset[4], "~~ch", null, 0));
+        xassert($u_huitema->can_manage($pset[1]));
+        xassert($u_huitema->can_manage($pset[2]));
+        xassert($u_huitema->can_manage($pset[3]));
+        xassert(!$u_huitema->can_manage($pset[4]));
+        xassert_assign_fail($u_huitema, "action,paper,tag\ntag,1,~~chx\n", false);
+        xassert_assign($u_huitema, "action,paper,tag\ntag,1,~~ch\n", true);
+
+        xassert_assign($this->u_chair, "action,paper,tag,user\nclearconflict,1-4,,huitema@bellcore.com\nclearadministrator,4\ncleartag,1-4,~~ch ~~chx\n");
+    }
+
+    function test_vote_allotment_exceeded() {
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "tag_vote_allotment": "vtest#1"
+        }');
+        xassert($sv->execute());
+        $vcid = $this->u_varghese->contactId;
+
+        // first vote uses up the allotment
+        $p1 = $this->conf->checked_paper_by_id(1);
+        $jr = call_api("=tags", $this->u_varghese, ["add_tags" => "~vtest#1"], $p1);
+        xassert_eqq($jr->ok, true);
+        $p1->load_tags();
+        xassert_eqq($p1->tag_value("{$vcid}~vtest"), 1.0);
+
+        // second vote exceeds the allotment, so it must be refused, not saved
+        $p2 = $this->conf->checked_paper_by_id(2);
+        $jr = call_api("=tags", $this->u_varghese, ["add_tags" => "~vtest#1"], $p2);
+        xassert_eqq($jr->ok, false);
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("{$vcid}~vtest"), null);
+        xassert_eqq($p2->tag_value("vtest"), null);
+        xassert_eqq($this->conf->fetch_ivalue("select sum(tagIndex) from PaperTag where tag='{$vcid}~vtest'"), 1);
+
+        xassert_assign($this->u_chair, "action,paper,tag\ncleartag,1-2,{$vcid}~vtest\n");
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "tag_vote_allotment": ""
+        }');
+        xassert($sv->execute());
+        xassert_assign($this->u_chair, "action,paper,tag\ncleartag,1-2,vtest\n");
+        xassert_search_all($this->u_chair, "#vtest", "");
+    }
+
+    /** @param string $allotment */
+    private function set_vote_allotment($allotment) {
+        $sv = (new SettingValues($this->u_chair))->add_json_string(json_encode([
+            "tag_vote_allotment" => $allotment
+        ]));
+        xassert($sv->execute());
+    }
+
+    /** @param string $tags */
+    private function clear_vote_tags($tags) {
+        $this->set_vote_allotment("");
+        xassert_assign($this->u_chair, "action,paper,tag\ncleartag,all,{$tags}\n");
+        foreach (explode(" ", $tags) as $tag) {
+            xassert_search_all($this->u_chair, "#{$tag}", "");
+        }
+    }
+
+    function test_vote_allotment_moves() {
+        $this->set_vote_allotment("vmove#2");
+        $vcid = $this->u_varghese->contactId;
+
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,1,~vmove#2\n");
+
+        // moving a vote in a single assignment stays within the allotment
+        xassert_assign($this->u_varghese, "action,paper,tag\ncleartag,1,~vmove\ntag,2,~vmove#2\n");
+        $pset = $this->conf->paper_set(["paperId" => [1, 2]]);
+        xassert_eqq($pset->cget(1)->tag_value("{$vcid}~vmove"), null);
+        xassert_eqq($pset->cget(2)->tag_value("{$vcid}~vmove"), 2.0);
+
+        // splitting a vote across papers likewise
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,1,~vmove#1\ntag,2,~vmove#1\n");
+        $pset = $this->conf->paper_set(["paperId" => [1, 2]]);
+        xassert_eqq($pset->cget(1)->tag_value("{$vcid}~vmove"), 1.0);
+        xassert_eqq($pset->cget(2)->tag_value("{$vcid}~vmove"), 1.0);
+
+        // an administrator may push someone over their allotment...
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,3,{$vcid}~vmove#3\n");
+        xassert_eqq($this->conf->fetch_ivalue("select sum(tagIndex) from PaperTag where tag='{$vcid}~vmove'"), 5);
+
+        // ...after which the voter can still reduce their votes...
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,3,~vmove#2\ncleartag,1,~vmove\n");
+        xassert_eqq($this->conf->fetch_ivalue("select sum(tagIndex) from PaperTag where tag='{$vcid}~vmove'"), 3);
+
+        // ...but not increase them
+        xassert_assign_fail($this->u_varghese, "action,paper,tag\ntag,1,~vmove#1\n");
+        $p1 = $this->conf->checked_paper_by_id(1);
+        xassert_eqq($p1->tag_value("{$vcid}~vmove"), null);
+
+        $this->clear_vote_tags("vmove");
+    }
+
+    function test_vote_allotment_multiple_tags() {
+        $this->set_vote_allotment("vona#1 vonb#1");
+        $vcid = $this->u_varghese->contactId;
+
+        // the first tag is within its allotment, the second is not;
+        // the whole assignment must fail
+        xassert_assign_fail($this->u_varghese, "action,paper,tag\ntag,1,~vona#1\ntag,1,~vonb#1\ntag,2,~vonb#1\n");
+        xassert_eqq($this->conf->fetch_ivalue("select count(*) from PaperTag where tag in ('{$vcid}~vona','{$vcid}~vonb')"), 0);
+
+        // each tag has its own allotment
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,1,~vona#1\ntag,2,~vonb#1\n");
+        $pset = $this->conf->paper_set(["paperId" => [1, 2]]);
+        xassert_eqq($pset->cget(1)->tag_value("{$vcid}~vona"), 1.0);
+        xassert_eqq($pset->cget(2)->tag_value("{$vcid}~vonb"), 1.0);
+
+        $this->clear_vote_tags("vona vonb");
+    }
+
+    function test_vote_allotment_unsubmitted() {
+        $this->set_vote_allotment("vwith#2");
+        $vcid = $this->u_varghese->contactId;
+
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,3,~vwith#2\n");
+
+        // unsubmitting a paper leaves votes in place
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["id" => 3, "status" => (object) ["submitted" => false]]));
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_eqq($p3->timeSubmitted, 0);
+        xassert_eqq($p3->tag_value("{$vcid}~vwith"), 2.0);
+
+        // but they no longer count against the allotment, as reported...
+        $p2 = $this->conf->checked_paper_by_id(2);
+        $jr = call_api("tags", $this->u_varghese, [], $p2);
+        xassert_str_contains(json_encode($jr->message_list), "2 votes remaining");
+
+        // ...so the votes can be spent elsewhere
+        $jr = call_api("=tags", $this->u_varghese, ["add_tags" => "~vwith#2"], $p2);
+        xassert_eqq($jr->ok, true);
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("{$vcid}~vwith"), 2.0);
+
+        // the allotment still applies to submitted papers
+        $jr = call_api("=tags", $this->u_varghese, ["add_tags" => "~vwith#1"], $this->conf->checked_paper_by_id(5));
+        xassert_eqq($jr->ok, false);
+
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["id" => 3, "status" => (object) ["submitted" => true]]));
+        $this->clear_vote_tags("vwith");
+    }
+
+    function test_withdraw_removes_votes() {
+        $this->set_vote_allotment("vwd#2");
+        $this->conf->save_refresh_setting("tag_approval", 1, "awd#0");
+        $vcid = $this->u_varghese->contactId;
+        $fcid = $this->u_floyd->contactId;
+
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,3,~vwd#2\ntag,3,~awd\n");
+        xassert_assign($this->u_floyd, "action,paper,tag\ntag,3,~vwd#1\n");
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_eqq($p3->tag_value("vwd"), 3.0);
+        xassert_eqq($p3->tag_value("awd"), 1.0);
+
+        // withdrawing through `PaperStatus` removes every voting tag
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["id" => 3, "status" => (object) ["withdrawn" => true]]));
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_lt($p3->timeSubmitted, 0);
+        xassert_eqq($p3->tag_value("{$vcid}~vwd"), null);
+        xassert_eqq($p3->tag_value("{$fcid}~vwd"), null);
+        xassert_eqq($p3->tag_value("{$vcid}~awd"), null);
+        xassert_eqq($p3->tag_value("vwd"), null);
+        xassert_eqq($p3->tag_value("awd"), null);
+
+        // so the votes are available again, and reviving does not bring them back
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,5,~vwd#2\n");
+        xassert_assign($this->u_chair, "paper,action,notify\n3,revive,no\n");
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_eqq($p3->tag_value("{$vcid}~vwd"), null);
+
+        // the assignment path behaves the same way
+        xassert_assign($this->u_varghese, "action,paper,tag\ncleartag,5,~vwd\ntag,3,~vwd#2\n");
+        xassert_assign($this->u_chair, "paper,action,notify\n3,withdraw,no\n");
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_eqq($p3->tag_value("{$vcid}~vwd"), null);
+        xassert_eqq($p3->tag_value("vwd"), null);
+
+        xassert_assign($this->u_chair, "paper,action,notify\n3,revive,no\n");
+        $this->conf->save_refresh_setting("tag_approval", null);
+        $this->clear_vote_tags("vwd awd");
+    }
+
+    function test_vote_allotment_other_user() {
+        $this->set_vote_allotment("vother#3");
+        $fcid = $this->u_floyd->contactId;
+        $this->conf->save_refresh_setting("tag_vote_private_peruser", 1);
+
+        // floyd has spent his allotment; varghese can neither see nor edit it
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,1,{$fcid}~vother#3\n");
+        $p2 = $this->conf->checked_paper_by_id(2);
+        xassert(!$this->u_varghese->can_view_tag($p2, "{$fcid}~vother"));
+
+        // varghese's request to vote on floyd's behalf is ignored, as before,
+        // and reports nothing about floyd's votes
+        $aset = new AssignmentSet($this->u_varghese);
+        $aset->parse("action,paper,tag\ntag,2,floyd~vother#1\n");
+        xassert($aset->execute());
+        xassert_not_str_contains($aset->full_feedback_text(), "vother");
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("{$fcid}~vother"), null);
+
+        // varghese's own votes are still checked
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,1,~vother#3\n");
+        xassert_assign_fail($this->u_varghese, "action,paper,tag\ntag,2,~vother#1\n");
+
+        $this->conf->save_refresh_setting("tag_vote_private_peruser", null);
+        $this->clear_vote_tags("vother");
+    }
+
+    /** @suppress PhanDeprecatedClassConstant */
+    function test_flag_values() {
+        xassert_eqq(Track::FM_REQUIRED, (1 << Track::HIDDENTAG) | (1 << Track::ADMIN));
+        xassert_eqq(TagInfo::TFM_VOTES, TagInfo::TF_APPROVAL | TagInfo::TF_ALLOTMENT);
+        xassert_eqq(TagInfo::TFM_DECORATION, TagInfo::TF_EMOJI | TagInfo::TF_STYLE | TagInfo::TF_BADGE);
+        xassert_eqq(TagInfo::TFM_PERM, TagInfo::TF_HIDDEN | TagInfo::TF_CHAIR_HIDDEN | TagInfo::TF_PC | TagInfo::TF_PC_PUBLIC | TagInfo::TF_ADMIN_PUBLIC | TagInfo::TF_CHAIR_PUBLIC | TagInfo::TF_PUBLIC_PERUSER);
+        xassert_eqq(TagInfo::TFM_PERM_NONPRIVATE, TagInfo::TFM_PERM & ~TagInfo::TF_OTHER_PRIVATE & ~TagInfo::TF_PRIVATE);
+        xassert_eqq(TagInfo::TFM_NOT_CHAIR_HIDDEN, TagInfo::TFM_PERM & ~TagInfo::TF_CHAIR_HIDDEN & ~TagInfo::TF_CHAIR_PUBLIC);
+        xassert_eqq(TagInfo::TFM_NOT_HIDDEN, TagInfo::TFM_PERM & ~TagInfo::TF_CHAIR_HIDDEN & ~TagInfo::TF_HIDDEN & ~TagInfo::TF_ADMIN_PUBLIC & ~TagInfo::TF_CHAIR_PUBLIC);
+        xassert_eqq(TagInfo::TFM_PERM_CHAIR, TagInfo::TF_CHAIR_HIDDEN | TagInfo::TF_HIDDEN | TagInfo::TF_ADMIN_PUBLIC | TagInfo::TF_PC_PUBLIC | TagInfo::TF_PC | TagInfo::TF_OTHER_PRIVATE | TagInfo::TF_CHAIR_PUBLIC);
+        xassert_eqq(TagInfo::TFM_PERM_ADMIN, TagInfo::TF_HIDDEN | TagInfo::TF_ADMIN_PUBLIC | TagInfo::TF_PC_PUBLIC | TagInfo::TF_PC | TagInfo::TF_OTHER_PRIVATE);
+        xassert_eqq(TagInfo::TFM_PERM_NEG, TagInfo::TF_CHAIR_HIDDEN | TagInfo::TF_HIDDEN);
+        xassert_eqq(TagInfo::TFM_PERM_POS, TagInfo::TF_ADMIN_PUBLIC | TagInfo::TF_PC_PUBLIC | TagInfo::TF_CHAIR_PUBLIC | TagInfo::TF_PC);
+        xassert_eqq(TagInfo::TFM_ADMIN_PUBLIC, TagInfo::TF_ADMIN_PUBLIC | TagInfo::TF_CHAIR_PUBLIC);
+        xassert_eqq(TagInfo::TFM_PRIVATE, TagInfo::TF_PRIVATE | TagInfo::TF_OTHER_PRIVATE);
+        xassert_eqq(TagInfo::TFM_PC_NONEDITABLE, TagInfo::TF_CHAIR_HIDDEN | TagInfo::TF_HIDDEN | TagInfo::TF_CHAIR_READONLY | TagInfo::TF_READONLY | TagInfo::TF_AUTOMATIC | TagInfo::TF_AUTOSEARCH);
+        xassert_eqq(TagInfo::TFM_READONLY, TagInfo::TF_READONLY | TagInfo::TF_CHAIR_READONLY);
+        xassert_eqq(TagInfo::TFM_PERM_EDIT, TagInfo::TFM_PERM & ~TagInfo::TF_PC_PUBLIC);
+        xassert_eqq(TagInfo::TFM_EDIT_RESTRICT, TagInfo::TF_OTHER_PRIVATE | TagInfo::TFM_READONLY | TagInfo::TF_ALLOTMENT | TagInfo::TF_AUTOMATIC);
+        xassert_eqq(TagInfo::TF_SITEWIDE, TagInfo::TF_ADMIN_PUBLIC);
+        xassert_eqq(TagInfo::TF_CONFLICT_FREE, TagInfo::TF_PC_PUBLIC);
     }
 }

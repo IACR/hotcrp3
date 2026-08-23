@@ -15,6 +15,9 @@ class Emoji_SearchTerm extends SearchTerm {
         $this->codes = $codes;
     }
     function sqlexpr(SearchQueryInfo $sqi) {
+        if (!$this->user->can_view_tags()) {
+            return "false";
+        }
         return 'exists (select * from PaperTag where paperId=Paper.paperId)';
     }
     function test(PaperInfo $row, $xinfo) {
@@ -25,11 +28,11 @@ class Emoji_SearchTerm extends SearchTerm {
         }
         return false;
     }
+    function about() {
+        return self::ABOUT_TAGS;
+    }
     function debug_json() {
         return ["type" => $this->type, "match" => $this->codes];
-    }
-    function about() {
-        return self::ABOUT_PAPER;
     }
 
     static function parse($word, SearchWord $sword, PaperSearch $srch) {

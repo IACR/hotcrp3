@@ -1,6 +1,6 @@
 <?php
 // api_search.php -- HotCRP search-related API calls
-// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class Search_API {
     /** @return JsonResult|PaperSearch */
@@ -29,7 +29,7 @@ class Search_API {
         if ($search instanceof JsonResult) {
             return $search;
         }
-        $pl = new PaperList($qreq->report ? : "pl", $search, ["sort" => true], $qreq);
+        $pl = new PaperList($qreq->report ? : "empty", $search, ["sort" => true], $qreq);
         $pl->apply_view_report_default();
         if (friendly_boolean($qreq->session) !== false) {
             $pl->apply_view_session($qreq);
@@ -38,9 +38,14 @@ class Search_API {
     }
 
     /** @return JsonResult */
-    static function search(Contact $user, Qrequest $qreq) {
+    static function make_search_result(Contact $user, Qrequest $qreq) {
+        $old_overrides = $user->overrides();
+        if (friendly_boolean($qreq->forceShow) !== false) {
+            $user->add_overrides(Contact::OVERRIDE_CONFLICT);
+        }
         $pl = self::make_list($user, $qreq);
         if ($pl instanceof JsonResult) {
+            $user->set_overrides($old_overrides);
             return $pl;
         }
         $format = 0;
@@ -62,8 +67,8 @@ class Search_API {
         }
         $ih = $pl->ids_and_groups();
         $jr = JsonResult::make_ok();
-        if ($pl->search->has_message()) {
-            $jr->set("message_list", $pl->search->message_list());
+        if ($pl->has_message()) {
+            $jr->set("message_list", $pl->message_list());
         }
         $jr->set("ids", $ih[0]);
         $jr->set("groups", $ih[1]);
@@ -76,10 +81,21 @@ class Search_API {
                 $jr->set($k, $v);
             }
         }
-        if (isset($qreq->session)
+        $user->set_overrides($old_overrides);
+        return $jr;
+    }
+
+    /** @return JsonResult */
+    static function search(Contact $user, Qrequest $qreq) {
+        $change_session = isset($qreq->session)
             && $qreq->valid_token()
             && !$qreq->is_head()
-            && friendly_boolean($qreq->session) === null) {
+            && friendly_boolean($qreq->session) === null;
+        if (!$change_session) {
+            $qreq->commit_session();
+        }
+        $jr = self::make_search_result($user, $qreq);
+        if ($change_session) {
             Session_API::change_session($qreq, $qreq->session);
         }
         return $jr;
@@ -100,7 +116,7 @@ class Search_API {
         if (is_array($param) && isset($param["q"])) {
             $nqreq = new Qrequest("GET", $param);
             $nqreq->set_user($user)->set_qsession($qreq->qsession());
-            $njr = self::search($user, $nqreq);
+            $njr = self::make_search_result($user, $nqreq);
             if ($njr->content["ok"]) {
                 foreach ($njr->content as $k => $v) {
                     if (!isset($jr->content[$k]))
@@ -110,54 +126,13 @@ class Search_API {
         }
     }
 
-    static function fieldhtml(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
-        if ($qreq->f === null) {
-            return JsonResult::make_missing_error("f");
-        }
-        $search = self::make_search($user, $qreq, $prow);
-        if ($search instanceof JsonResult) {
-            return $search;
-        }
-        $pl = new PaperList("empty", $search);
-        $pl->parse_view($qreq->f, PaperList::VIEWORIGIN_MAX);
-        $response = $pl->table_html_json();
-
-        $j = [
-            "ok" => !empty($response["fields"]),
-            "message_list" => $pl->message_set()->message_list()
-        ] + $response;
-        if ($j["ok"]
-            && $qreq->session
-            && $qreq->valid_token()
-            && !$qreq->is_head()
-            && friendly_boolean($qreq->session) === null) {
-            Session_API::change_session($qreq, $qreq->session);
-        }
-        return $j;
-    }
-
-    static function fieldtext(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
-        if ($qreq->f === null) {
-            return JsonResult::make_missing_error("f");
-        }
-        $search = self::make_search($user, $qreq, $prow);
-        if ($search instanceof JsonResult) {
-            return $search;
-        }
-        $pl = new PaperList("empty", $search);
-        $pl->parse_view($qreq->f, PaperList::VIEWORIGIN_MAX);
-        $response = $pl->text_json();
-
-        return [
-            "ok" => !empty($response),
-            "message_list" => $pl->message_set()->message_list(),
-            "data" => $response
-        ];
-    }
-
     static function searchaction(Contact $user, Qrequest $qreq, ?PaperInfo $prow) {
         if (($qreq->action ?? "") === "") {
             return JsonResult::make_missing_error("action");
+        }
+        $old_overrides = $user->overrides();
+        if (friendly_boolean($qreq->forceShow) !== false) {
+            $user->add_overrides(Contact::OVERRIDE_CONFLICT);
         }
         if (!isset($qreq->p)) {
             $ssel = SearchSelection::make_default($qreq, $user);
@@ -168,7 +143,9 @@ class Search_API {
         if ($action instanceof ListAction) {
             $action = $action->run($user, $qreq, $ssel);
         }
-        return ListAction::resolve_document($action, $qreq);
+        $result = ListAction::resolve_document($action, $user, $qreq);
+        $user->set_overrides($old_overrides);
+        return $result;
     }
 
     static function searchactions(Contact $user) {

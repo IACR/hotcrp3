@@ -10,11 +10,14 @@
     },
     {   "name": "abstract", "alias": "ab"   },
     {
-        "name": "au",
-        "parse_function": "Author_SearchTerm::parse"
+        "name": "au", "parse_function": "Author_SearchTerm::parse"
     },
-    {   "name": "auth", "alias": "au", "deprecated": true   },
     {   "name": "author", "alias": "au"   },
+    {
+        "name": "listedauthor", "parse_function": "Author_SearchTerm::parse",
+        "listed": true
+    },
+    {   "name": "listedau", "alias": "listedauthor"   },
     {
         "name": "co",
         "parse_function": "TextMatch_SearchTerm::parse", "has": "any"
@@ -150,14 +153,14 @@
     {   "name": "manager", "alias": "admin"   },
     {   "name": "administrator", "alias": "admin"   },
     {
+        "name": "canadmin",
+        "parse_function": "Admin_SearchTerm::parse", "is_allow": true
+    },
+    {
         "name": "dec",
         "parse_function": "Decision_SearchTerm::parse", "has": "any"
     },
     {   "name": "decision", "alias": "dec"   },
-    {
-        "name": "editfinal", "deprecated": true,
-        "parse_function": "EditFinal_SearchTerm::parse", "has": "yes"
-    },
     {
         "name": "perm",
         "parse_function": "Perm_SearchTerm::parse"
@@ -333,11 +336,6 @@
     {
         "name": "has",
         "parse_function": "PaperSearch::parse_has",
-        "priority": 100
-    },
-    {
-        "name": "searchcontrol",
-        "parse_function": "PaperSearch::parse_searchcontrol",
         "priority": 100
     }
 ]

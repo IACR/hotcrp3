@@ -1,6 +1,6 @@
 <?php
 // helpers.php -- HotCRP non-class helper functions
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 // string helpers
 
@@ -86,6 +86,8 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     public $pretty_print;
     /** @var bool */
     public $minimal = false;
+    /** @var ?HeaderSet */
+    private $_headers;
 
     /** @param int|array<string,mixed>|\stdClass|\JsonSerializable $a1
      * @param ?array<string,mixed> $a2 */
@@ -114,12 +116,19 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     }
 
     /** @param int $status
-     * @param array<string,mixed> $content
+     * @param object|array<string,mixed>|list $content
      * @return JsonResult */
     static function make_minimal($status, $content) {
         $jr = new JsonResult(null);
         $jr->status = $status;
-        $jr->content = $content;
+        if (is_array($content)) {
+            $jr->content = $content;
+        } else if ($content instanceof JsonSerializable) {
+            $jr->content = (array) $content->jsonSerialize();
+        } else {
+            assert(!($content instanceof JsonResult));
+            $jr->content = (array) $content;
+        }
         $jr->minimal = true;
         return $jr;
     }
@@ -188,9 +197,27 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         return new JsonResult(404, ["ok" => false, "message_list" => [$mi]]);
     }
 
+    /** @param Qrequest $qreq
+     * @param int $bits
+     * @param ?string $ftext
+     * @return JsonResult */
+    static function make_scope_error(Qrequest $qreq, $bits, $ftext = null) {
+        $mi = new MessageItem(2, null, $ftext ?? "<0>Method not permitted by scope");
+        return (new JsonResult(401, ["ok" => false, "message_list" => [$mi]]))
+            ->set_header($qreq->conf()->www_authenticate_header("insufficient_scope", $qreq, $bits));
+    }
+
+
+    /** @param int $code
+     * @return $this */
+    function set_response_code($code) {
+        $this->status = $code;
+        return $this;
+    }
 
     /** @param int $status
-     * @return $this */
+     * @return $this
+     * @deprecated */
     function set_status($status) {
         $this->status = $status;
         return $this;
@@ -203,6 +230,15 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         return $this;
     }
 
+    /** @param string $header
+     * @param bool $replace
+     * @return $this */
+    function set_header($header, $replace = true) {
+        $this->_headers = $this->_headers ?? new HeaderSet;
+        $this->_headers->set($header, $replace);
+        return $this;
+    }
+
 
     /** @param MessageItem $mi
      * @return $this */
@@ -211,10 +247,40 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         return $this;
     }
 
+    /** @param int $i
+     * @return ?MessageItem */
+    function message_item($i) {
+        $ml = $this->content["message_list"] ?? null;
+        if (is_array($ml) && isset($ml[$i])) {
+            if ($ml[$i] instanceof MessageItem) {
+                return $ml[$i];
+            }
+            return MessageItem::from_json($ml[$i]);
+        }
+        return null;
+    }
+
 
     /** @return bool */
     function ok() {
         return $this->content["ok"];
+    }
+
+    /** @return int */
+    function response_code() {
+        return $this->status ?? 200;
+    }
+
+    /** @param string $key
+     * @return ?string */
+    function header($key) {
+        return $this->_headers ? $this->_headers->get($key) : null;
+    }
+
+    /** @param string $key
+     * @return bool */
+    function has($key) {
+        return array_key_exists($key, $this->content);
     }
 
     /** @param string $key
@@ -262,28 +328,49 @@ class JsonResult implements JsonSerializable, ArrayAccess {
     }
 
 
+    private function check_fmt() {
+        // warn if message_list contains items that require formatting
+        if (is_array($this->content["message_list"] ?? null)) {
+            foreach ($this->content["message_list"] as $mi) {
+                if ($mi instanceof MessageItem
+                    && $mi->need_fmt()) {
+                    error_log("message item needs fmt: {$mi->message} " . debug_string_backtrace());
+                    break;
+                }
+            }
+        }
+    }
+
     /** @param ?Qrequest $qreq */
     function emit($qreq = null) {
-        if ($this->status && !$this->minimal && !isset($this->content["ok"])) {
+        $this->check_fmt();
+        if (!$this->minimal
+            && $this->status
+            && !isset($this->content["ok"])) {
             $this->content["ok"] = $this->status <= 299;
         }
-        if ($qreq && $qreq->valid_token()) {
-            // Don’t set status on unvalidated requests, since that can leak
-            // information (e.g. via <link prefetch onerror>).
+        if ($qreq && ($qreq->valid_token() || $qreq->same_origin())) {
+            // Surface the real status only for requests that can’t be a forged
+            // cross-site no-cors load; otherwise the 2xx-vs-error status leaks
+            // (e.g. via `<link prefetch onerror>`), so report 200 + status_code.
             if ($this->status) {
-                http_response_code($this->status);
+                Navigation::http_response_code($this->status);
             }
             if (($origin = $qreq->header("Origin"))) {
-                header("Access-Control-Allow-Origin: {$origin}");
+                Navigation::header("Access-Control-Allow-Origin: {$origin}");
             }
-        } else if ($this->status > 299 && !isset($this->content["status_code"])) {
+        } else if (!$this->minimal
+                   && $this->status > 299
+                   && !isset($this->content["status_code"])) {
             $this->content["status_code"] = $this->status;
         }
-        header("Content-Type: application/json; charset=utf-8");
+        Navigation::header("Content-Type: application/json; charset=utf-8");
+        foreach ($this->_headers ?? [] as $h) {
+            Navigation::header($h);
+        }
+        $pprint = $this->pretty_print ?? true;
         if ($qreq && isset($qreq->pretty)) {
-            $pprint = friendly_boolean($qreq->pretty);
-        } else {
-            $pprint = $this->pretty_print ?? true;
+            $pprint = friendly_boolean($qreq->pretty) ?? $pprint;
         }
         echo json_encode_browser($this->content, ($pprint ? JSON_PRETTY_PRINT : 0) | JSON_UNESCAPED_SLASHES), "\n";
     }
@@ -296,36 +383,8 @@ class JsonResult implements JsonSerializable, ArrayAccess {
 
     #[\ReturnTypeWillChange]
     function jsonSerialize() {
+        $this->check_fmt();
         return $this->content;
-    }
-}
-
-class Redirection extends Exception {
-    /** @var string */
-    public $url;
-    /** @var int */
-    public $status;
-    /** @param string $url
-     * @param 301|302|303|307|308 $status */
-    function __construct($url, $status = 302) {
-        parent::__construct("Redirect to {$url}");
-        $this->url = $url;
-        $this->status = $status;
-    }
-}
-
-class PageCompletion extends Exception {
-    /** @var ?int */
-    public $status;
-    function __construct($status = null) {
-        parent::__construct("Page complete");
-        $this->status = $status;
-    }
-    /** @param ?Qrequest $qreq */
-    function emit($qreq = null) {
-        if ($this->status !== null) {
-            http_response_code($this->status);
-        }
     }
 }
 
@@ -391,15 +450,6 @@ function aria_expander($c = "") {
 function aria_plus_expander($c = "") {
     $c = Ht::add_tokens("expander", $c);
     return '<span class="' . Ht::add_tokens("expander", $c) . '" role="none"><span class="ifx">−</span><span class="ifnx">+</span></span>';
-}
-
-
-/** @param Contact|Author|ReviewInfo|CommentInfo $userlike
- * @return string */
-function actas_link($userlike) {
-    return '<a href="' . Conf::$main->selfurl(Qrequest::$main_request, ["actas" => $userlike->email])
-        . '" tabindex="-1">' . Ht::img("viewas.png", "[Act as]", ["title" => "Act as " . Text::nameo($userlike, NAME_P)])
-        . '</a>';
 }
 
 
@@ -492,9 +542,8 @@ function plural_word($n, $singular, $plural = null) {
         return $singular;
     } else if (($plural ?? "") !== "") {
         return $plural;
-    } else {
-        return pluralize($singular);
     }
+    return pluralize($singular);
 }
 
 /** @param string $s
@@ -514,9 +563,12 @@ function pluralize($s) {
             return "have";
         } else if ($s === "is") {
             return "are";
-        } else {
-            return "{$s}es";
+        } else if ($s === "does") {
+            return "do";
+        } else if ($s === "was") {
+            return "were";
         }
+        return "{$s}es";
     } else if ($last === "h"
                && $len > 1
                && ($s[$len - 2] === "s" || $s[$len - 2] === "c")) {
@@ -530,15 +582,17 @@ function pluralize($s) {
             return "those";
         } else if ($s === "it") {
             return "them";
-        } else {
-            return "{$s}s";
+        }
+        // fall through
+    } else if ($last === "o") {
+        if ($s === "do") {
+            return "does";
         }
     } else if ($last === ")"
                && preg_match('/\A(.*?)(\s*\([^)]*\))\z/', $s, $m)) {
         return pluralize($m[1]) . $m[2];
-    } else {
-        return "{$s}s";
     }
+    return "{$s}s";
 }
 
 /** @param int|float|array $n
@@ -570,9 +624,8 @@ function unparse_byte_size($n) {
         return round($n / 1000) . "kB";
     } else if ($n > 0) {
         return (max(round($n / 100), 1) / 10) . "kB";
-    } else {
-        return "0B";
     }
+    return "0B";
 }
 
 /** @param int|float $n
@@ -586,9 +639,8 @@ function unparse_byte_size_binary($n) {
         return round($n / 1024) . "KiB";
     } else if ($n > 0) {
         return (max(round($n / 102.4), 1) / 10) . "KiB";
-    } else {
-        return "0B";
     }
+    return "0B";
 }
 
 /** @param int|float $n
@@ -602,9 +654,8 @@ function unparse_byte_size_binary_f($n) {
         return sprintf("%.0fKiB", $n / 1024);
     } else if ($n > 0) {
         return sprintf("%.1fKiB", max(round($n / 102.4), 1) / 10);
-    } else {
-        return "0B";
     }
+    return "0B";
 }
 
 /** @param string $t

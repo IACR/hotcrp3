@@ -1,6 +1,6 @@
 <?php
 // formulas/f_topicscore.php -- HotCRP helper class for formula expressions
-// Copyright (c) 2009-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2009-2026 Eddie Kohler; see LICENSE.
 
 class TopicScore_Fexpr extends Fexpr {
     function __construct() {
@@ -8,6 +8,9 @@ class TopicScore_Fexpr extends Fexpr {
     }
     static function make(FormulaCall $ff) {
         return $ff->user->isPC ? new TopicScore_Fexpr : Fexpr::cnever();
+    }
+    function about() {
+        return SearchTerm::ABOUT_SUB;
     }
     function inferred_index() {
         return Fexpr::IDX_PC;
@@ -18,14 +21,12 @@ class TopicScore_Fexpr extends Fexpr {
     function compile(FormulaCompiler $state) {
         $state->queryOptions["topics"] = true;
         $prow = $state->_prow();
-        if ($state->index_type === Fexpr::IDX_MY) {
-            return $state->define_gvar("mytopicscore", "{$prow}->topic_interest_score(\$user)");
-        } else if ($state->user->can_view_pc()) {
-            return "{$prow}->topic_interest_score(" . $state->loop_cid(true) . ")";
-        } else {
-            return "(" . $state->loop_cid() . " == " . $state->user->contactId
-                . " ? {$prow}->topic_interest_score(" . $state->loop_cid() . ")"
-                . " : null)";
+        $uid = $state->current_uid();
+        if ($state->user->privChair
+            || $state->index_type === Fexpr::IDX_MY) {
+            return "{$prow}->topic_interest_score({$uid})";
         }
+        $cvp = $state->prow_can_view_preference();
+        return "({$uid} && ({$uid} === {$state->user->contactId} || {$cvp}) ? {$prow}->topic_interest_score({$uid}) : null)";
     }
 }

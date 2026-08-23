@@ -13,13 +13,13 @@ class LoginHelper {
         // if user signed out of HTTP authentication, send a reauth request
         if ($qreq->has_gsession("reauth")) {
             $qreq->unset_gsession("reauth");
-            header("HTTP/1.0 401 Unauthorized");
+            Navigation::http_response_code(401 /* Unauthorized */);
             if (is_string($conf->opt("httpAuthLogin"))) {
-                header("WWW-Authenticate: " . $conf->opt("httpAuthLogin"));
+                Navigation::header("WWW-Authenticate: " . $conf->opt("httpAuthLogin"));
             } else {
-                header("WWW-Authenticate: Basic realm=\"HotCRP\"");
+                Navigation::header("WWW-Authenticate: Basic realm=\"HotCRP\"");
             }
-            exit(0);
+            Navigation::complete();
         }
 
         // if user is still valid, OK
@@ -29,29 +29,29 @@ class LoginHelper {
 
         // check HTTP auth
         if (!isset($_SERVER["REMOTE_USER"]) || !$_SERVER["REMOTE_USER"]) {
-            header("HTTP/1.0 401 Unauthorized");
+            Navigation::http_response_code(401 /* Unauthorized */);
             $qreq->print_header("Error", "home", ["body_class" => "body-error"]);
             $conf->feedback_msg([
                 MessageItem::error("<0>Authentication required"),
                 MessageItem::inform("<0>This site is using HTTP authentication to manage its users, but you have not provided authentication data. This usually indicates a server configuration error.")
             ]);
             $qreq->print_footer();
-            exit(0);
+            Navigation::complete();
         }
         $qreq->email = $_SERVER["REMOTE_USER"];
 
         $info = self::login_info($conf, $qreq); // XXX
         if ($info["ok"]) {
-            $conf->redirect($info["redirect"] ?? "");
+            $qreq->redirect($info["redirect"] ?? "");
         } else {
-            header("HTTP/1.0 401 Unauthorized");
+            Navigation::http_response_code(401 /* Unauthorized */);
             $qreq->print_header("Error", "home", ["body_class" => "body-error"]);
             $conf->feedback_msg([
                 MessageItem::error("<0>Authentication error"),
                 MessageItem::inform("<0>This site is using HTTP authentication to manage its users. You have provided incorrect authentication data.")
             ]);
             $qreq->print_footer();
-            exit(0);
+            Navigation::complete();
         }
     }
 
@@ -148,7 +148,7 @@ class LoginHelper {
     static function login_complete($info, Qrequest $qreq) {
         if (!$info["ok"]) {
             foreach ($info["usec"] ?? [] as $use) {
-                $use->store($qreq->qsession());
+                $use->store($qreq);
             }
             return $info;
         }
@@ -160,13 +160,14 @@ class LoginHelper {
         $xuser = $luser->contactId ? $luser : $luser->cdb_user();
         $xuser->mark_login();
 
-        // store authentication
+        // store authentication and theme
         $qs = $qreq->qsession();
         $qs->open_new_sid();
-        UserSecurityEvent::session_user_add($qs, $xuser->email);
+        $ui = UserSecurityEvent::session_user_add($qs, $xuser->email);
         foreach ($info["usec"] ?? [] as $use) {
-            $use->set_email($xuser->email)->store($qs);
+            $use->set_email($xuser->email)->store($qreq);
         }
+        UpdateSession::apply_theme($qs, $ui, $xuser->theme());
 
         // activate
         $user = $xuser->activate($qreq, false);
@@ -175,7 +176,7 @@ class LoginHelper {
         $nav = $qreq->navigation();
         $url = $nav->server . $nav->base_path;
         if ($qreq->has_gsession("us")) {
-            $url .= "u/" . Contact::session_index_by_email($qs, $user->email) . "/";
+            $url .= "u/{$ui}/";
         }
         $url .= "?postlogin=1";
         if ($qreq->redirect !== null && $qreq->redirect !== "1") {
@@ -218,10 +219,9 @@ class LoginHelper {
             $where = $login_bounce[1];
         } else {
             $qreq->set_csession("freshlogin", true);
-            $where = $user->conf->hoturl_raw("index");
+            $where = $user->conf->hoturl("index");
         }
-        $user->conf->redirect($where);
-        exit(0);
+        $qreq->redirect($where);
     }
 
 
@@ -374,7 +374,7 @@ class LoginHelper {
                 && $conf->allow_user_self_register()
                 && $email !== ""
                 && !($info["deleted"] ?? false)) {
-                $args[] = new FmtArg("newaccount", $conf->hoturl_raw("newaccount", ["email" => $email]));
+                $args[] = new FmtArg("newaccount", $conf->hoturl("newaccount", ["email" => $email]));
             }
         } else if ($info["unset"] ?? false) {
             $e = "<0>User {email} has not set a password";
@@ -401,9 +401,9 @@ class LoginHelper {
 
         if ($email !== "") {
             $args[] = new FmtArg("email", $email, 0);
-            $args[] = new FmtArg("signin", $conf->hoturl_raw("signin", ["email" => $email]), 0);
+            $args[] = new FmtArg("signin", $conf->hoturl("signin", ["email" => $email]), 0);
             if ($info["can_reset"] ?? false) {
-                $args[] = new FmtArg("forgotpassword", $conf->hoturl_raw("forgotpassword", ["email" => $email]), 0);
+                $args[] = new FmtArg("forgotpassword", $conf->hoturl("forgotpassword", ["email" => $email]), 0);
             }
         }
         if ($problem) {
@@ -421,9 +421,10 @@ class LoginHelper {
 
         if (($info["allow_redirect"] ?? false)
             && $problem !== "bad_password"
-            && ($urlarg = Fmt::find_arg($args, "forgotpassword"))) {
+            && ($urlarg = Fmt::find_arg($args, "forgotpassword"))
+            && Qrequest::$main_request) {
             $conf->error_msg($msg);
-            $conf->redirect($urlarg->value);
+            Qrequest::$main_request->redirect($urlarg->value);
         }
 
         if (!$ms) {

@@ -1,6 +1,6 @@
 <?php
 // a_preference.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Preference_Assignable extends Assignable {
     /** @var int */
@@ -47,27 +47,31 @@ class Preference_AssignmentParser extends AssignmentParser {
         return true;
     }
     function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
-        if ($state->user->can_administer($prow)) {
+        if ($state->user->can_manage_reviews($prow)) {
             return $state->pc_users();
-        } else {
-            return [$state->user];
         }
+        return [$state->user];
     }
     function expand_missing_user(PaperInfo $prow, $req, AssignmentState $state) {
         return $state->reviewer->isPC ? [$state->reviewer] : null;
     }
+    static function cannot_edit_preference_message(Contact $viewer, PaperInfo $prow, Contact $user) {
+        if ($viewer->contactId === $user->contactId) {
+            return $prow->conf->_("<0>You can’t enter a preference for {submission} #{}", $prow->paperId);
+        } else if (!$user->isPC) {
+            return "<0>Only PC members can enter preferences";
+        } else if (!$viewer->can_manage_reviews($prow)) {
+            return $prow->conf->_("<0>You can’t administer {submission} #{}", $prow->paperId);
+        }
+        return $prow->conf->_("<0>User {$user->email} can’t enter a preference for {submission} #{}", $prow->paperId);
+    }
     function allow_user(PaperInfo $prow, Contact $user, $req, AssignmentState $state) {
         if (!$user->contactId) {
             return false;
+        } else if ($state->user->can_edit_preference_for($prow, $user)) {
+            return true;
         }
-        if ($state->user->contactId !== $user->contactId) {
-            if (!$state->user->can_administer($prow)) {
-                return new AssignmentError($prow->failure_reason(["administer" => true]));
-            } else if (!$user->isPC) {
-                return new AssignmentError("<0>User ‘{$user->email}’ is not a PC member");
-            }
-        }
-        return true;
+        return new AssignmentError(self::cannot_edit_preference_message($state->user, $prow, $user));
     }
     static private function make_exp($exp) {
         return $exp === null ? "N" : +$exp;
@@ -172,6 +176,9 @@ class Preference_Assigner extends Assigner {
     static function make(AssignmentItem $item, AssignmentState $state) {
         return new Preference_Assigner($item, $state);
     }
+    function about() {
+        return SearchTerm::ABOUT_PREFS;
+    }
     function unparse_description() {
         return "preference";
     }
@@ -185,7 +192,7 @@ class Preference_Assigner extends Assigner {
         return new PaperReviewPreference($pref, $exp);
     }
     function unparse_display(AssignmentSet $aset) {
-        if (!$this->cid) {
+        if (!$this->cid()) {
             return "remove all preferences";
         }
         $t = $aset->user->reviewer_html_for($this->contact);
@@ -211,6 +218,6 @@ class Preference_Assigner extends Assigner {
         $locks["PaperReviewPreference"] = "write";
     }
     function execute(AssignmentSet $aset) {
-        $this->preference_data(false)->save($this->pid, $this->cid, [$aset, "stage_qe"]);
+        $this->preference_data(false)->save($this->pid, $this->cid(), [$aset, "stage_qe"]);
     }
 }

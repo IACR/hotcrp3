@@ -1,6 +1,6 @@
 <?php
 // o_pcconflicts.php -- HotCRP helper class for PC conflicts intrinsic
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class PCConflicts_PaperOption extends PaperOption {
     /** @var ?string */
@@ -19,7 +19,7 @@ class PCConflicts_PaperOption extends PaperOption {
         // (test_exists() always returns true), so that admins can set
         // conflicts. The presence/exists_if configuration affects *visibility*
         // instead.
-        if (empty($this->conf->pc_members())) {
+        if (empty($this->conf->listed_pc_members())) {
             $this->visible_if = "NONE";
         } else {
             $this->visible_if = $this->exists_condition();
@@ -56,23 +56,27 @@ class PCConflicts_PaperOption extends PaperOption {
         $ov->set_value_data(array_keys($vm), array_values($vm));
     }
     function value_export_json(PaperValue $ov, PaperExport $pex) {
-        $pcm = $this->conf->pc_members();
+        $pcm = $this->conf->viewable_pc_members($pex->viewer);
         $confset = $this->conf->conflict_set();
-        $can_view_authors = $pex->viewer->allow_view_authors($ov->prow);
+        $can_view_authors = $pex->viewer->can_view_authors($ov->prow);
         $pcc = [];
         foreach (self::value_map($ov) as $k => $v) {
-            if (($pc = $pcm[$k] ?? null) && Conflict::is_conflicted((int) $v)) {
-                $ct = (int) $v;
-                if (!$can_view_authors) {
-                    // Sometimes users can see conflicts but not authors.
-                    // Don't expose author-ness during that period.
-                    $ct = Conflict::set_pinned(Conflict::pc_part($ct), false);
-                    $ct = $ct ? : Conflict::CT_DEFAULT;
-                } else if (($ct & CONFLICT_CONTACTAUTHOR) !== 0) {
-                    $ct = ($ct | CONFLICT_AUTHOR) & ~CONFLICT_CONTACTAUTHOR;
-                }
-                $pcc[$pc->email] = $confset->unparse_json($ct);
+            $v = (int) $v;
+            if (!Conflict::is_conflicted($v)
+                || !($pc = $pcm[$k] ?? null)) {
+                continue;
             }
+            if (!$can_view_authors) {
+                // Sometimes users can see conflicts but not authors.
+                // Don't expose the kind of conflict during that period.
+                $ct = true;
+            } else {
+                if (($v & CONFLICT_CONTACTAUTHOR) !== 0) {
+                    $v = ($v | CONFLICT_AUTHOR) & ~CONFLICT_CONTACTAUTHOR;
+                }
+                $ct = $confset->unparse_json($v);
+            }
+            $pcc[$pc->email] = $ct;
         }
         return (object) $pcc;
     }
@@ -92,7 +96,7 @@ class PCConflicts_PaperOption extends PaperOption {
         $vm = self::value_map($ov);
         $pcs = [];
         $this->conf->ensure_cached_user_collaborators();
-        foreach ($this->conf->pc_members() as $p) {
+        foreach ($this->conf->listed_pc_members() as $p) {
             if (($vm[$p->contactId] ?? 0) === 0 /* not MAXUNCONFLICTED */
                 && $ov->prow->potential_conflict($p)) {
                 $pcs[] = Ht::link($p->name_h(NAME_P), "#pcconf:{$p->contactId}");
@@ -129,7 +133,11 @@ class PCConflicts_PaperOption extends PaperOption {
     }
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
         $vm = self::paper_value_map($prow);
-        foreach ($prow->conf->pc_members() as $cid => $pc) {
+        if (($u = $qreq->user()) && !$u->can_view_pc()) {
+            /** @phan-suppress-next-line PhanTypeMismatchArgument */
+            return PaperValue::make_multi($prow, $this, array_keys($vm), array_values($vm));
+        }
+        foreach ($prow->conf->listed_pc_members() as $cid => $pc) {
             if (isset($qreq["has_pcconf:{$cid}"]) || isset($qreq["pcconf:{$cid}"])) {
                 $ct = $qreq["pcconf:{$cid}"] ?? "0";
                 if (ctype_digit($ct) && $ct >= 0 && $ct <= 127) {
@@ -185,12 +193,13 @@ class PCConflicts_PaperOption extends PaperOption {
         }
         unset($v);
 
+        $roles = $user->viewable_roles_mask();
         for ($i = 0; $i !== count($emails); ++$i) {
             $u = $prow->conf->user_by_email($emails[$i], USER_SLICE);
             if ($u && !$u->isPC && $u->primaryContactId > 0) {
                 $u = $prow->conf->pc_member_by_primary_id($u->primaryContactId);
             }
-            if ($u && $u->isPC) {
+            if ($u && ($u->roles & $roles) !== 0) {
                 $this->update_value_map($vm, $u->contactId, $values[$i]);
             } else {
                 $pv->warning("<0>Email address ‘{$emails[$i]}’ does not match a PC member");
@@ -202,14 +211,14 @@ class PCConflicts_PaperOption extends PaperOption {
         return $pv;
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        $admin = $pt->user->can_administer($ov->prow);
-        if (!$this->test_visible($ov->prow)
+        $admin = $pt->user->is_admin($ov->prow);
+        if ((!$this->test_visible($ov->prow) || !$pt->user->can_view_pc())
             && !$pt->settings_mode) {
             return;
         }
 
         $this->conf->ensure_cached_user_collaborators();
-        $pcm = $this->conf->pc_members();
+        $pcm = $this->conf->listed_pc_members();
         if (empty($pcm)
             && !$pt->settings_mode) {
             return;
@@ -230,12 +239,10 @@ class PCConflicts_PaperOption extends PaperOption {
         }
 
         $potconfs = [];
-        if ($ov->prow->paperId) {
-            foreach ($pcm as $id => $p) {
-                if (($ctmaps[0][$id] ?? 0) < CONFLICT_AUTHOR
-                    && ($potconf = $ov->prow->potential_conflict_list($p)))
-                    $potconfs[$id] = $potconf;
-            }
+        foreach ($pcm as $id => $p) {
+            if (($ctmaps[0][$id] ?? 0) < CONFLICT_AUTHOR
+                && ($potconf = $ov->prow->potential_conflict_list($p)))
+                $potconfs[$id] = $potconf;
         }
         if (!empty($ctmaps[0]) || !empty($potconfs)) {
             uasort($pcm, function ($a, $b) use ($ctmaps, $potconfs) {
@@ -275,7 +282,7 @@ class PCConflicts_PaperOption extends PaperOption {
                 Conflict::is_conflicted($pct) ? " pcconf-conflicted" : "";
             if ($potconf) {
                 $potconftts[] = "<div id=\"d-pcconf:{$id}\" class=\"bubble\" role=\"tooltip\" hidden><div class=\"bubcontent\">" . $potconf->tooltip_html($ov->prow) . "</div></div>";
-                echo ' want-tooltip" aria-describedby="d-pcconf:', $id;
+                echo ' need-tooltip-within" aria-describedby="d-pcconf:', $id;
             }
             echo '">';
 
@@ -309,7 +316,7 @@ class PCConflicts_PaperOption extends PaperOption {
                 echo "<label><span class=\"checkc\">", $confx, "</span>", $name, "</label>";
             }
             if ($p->affiliation) {
-                echo '<span class="pcconfaff">' . htmlspecialchars(UnicodeHelper::utf8_abbreviate($p->affiliation, 60)) . '</span>';
+                echo '<span class="pcconfaff">' . htmlspecialchars(UnicodeHelper::utf8_word_abbreviate($p->affiliation, 60)) . '</span>';
             }
             echo $hidden;
             if ($potconf) {
@@ -339,7 +346,8 @@ class PCConflicts_PaperOption extends PaperOption {
         }
         // XXX potential conflicts?
         $user = $fr->user ?? Contact::make($this->conf);
-        $pcm = $this->conf->pc_members();
+        $can_view_authors = $user->can_view_authors($ov->prow);
+        $pcm = $this->conf->viewable_pc_members($user);
         $confset = $this->selectors ? $this->conf->conflict_set() : null;
         $names = [];
         foreach ($ov->prow->conflict_type_list() as $cflt) {
@@ -352,10 +360,12 @@ class PCConflicts_PaperOption extends PaperOption {
                 $t .= " <span class=\"auaff\">(" . htmlspecialchars($p->affiliation) . ")</span>";
             }
             $ch = "";
-            if (Conflict::is_author($cflt->conflictType)) {
-                $ch = "<strong>Author</strong>";
-            } else if ($confset) {
-                $ch = $confset->unparse_html($cflt->conflictType);
+            if ($can_view_authors) {
+                if (Conflict::is_author($cflt->conflictType)) {
+                    $ch = "<strong>Author</strong>";
+                } else if ($confset) {
+                    $ch = $confset->unparse_html($cflt->conflictType);
+                }
             }
             if ($ch !== "") {
                 $t .= " – {$ch}";

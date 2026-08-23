@@ -45,7 +45,7 @@ class PaperPDF_SearchTerm extends SearchTerm {
         } else if ($lword === "none" || $lword === "no") {
             return new PaperPDF_SearchTerm($srch, $dtype, false);
         }
-        $cf = new CheckFormat($srch->conf);
+        $cf = new CheckFormat($srch->conf, CheckFormat::RUN_NEVER);
         $errf = $cf->known_fields($dtype ?? DTYPE_SUBMISSION);
         if ($dtype === null && empty($errf)) {
             $errf = $cf->known_fields(DTYPE_FINAL);
@@ -59,10 +59,9 @@ class PaperPDF_SearchTerm extends SearchTerm {
             return new PaperPDF_SearchTerm($srch, $dtype, true, true);
         } else if (in_array($lword, $errf, true) || $lword === "error") {
             return new PaperPDF_SearchTerm($srch, $dtype, true, true, $lword);
-        } else {
-            $srch->lwarning($sword, "<0>Format error not found");
-            return null;
         }
+        $srch->lwarning($sword, "<0>Format error not found");
+        return null;
     }
     static function add_columns(SearchQueryInfo $sqi) {
         $sqi->add_column("paperStorageId", "Paper.paperStorageId");
@@ -72,15 +71,12 @@ class PaperPDF_SearchTerm extends SearchTerm {
         $sqi->add_column("pdfFormatStatus", "Paper.pdfFormatStatus");
     }
     function sqlexpr(SearchQueryInfo $sqi) {
-        if ($this->format_problem !== null) {
-            $this->add_columns($sqi);
-        } else {
-            if ($this->dtype === DTYPE_SUBMISSION || $this->dtype === null) {
-                $sqi->add_column("paperStorageId", "Paper.paperStorageId");
-            }
-            if ($this->dtype === DTYPE_FINAL || $this->dtype === null) {
-                $sqi->add_column("finalPaperStorageId", "Paper.finalPaperStorageId");
-            }
+        $this->add_columns($sqi);
+        if (!$this->present
+            && ($this->dtype === null
+                || !$this->user->conf->option_by_id($this->dtype)->always_visible()
+                || !$this->user->allow_admin_all())) {
+            return "true";
         }
         $f = [];
         if ($this->dtype === DTYPE_SUBMISSION || $this->dtype === null) {
@@ -91,35 +87,22 @@ class PaperPDF_SearchTerm extends SearchTerm {
         }
         return "(" . join($this->present ? " or " : " and ", $f) . ")";
     }
-    function is_sqlexpr_precise() {
-        return $this->dtype === DTYPE_SUBMISSION && $this->format_problem === null;
-    }
     function test(PaperInfo $row, $xinfo) {
         // XXX presence condition
-        $dtype = $this->dtype;
-        if ($dtype === null) {
-            if ($row->finalPaperStorageId > 1
-                && $this->user->can_view_decision($row)) {
-                $dtype = DTYPE_FINAL;
-            } else {
-                $dtype = DTYPE_SUBMISSION;
-            }
-        } else if ($dtype === DTYPE_FINAL
-                   && !$this->user->can_view_decision($row)) {
-            return false;
+        if ($this->dtype === null) {
+            $doc = $row->viewable_primary_document($this->user);
+        } else {
+            $doc_ov = $row->option($this->dtype);
+            $doc = $doc_ov && $this->user->can_view_option($row, $doc_ov->option)
+                ? $doc_ov->document_set(true)->document_by_index(0)
+                : null;
         }
-        $sub = $dtype === DTYPE_FINAL ? $row->finalPaperStorageId : $row->paperStorageId;
-        if ($sub > 1 && !$this->user->can_view_pdf($row)) {
-            $sub = 0;
-        }
-        if (($sub > 1) !== $this->present) {
+        if (!$doc || $doc->mimetype !== "application/pdf") {
+            return !$this->present;
+        } else if (!$this->present) {
             return false;
         }
         if ($this->format_problem !== null) {
-            $doc = $row->document($dtype, 0, true);
-            if (!$doc || $doc->mimetype !== "application/pdf") {
-                return false;
-            }
             $this->cf->check_document($doc);
             if ($this->cf->need_recheck()) {
                 if (!$this->cf_warn) {
@@ -161,23 +144,16 @@ class Pages_SearchTerm extends SearchTerm {
         $cm = new CountMatcher($word);
         if ($cm->ok()) {
             return new Pages_SearchTerm($srch, new CountMatcher($word));
-        } else {
-            $srch->lwarning($sword, "<0>Page number comparison expected");
-            return null;
         }
+        $srch->lwarning($sword, "<0>Page number comparison expected");
+        return null;
     }
     function sqlexpr(SearchQueryInfo $sqi) {
         PaperPDF_SearchTerm::add_columns($sqi);
         return "true";
     }
     function test(PaperInfo $row, $xinfo) {
-        $dtype = DTYPE_SUBMISSION;
-        if ($this->user->can_view_decision($row)
-            && $row->outcome > 0
-            && $row->finalPaperStorageId > 1) {
-            $dtype = DTYPE_FINAL;
-        }
-        $doc = $row->document($dtype);
+        $doc = $row->viewable_primary_document($this->user);
         if (!$doc || $doc->mimetype !== "application/pdf") {
             return false;
         }
@@ -191,11 +167,7 @@ class Pages_SearchTerm extends SearchTerm {
                 $this->cf_warn = true;
             }
             return true;
-        } else {
-            return false;
         }
-    }
-    function about() {
-        return self::ABOUT_PAPER;
+        return false;
     }
 }

@@ -55,14 +55,18 @@ DROP TABLE IF EXISTS `ContactCounter`;
 CREATE TABLE `ContactCounter` (
   `contactId` int NOT NULL,
   `apiCount` bigint NOT NULL DEFAULT 0,
-  `apiLimit` bigint NOT NULL DEFAULT 0,
-  `apiRefreshMtime` bigint NOT NULL DEFAULT 0,
-  `apiRefreshWindow` int NOT NULL DEFAULT 0,
-  `apiRefreshAmount` int NOT NULL DEFAULT 0,
-  `apiLimit2` bigint NOT NULL DEFAULT 0,
-  `apiRefreshMtime2` bigint NOT NULL DEFAULT 0,
-  `apiRefreshWindow2` int NOT NULL DEFAULT 0,
-  `apiRefreshAmount2` int NOT NULL DEFAULT 0,
+  `apiBase` bigint NOT NULL DEFAULT 0,
+  `apiBaseMtime` bigint NOT NULL DEFAULT 0,
+  `apiRefreshWindow` int DEFAULT NULL,
+  `apiRefreshAmount` int DEFAULT NULL,
+  `apiBase2` bigint NOT NULL DEFAULT 0,
+  `apiBaseMtime2` bigint NOT NULL DEFAULT 0,
+  `apiRefreshWindow2` int DEFAULT NULL,
+  `apiRefreshAmount2` int DEFAULT NULL,
+  `sensitiveSearchCount` bigint NOT NULL DEFAULT 0,
+  `sensitiveSearchFallbackCount` bigint NOT NULL DEFAULT 0,
+  `sensitiveSearchBase` bigint NOT NULL DEFAULT 0,
+  `sensitiveSearchBaseMtime` bigint NOT NULL DEFAULT 0,
   PRIMARY KEY (`contactId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -91,6 +95,7 @@ CREATE TABLE `ContactInfo` (
   `passwordTime` bigint NOT NULL DEFAULT 0,
   `passwordUseTime` bigint NOT NULL DEFAULT 0,
   `collaborators` varbinary(8192) DEFAULT NULL,
+  `collaboratorsOverflow` longblob DEFAULT NULL,
   `preferredEmail` varchar(120) DEFAULT NULL,
   `updateTime` bigint NOT NULL DEFAULT 0,
   `lastLogin` bigint NOT NULL DEFAULT 0,
@@ -274,6 +279,8 @@ CREATE TABLE `Paper` (
   `timeWithdrawn` bigint NOT NULL DEFAULT 0,
   `timeModified` bigint NOT NULL DEFAULT 0,
   `timeFinalSubmitted` bigint NOT NULL DEFAULT 0,
+  `timeSubmittedReviewable` bigint NOT NULL DEFAULT 0,
+  `timeAcceptNotified` bigint NOT NULL DEFAULT 0,
   `paperStorageId` int NOT NULL DEFAULT 0,
   # `sha1` copied from PaperStorage to reduce joins
   `sha1` varbinary(64) NOT NULL DEFAULT '',
@@ -378,7 +385,7 @@ CREATE TABLE `PaperReview` (
   `reviewBlind` tinyint NOT NULL,
   `reviewTime` bigint NOT NULL DEFAULT 0,
   `reviewModified` bigint NOT NULL DEFAULT 0,
-  `reviewSubmitted` bigint DEFAULT NULL,
+  `reviewSubmitted` bigint NOT NULL DEFAULT 0,
   `reviewAuthorSeen` bigint NOT NULL DEFAULT 0,
   `timeDisplayed` bigint NOT NULL DEFAULT 0,
   `timeApprovalRequested` bigint NOT NULL DEFAULT 0,
@@ -659,7 +666,7 @@ CREATE TABLE `TopicInterest` (
 -- Initial settings
 -- (each setting must be on its own line for createdb.php/createdb.sh)
 insert into Settings (name, value, data) values
-  ('allowPaperOption', 320, null),   -- schema version
+  ('allowPaperOption', 329, null),   -- schema version
   ('setupPhase', 1, null),           -- initial user is chair
   ('no_papersub', 1, null),          -- no submissions yet
   ('sub_pcconf', 1, null),           -- collect PC conflicts, not collaborators

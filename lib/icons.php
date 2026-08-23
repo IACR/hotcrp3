@@ -4,9 +4,9 @@
 
 class Icons {
     /** @readonly */
-    static public $svg_open = '<svg class="licon" width="1em" height="1em" viewBox="0 0 64 64" preserveAspectRatio="none">';
+    static public $svg_open = '<svg class="licon licon-m" viewBox="0 0 64 64" preserveAspectRatio="none" aria-hidden="true">';
     /** @readonly */
-    static public $move_handle_horizontal_open = '<svg class="move-handle-icon" width="1em" height="0.666em" viewBox="0 0 18 12" preserveAspectRatio="none">';
+    static public $move_handle_horizontal_open = '<svg class="move-handle-icon" width="1em" height="0.666em" viewBox="0 0 18 12" preserveAspectRatio="none" aria-hidden="true">';
 
     /** @param string $name
      * @return string */
@@ -28,8 +28,12 @@ class Icons {
             return '<path d="M 10 11L54 11C55 11 56 12 56 13L56 35C56 36 55 37 54 37L10 37C9 37 8 36 8 35L8 13C8 12 9 11 10 11ZM4 12L4 36C4 40 6 42 10 42L29 42L28 50C28 50 28 53 23 54C18 55 14 56 12 57C11 59 12 59 16 59L48 59C52 59 53 59 52 57C50 56 46 55 41 54C36 53 36 50 36 50L35 42L54 42C58 42 60 40 60 36L60 12C60 8 58 6 54 6L10 6C6 6 4 8 4 12Z" />';
         case "trash":
             return '<path d="M48 55c0 3-2 5-5 5H21c-3 0-5-2-5-5V20q-3 0-3-3v-3c0-2 2-4 4-4h4V8c0-2 2-4 4-4h14c2 0 4 2 4 4v2h4c2 0 4 2 4 4v3q0 3-3 3ZM15 14v4h34v-4c0-1-1-2-2-2H17c-1 0-2 1-2 2m8-6v2h18V8c0-1-1-2-2-2H25c-1 0-2 1-2 2m-4 46c0 1.7 1.3 3 3 3h20c1.7 0 3-1.3 3-3V20H19Zm20-32h1c.6 0 1 .4 1 1v30c0 .6-.4 1-1 1h-1c-.6 0-1-.4-1-1V23c0-.6.4-1 1-1m-7.5 0h1c.6 0 1 .4 1 1v30c0 .6-.4 1-1 1h-1c-.6 0-1-.4-1-1V23c0-.6.4-1 1-1M24 22h1c.6 0 1 .4 1 1v30c0 .6-.4 1-1 1h-1c-.6 0-1-.4-1-1V23c0-.6.4-1 1-1z" />';
+        case "copy":
+            return '<path d="M40 21L40 11A5 5 0 0 0 35 6L11 6A5 5 0 0 0 6 11L6 35A5 5 0 0 0 11 40L21 40L21 37L11 37A2 2 0 0 1 9 35L9 11A2 2 0 0 1 11 9L35 9A2 2 0 0 1 37 11L37 21ZM29 24L53 24A5 5 0 0 1 58 29L58 53A5 5 0 0 1 53 58L29 58A5 5 0 0 1 24 53L24 29A5 5 0 0 1 29 24ZM27 29L27 53A2 2 0 0 0 29 55L53 55A2 2 0 0 0 55 53L55 29A2 2 0 0 0 53 27L29 27A2 2 0 0 0 27 29Z" />';
         case "eye":
-            return '<path d="M32 18C50 18 59 32 59 32C59 32 50 47 32 47C14 47 5 32 5 32C5 32 14 18 32 18ZM10 32C10 32 17 42 32 42C47 42 54 32 54 32C54 32 47 23 32 23C17 23 10 32 10 32ZM40 32C40 36 36 40 32 40C28 40 24 36 24 32C24 28 28 24 32 24C36 24 40 28 40 32Z" />';
+            // outer ellipse 50x40, ring inset 3 (L/R) and 4 (T/B), pupil r6;
+            // ring reads as a 3.7u stroke against the set's 3.0u pen
+            return '<path d="M7 32A25 20 0 0 1 57 32A25 20 0 0 1 7 32ZM10 32A22 16 0 0 0 54 32A22 16 0 0 0 10 32ZM26 32A6 6 0 0 0 38 32A6 6 0 0 0 26 32Z" />';
         case "pencil":
             return '<path d="M51.5 53.4C52.5 53.4 55 51 55 50L53.2 46.2C53.1 47.6 52 49.6 50 50C50 50 49.3 51.9 48.3 51.9L51.5 53.4ZM52 45L15 14C14 17 12 19 10 20L47 51C48 51 49 50 49 49C51 48.3 52 47 52 45ZM3 16C2 13 7 8 10 8L54 45L61 59L47 53L3 16Z" />';
         case "description":
@@ -64,12 +68,14 @@ class Icons {
         }
     }
     /** @param string $name
+     * @param null|'s'|'m'|'l' $size
      * @return string */
-    static function ui_use($name) {
+    static function ui_use($name, $size = null) {
         if ($name === "move_handle_horizontal") {
             $open = self::$move_handle_horizontal_open;
         } else {
-            $open = self::$svg_open;
+            $size = $size ?? "l";
+            $open = "<svg class=\"licon licon-{$size}\" viewBox=\"0 0 64 64\" preserveAspectRatio=\"none\">";
         }
         return "{$open}<use href=\"#i-def-{$name}\" /></svg>";
     }
@@ -77,25 +83,25 @@ class Icons {
      * @return string */
     static function ui_triangle($direction) {
         // see also script.js
-        return '<svg class="licon" width="0.75em" height="0.75em" viewBox="0 0 64 64" preserveAspectRatio="none">' . self::svg_contents("triangle{$direction}") . '</svg>';
+        return '<svg class="licon licon-s" viewBox="0 0 64 64" preserveAspectRatio="none">' . self::svg_contents("triangle{$direction}") . '</svg>';
     }
     /** @return string */
     static function ui_upperleft() {
-        return '<svg class="licon" width="1em" height="1em" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="M16 10L16 13C9 15 5 12 6 6L2 7L8 1L14 7L10 6C9 9 10 11 16 10z" /></svg>';
+        return '<svg class="licon licon-m" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="M16 10L16 13C9 15 5 12 6 6L2 7L8 1L14 7L10 6C9 9 10 11 16 10z" /></svg>';
     }
     /** @param 0|1|2|3 $direction
      * @return string */
     static function ui_linkarrow($direction) {
         if ($direction === 0) {
-            $t = 'M2 11L8 1L14 11';
+            $t = 'M8 44L32 4L56 44';
         } else if ($direction === 1) {
-            $t = 'M5 3L15 9L5 15';
+            $t = 'M20 12L60 36L20 60';
         } else if ($direction === 2) {
-            $t = 'M2 3L8 13L14 3';
+            $t = 'M8 12L32 52L56 12';
         } else { // $direction === 3
-            $t = 'M11 3L1 9L11 15';
+            $t = 'M44 12L4 36L44 60';
         }
-        return '<svg class="licon-s" width="0.75em" height="0.75em" viewBox="0 0 16 16" preserveAspectRatio="none"><path d="' . $t . '" /></svg>';
+        return '<svg class="licon licon-s" viewBox="0 0 64 64" preserveAspectRatio="none"><path fill="none" stroke-width="8" d="' . $t . '" /></svg>';
     }
     /** @param 0|2 $direction
      * @return string */
@@ -109,14 +115,6 @@ class Icons {
     /** @return string */
     static function ui_trash() {
         return self::$svg_open . self::svg_contents("trash") . '</svg>';
-    }
-    /** @return string */
-    static function ui_eye() {
-        return self::$svg_open . self::svg_contents("eye") . '</svg>';
-    }
-    /** @return string */
-    static function ui_visibility_hide() {
-        return self::ui_eye();
     }
     /** @return string */
     static function ui_pencil() {
@@ -136,57 +134,16 @@ class Icons {
     }
     /** @return string */
     static function ui_check_format() {
-        return '<svg class="licon" width="1em" height="1em" viewBox="0 0 64 64" preserveAspectRatio="none">
+        return '<svg class="licon licon-m" viewBox="0 0 64 64" preserveAspectRatio="none">
   <path d="M 54 10 L 37 34 L 24 25 L 26 22 L 36 27 L 51 7 L 54 10 Z M 13 15 L 21 15 L 20 18 L 16 18 L 16 57 C 16 57 30 57 34 57 C 36 57 36 55 36 54 C 36 51 36 45 36 45 C 36 45 44 45 46 45 C 48 45 48 43 48 42 C 48 38 48 34 48 34 L 51 34 C 51 34 51 42 51 47 C 51 49 50 51 49 52 C 46 55 45 56 43 58 C 42 59 41 60 38 60 C 30 60 13 60 13 60 L 13 15 Z M 38 47 L 38 57 L 48 47 L 38 47 Z"></path>
 </svg>';
     }
     /** @return string */
-    static function ui_attachment() {
-        return self::$svg_open . self::svg_contents("attachment") . '</svg>';
-    }
-    /** @return string */
-    static function ui_tag() {
-        return self::$svg_open . self::svg_contents("tag") . '</svg>';
-//<path d="M 19.9 15.7 C 19.9 15.7 18.5 17.2 18.5 18.5 L 18.5 58.8 C 18.5 60.5 19.8 61.8 21.5 61.7 L 43.5 61.8 C 45.2 61.8 46.5 60.4 46.5 58.8 L 46.5 18.4 C 46.6 17.9 46.4 17 45.7 15.9 L 35.9 4 C 34.7 2.6 33.7 2 32.6 2 C 31.5 2 30.4 2.6 29.3 4 C 29.3 4 20 15.8 19.9 15.7 Z M 43.4 58.1 L 21.6 58.1 L 21.7 19.6 L 43.5 19.6 Z M 34.5 8.4 C 36.3 9.5 36.7 11.8 35.7 13.6 C 34.6 15.4 32.2 16 30.4 14.9 C 28.6 13.8 28.1 11.5 29.3 9.7 C 30.4 7.9 32.7 7.3 34.5 8.4 Z" /></svg>';
-    }
-    /** @return string */
     static function ui_solid_question() {
-        return '<svg class="licon" width="0.75em" height="0.75em" viewBox="0 0 64 64" preserveAspectRatio="none">' . self::svg_contents("solid_question") . '</svg>';
+        return '<svg class="licon licon-s" viewBox="0 0 64 64" preserveAspectRatio="none">' . self::svg_contents("solid_question") . '</svg>';
     }
     /** @return string */
     static function ui_move_handle_horizontal() {
         return self::$move_handle_horizontal_open . self::svg_contents("move_handle_horizontal") . '</svg>';
-
-    }
-    /** @return string */
-    static function ui_graph_scatter() {
-        return '<svg class="licon-s" width="3em" height="2em" viewBox="0 0 96 64" preserveAspectRatio="none"><path stroke-linejoin="miter" d="M7 12V60H89" /><circle cx="22" cy="22" r="4" class="gdot" /><circle cx="39" cy="41" r="6" class="gdot" /><circle cx="54" cy="22" r="2" class="gdot" /><circle cx="64" cy="50" r="3" class="gdot" /><circle cx="64" cy="20" r="2" class="gdot" /><circle cx="75" cy="39" r="3" class="gdot" /></svg>';
-    }
-    /** @return string */
-    static function ui_graph_bars() {
-        return '<svg class="licon-s" width="3em" height="2em" viewBox="0 0 96 64" preserveAspectRatio="none"><path d="M18 59V29H25V59" class="gbar" /><path d="M35 59V22H42V59" class="gbar" /><path d="M70 59V41H77V59" class="gbar" /><path d="M53 59V33H60V59" class="gbar" /><path stroke-linejoin="miter" d="M7 12V60H89" /></svg>';
-    }
-    /** @return string */
-    static function ui_graph_box() {
-        return '<svg class="licon-s" width="3em" height="2em" viewBox="0 0 96 64" preserveAspectRatio="none"><path d="M19 50V27H25V50Z M22 18V27 M22 50V53" class="gbox" /><path d="M37 43V29H43V43Z M40 13V29 M40 43V49" class="gbox" /><path d="M70 40V20H76V40Z M73 17V20 M73 40V56" class="gbox" /><path d="M53 47V44H59V47Z M56 36V41 M56 47V53" class="gbox" /><path stroke-linejoin="miter" d="M7 12V60H89" /></svg>';
-    }
-    /** @return string */
-    static function ui_graph_cdf() {
-        return '<svg class="licon-s" width="3em" height="2em" viewBox="0 0 96 64" preserveAspectRatio="none"><path d="M21 60V54H33V46H50V32H60V28H66V15H71V12H89" class="gcdf" /><path stroke-linejoin="miter" d="M7 12V60H89" /></svg>';
-    }
-    /** @param string $name */
-    static function stash_licon($name) {
-        if (!Ht::mark_stash("i-{$name}")) {
-            return;
-        }
-        $xname = str_replace("_", "-", $name);
-        if (str_starts_with($xname, "ui-")) {
-            $xname = substr($xname, 3);
-            self::stash_defs($xname);
-            Ht::stash_html("<div id=\"i-{$xname}\" hidden>" . self::ui_use($xname) . "</div>");
-        } else {
-            $body = Icons::$name();
-            Ht::stash_html("<div id=\"i-{$xname}\" hidden>{$body}</div>");
-        }
     }
 }

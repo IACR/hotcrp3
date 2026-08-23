@@ -1,6 +1,6 @@
 <?php
 // listactions/la_revpref.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Revpref_ListAction extends ListAction {
     /** @var string */
@@ -62,7 +62,8 @@ class Revpref_ListAction extends ListAction {
         ];
         $texts = [];
         foreach ($ssel->paper_set($user, ["topics" => 1, "reviewerPreference" => 1]) as $prow) {
-            if ($not_me && !$user->allow_administer($prow)) {
+            // own preferences require view access, others' require administration
+            if ($not_me ? !$user->allow_admin($prow) : !$user->can_view_paper($prow)) {
                 continue;
             }
             $item = ["paper" => $prow->paperId, "title" => $prow->title];
@@ -128,7 +129,7 @@ class Revpref_ListAction extends ListAction {
         if ($aset->has_error()) {
             return;
         }
-        return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
+        return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_REDIRECTABLE));
     }
 
     function run_uploadpref(Contact $user, Qrequest $qreq, SearchSelection $ssel,
@@ -136,7 +137,7 @@ class Revpref_ListAction extends ListAction {
         $reviewer_arg = $user->contactId === $reviewer->contactId ? null : $reviewer->email;
         $conf = $user->conf;
         if ($qreq->cancel && $qreq->page() !== "api") {
-            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
+            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_REDIRECTABLE));
         }
 
         if (($qf = $qreq->file("preffile"))) {
@@ -201,13 +202,13 @@ class Revpref_ListAction extends ListAction {
         }
         if ($execute || $aset->is_empty()) {
             $aset->feedback_msg(AssignmentSet::FEEDBACK_CHANGE);
-            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
+            return new Redirection($user->conf->selfurl($qreq, null, Conf::HOTURL_REDIRECTABLE));
         }
 
         $qreq->print_header("Review preferences", "revpref");
         $aset->feedback_msg(AssignmentSet::FEEDBACK_CHANGE_IGNORE);
 
-        echo Ht::form($conf->hoturl("=reviewprefs", ["reviewer" => $reviewer_arg]),
+        echo $conf->hotform("=reviewprefs", ["reviewer" => $reviewer_arg],
             ["class" => "ui-submit js-selector-summary differs need-unload-protection"]),
             Ht::hidden("fn", "applyuploadpref");
         if ($aset->assignment_count() < 5000) {
@@ -228,6 +229,6 @@ class Revpref_ListAction extends ListAction {
             Ht::submit("cancel", "Cancel", ["formnovalidate" => true])
         ], ["class" => "aab aabig"]), "</form>\n";
         $qreq->print_footer();
-        exit(0);
+        Navigation::complete();
     }
 }

@@ -1266,6 +1266,42 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         return $this->conf->ql_ok("update ContactInfo set cflags=cflags|0x100 where contactId?a", $uids);
     }
 
+    private function v321_sanitize_mimetype($mimetype) {
+        if (preg_match('/\A([a-z]++\/[a-z0-9][-a-zA-Z0-9_.+]*+)(?:\s*+;\s*+[^\s=]++=\S+)*\z/i', $mimetype, $m)
+            && strlen($m[1]) <= 80) {
+            return strtolower($m[1]);
+        }
+        return "application/octet-stream";
+    }
+
+    private function v321_correct_mimetypes($table) {
+        $result = $this->conf->ql("select distinct mimetype from {$table}");
+        $qv = $cases = [];
+        while (($row = $result->fetch_row())) {
+            $mt = $row[0];
+            if (($mt2 = $this->v321_sanitize_mimetype($mt)) !== $mt) {
+                $qv[] = $mt;
+                $qv[] = $mt2;
+                $cases[] = "when ? then ?";
+            }
+        }
+        $result->close();
+        if (!empty($qv)) {
+            $this->conf->ql("update {$table} set mimetype=case mimetype " . join(" ", $cases) . " else mimetype end", ...$qv);
+        }
+        return true;
+    }
+
+    private function v329_delete_withdrawn_certifications() {
+        $oids = [];
+        foreach ($this->conf->options() as $opt) {
+            if ($opt->reset_on_withdraw())
+                $oids[] = $opt->id;
+        }
+        return empty($oids)
+            || $this->conf->ql_ok("delete from PaperOption where optionId?a and paperId in (select paperId from Paper where timeWithdrawn>0)", $oids);
+    }
+
     /** @return bool */
     function run() {
         $conf = $this->conf;
@@ -1382,6 +1418,14 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
         if ($conf->sversion <= 281
             && !$conf->setting("__extrev_seerev_v282")) {
             $this->v282_update_viewrev();
+        }
+
+        // set stored reviewSubmitted null values to 0
+        if ($conf->sversion >= 122
+            && $conf->sversion <= 327
+            && !$conf->setting("__reviewSubmitted_null_v328")) {
+            $conf->ql("update PaperReview set reviewSubmitted=0 where reviewSubmitted is null");
+            $conf->save_setting("__reviewSubmitted_null_v328", 1);
         }
 
         if ($conf->sversion === 6
@@ -3235,6 +3279,59 @@ set ordinal=(t.maxOrdinal+1) where commentId={$row[1]}");
             && $conf->ql_ok("alter table Capability add `outputTimestamp` bigint")
             && $conf->ql_ok("alter table Capability add `outputMimetype` varbinary(80)")) {
             $conf->update_schema_version(320);
+        }
+        if ($conf->sversion === 320
+            && $this->v321_correct_mimetypes("PaperStorage")
+            && $this->v321_correct_mimetypes("Paper")) {
+            $conf->update_schema_version(321);
+        }
+        if ($conf->sversion === 321
+            && $conf->ql_ok("delete from DeletedContactInfo where (select email from ContactInfo where contactId=DeletedContactInfo.contactId and (cflags&8)!=0)=DeletedContactInfo.email")) {
+            $conf->update_schema_version(322);
+        }
+        if ($conf->sversion === 322
+            && $conf->ql_ok("alter table ContactInfo add `collaboratorsOverflow` longblob DEFAULT NULL")) {
+            $conf->update_schema_version(323);
+        }
+        if ($conf->sversion === 323
+            && $conf->ql_ok("alter table Paper add `timeSubmittedReviewable` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table Paper add `timeAcceptNotified` bigint NOT NULL DEFAULT 0")) {
+            $conf->update_schema_version(324);
+        }
+        if ($conf->sversion === 324
+            && $conf->ql_ok("alter table ContactCounter change `apiLimit` `apiBase` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter change `apiRefreshMtime` `apiBaseMtime` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter change `apiRefreshWindow` `apiRefreshWindow` int DEFAULT NULL")
+            && $conf->ql_ok("alter table ContactCounter change `apiRefreshAmount` `apiRefreshAmount` int DEFAULT NULL")
+            && $conf->ql_ok("alter table ContactCounter change `apiLimit2` `apiBase2` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter change `apiRefreshMtime2` `apiBaseMtime2` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter change `apiRefreshWindow2` `apiRefreshWindow2` int DEFAULT NULL")
+            && $conf->ql_ok("alter table ContactCounter change `apiRefreshAmount2` `apiRefreshAmount2` int DEFAULT NULL")
+            && $conf->ql_ok("update ContactCounter set apiRefreshWindow=NULLIF(apiRefreshWindow,0), apiRefreshAmount=NULLIF(apiRefreshAmount,0), apiRefreshWindow2=NULLIF(apiRefreshWindow2,0), apiRefreshAmount2=NULLIF(apiRefreshAmount2,0), apiBase=0, apiBaseMtime=0, apiBase2=0, apiBaseMtime2=0")) {
+            $conf->update_schema_version(325);
+        }
+        if ($conf->sversion === 325
+            && $conf->ql_ok("alter table ContactCounter add `sensitiveSearchCount` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter add `sensitiveSearchFallbackCount` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter add `sensitiveSearchBase` bigint NOT NULL DEFAULT 0")
+            && $conf->ql_ok("alter table ContactCounter add `sensitiveSearchBaseMtime` bigint NOT NULL DEFAULT 0")) {
+            $conf->update_schema_version(326);
+        }
+        if ($conf->sversion === 326
+            && $conf->ql_ok("insert into Settings (name, value, data) select 'idpermuter_user', value, data from Settings where name='__id_permuter_key' on duplicate key update name='idpermuter_user'")
+            && $conf->ql_ok("insert into Settings (name, value, data) select 'idpermuter_assignment', value, data from Settings where name='__assignment_key' on duplicate key update name='idpermuter_assignment'")
+            && $conf->ql_ok("delete from Settings where name in ('__assignment_key', '__id_permuter_key', '__banal_count')")) {
+            $conf->update_schema_version(327);
+        }
+        if ($conf->sversion === 327
+            && $conf->ql_ok("update PaperReview set reviewSubmitted=0 where reviewSubmitted is null")
+            && $conf->ql_ok("alter table PaperReview change `reviewSubmitted` `reviewSubmitted` bigint NOT NULL DEFAULT 0")) {
+            $conf->update_schema_version(328);
+            $conf->save_setting("__reviewSubmitted_null_v328", null);
+        }
+        if ($conf->sversion === 328
+            && $this->v329_delete_withdrawn_certifications()) {
+            $conf->update_schema_version(329);
         }
 
         $conf->ql_ok("delete from Settings where name='__schema_lock'");

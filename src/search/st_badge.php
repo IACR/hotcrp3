@@ -15,6 +15,9 @@ class Badge_SearchTerm extends SearchTerm {
         $this->word = $word;
     }
     function sqlexpr(SearchQueryInfo $sqi) {
+        if (!$this->user->can_view_tags()) {
+            return "false";
+        }
         return 'exists (select * from PaperTag where paperId=Paper.paperId)';
     }
     function test(PaperInfo $row, $xinfo) {
@@ -29,7 +32,7 @@ class Badge_SearchTerm extends SearchTerm {
         return ["type" => $this->type, "style" => $this->word];
     }
     function about() {
-        return self::ABOUT_PAPER;
+        return self::ABOUT_TAGS;
     }
 
     static function parse($word, SearchWord $sword, PaperSearch $srch) {

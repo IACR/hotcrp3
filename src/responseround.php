@@ -1,12 +1,12 @@
 <?php
 // responseround.php -- HotCRP helper class for response rounds
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class ResponseRound {
     /** @var bool */
     public $unnamed = false;
     /** @var string */
-    public $name;
+    public $name;              // round name; "1" if unnamed
     /** @var int */
     public $id;
     /** @var bool */
@@ -58,9 +58,23 @@ class ResponseRound {
         return $this->_condition_term->test($prow, null);
     }
 
+    /** @param int $boundary
+     * @return int */
+    function closest_deadline_after($boundary) {
+        $t = $this->open >= $boundary ? $this->open : PHP_INT_MAX;
+        if ($this->open > 0) {
+            if ($this->done >= $boundary) {
+                $t = min($t, $this->done);
+            } else if ($this->done + $this->grace >= $boundary) {
+                $t = min($t, $this->done + $this->grace);
+            }
+        }
+        return $t;
+    }
+
     /** @return bool */
     function relevant(Contact $user, ?PaperInfo $prow = null) {
-        if (($prow ? $user->allow_administer($prow) : $user->is_manager())
+        if (($prow ? $user->allow_admin($prow) : $user->is_manager())
             && ($this->done || $this->condition !== null || $this->name !== "1")) {
             return true;
         } else if ($user->isPC) {
@@ -87,12 +101,16 @@ class ResponseRound {
     }
 
     /** @return string */
+    function id_name() {
+        return $this->unnamed ? "response" : $this->name . "response";
+    }
+
+    /** @return string */
     function instructions(Conf $conf) {
         $wl = new FmtArg("wordlimit", $this->wordlimit);
         if ($this->instructions !== null) {
             return $conf->_x($this->instructions, $wl);
-        } else {
-            return $conf->_i("resp_instrux", $wl) ?? "";
         }
+        return $conf->_i("resp_instrux", $wl) ?? "";
     }
 }

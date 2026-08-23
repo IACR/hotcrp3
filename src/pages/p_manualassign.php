@@ -1,6 +1,6 @@
 <?php
 // pages/manualassign.php -- HotCRP chair's paper assignment page
-// Copyright (c) 2006-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class ManualAssign_Page {
     /** @var Conf */
@@ -41,7 +41,7 @@ class ManualAssign_Page {
 
             $ct = $row->conflict_type($reviewer);
             $rt = $row->review_type($reviewer);
-            if (!$this->viewer->can_administer($row)
+            if (!$this->viewer->can_manage_reviews($row)
                 || Conflict::is_author($ct)) {
                 continue;
             }
@@ -86,7 +86,7 @@ class ManualAssign_Page {
             }
         }
 
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
     }
 
 
@@ -161,8 +161,7 @@ class ManualAssign_Page {
 
         $show = " show:au" . ($this->conf->setting("sub_collab") ? " show:co" : "");
         echo '<div class="f-i">',
-            '<a href="', $this->conf->hoturl("search", "q=" . urlencode(join(" OR ", $hlsearch) . " OR conf:" . $reviewer->email . $show) . '&amp;linkto=assign&amp;reviewer=' . urlencode($reviewer->email)),
-            '">Search for current and potential conflicts</a></div>';
+            $this->conf->hotlink("Search for current and potential conflicts", "search", ["q" => join(" OR ", $hlsearch) . " OR conf:" . $reviewer->email . $show, "linkto" => "assign", "reviewer" => $reviewer->email]), '</div>';
 
         // main assignment form
         $search = (new PaperSearch($this->viewer, [
@@ -173,7 +172,7 @@ class ManualAssign_Page {
         $pl = new PaperList("reviewAssignment", $search, ["sort" => true], $this->qreq);
         $pl->apply_view_session($this->qreq);
         $pl->apply_view_qreq($this->qreq);
-        echo Ht::form($this->conf->hoturl("=manualassign", ["reviewer" => $reviewer->email, "sort" => $this->qreq->sort]), ["class" => "need-diff-check assignpc ignore-diff"]),
+        echo $this->conf->hotform("=manualassign", ["reviewer" => $reviewer->email, "sort" => $this->qreq->sort], ["class" => "need-diff-check assignpc ignore-diff"]),
             Ht::hidden("t", $this->qreq->t),
             Ht::hidden("q", $this->qreq->q);
         $rev_rounds = $this->conf->round_selector_options(false);
@@ -198,8 +197,8 @@ class ManualAssign_Page {
                 '<ul class="entry inline">', join('', $show_data), '</ul></div>';
         }
         echo Ht::hidden("forceShow", 1, ["id" => "showforce"]); // search API must override conflicts
-        echo '<div class="entryi autosave-hidden hidden"><label></label><div class="entry">',
-            Ht::submit("update", "Save assignments", ["class" => "btn-primary big"]), '</div></div>';
+        echo '<div class="entryi autosave-hidden" hidden><label></label><div class="entry">',
+            Ht::submit("update", "Save assignments", ["class" => "btn-primary"]), '</div></div>';
         echo '</div>';
 
         $pl->set_table_id_class("pl", null);
@@ -219,20 +218,20 @@ class ManualAssign_Page {
     function print(?Contact $reviewer = null) {
         $this->qreq->print_header("Assignments", "manualassign", ["subtitle" => "Manual"]);
         echo '<nav class="papmodes mb-5 clearfix"><ul>',
-            '<li class="papmode"><a href="', $this->conf->hoturl("autoassign"), '">Automatic</a></li>',
-            '<li class="papmode active"><a href="', $this->conf->hoturl("manualassign"), '">Manual</a></li>',
-            '<li class="papmode"><a href="', $this->conf->hoturl("conflictassign"), '">Conflicts</a></li>',
-            '<li class="papmode"><a href="', $this->conf->hoturl("bulkassign"), '">Bulk update</a></li>',
+            '<li class="papmode">', $this->conf->hotlink("Automatic", "autoassign"), '</li>',
+            '<li class="papmode active">', $this->conf->hotlink("Manual", "manualassign"), '</li>',
+            '<li class="papmode">', $this->conf->hotlink("Conflicts", "conflictassign"), '</li>',
+            '<li class="papmode">', $this->conf->hotlink("Bulk update", "bulkassign"), '</li>',
             '</ul></nav>';
 
         // Help list
         echo '<div class="helpside"><div class="helpinside">
 <p>Assignment methods:</p>
-<ul><li><a href="', $this->conf->hoturl("autoassign"), '">Automatic</a></li>
- <li><a href="', $this->conf->hoturl("manualassign"), '" class="q"><strong>Manual by PC member</strong></a></li>
- <li><a href="', $this->conf->hoturl("assign"), '">Manual by paper</a></li>
- <li><a href="', $this->conf->hoturl("conflictassign"), '">Potential conflicts</a></li>
- <li><a href="', $this->conf->hoturl("bulkassign"), '">Bulk update</a></li>
+<ul><li>', $this->conf->hotlink("Automatic", "autoassign"), '</li>
+ <li>', $this->conf->hotlink("<strong>Manual by PC member</strong>", "manualassign", null, ["class" => "q"]), '</li>
+ <li>', $this->conf->hotlink("Manual by paper", "assign"), '</li>
+ <li>', $this->conf->hotlink("Potential conflicts", "conflictassign"), '</li>
+ <li>', $this->conf->hotlink("Bulk update", "bulkassign"), '</li>
 </ul>
 <hr>
 <p>Types of PC review:</p>
@@ -242,7 +241,7 @@ class ManualAssign_Page {
   <dt>', review_type_icon(REVIEW_META), ' Metareview</dt><dd>Can view all other reviews before completing their own</dd></dl>
 <hr>
 <dl class="bsp"><dt>Potential conflicts</dt><dd>Matches between PC member collaborators and paper authors, or between PC member and paper authors or collaborators</dd>
-  <dt>Preference</dt><dd><a href="', $this->conf->hoturl("reviewprefs"), '">Review preference</a></dd>
+  <dt>Preference</dt><dd>', $this->conf->hotlink("Review preference", "reviewprefs"), '</dd>
   <dt>Topic score</dt><dd>High value means PC member has interest in many paper topics</dd>
   <dt>Desirability</dt><dd>High values mean many PC members want to review the paper</dd></dl>
 <p>Click a heading to sort.</p></div></div>';
@@ -258,7 +257,7 @@ class ManualAssign_Page {
 
         // Change PC member
         echo "<table><tr><td><div class=\"assignpc_pcsel\">",
-            Ht::form($this->conf->hoturl("manualassign"), ["method" => "get", "id" => "selectreviewerform", "class" => "need-diff-check"]);
+            $this->conf->hotform("manualassign", null, ["method" => "get", "id" => "selectreviewerform", "class" => "need-diff-check"]);
         Ht::stash_script('$("#selectreviewerform").awaken()');
 
         $acs = AssignmentCountSet::load($this->viewer, AssignmentCountSet::HAS_REVIEW);
@@ -266,9 +265,22 @@ class ManualAssign_Page {
         if (!$reviewer) {
             $rev_opt[0] = "(Select a PC member)";
         }
+        $unlisted = [];
         foreach ($this->conf->pc_members() as $pc) {
-            $rev_opt[$pc->email] = htmlspecialchars($pc->name(NAME_P|NAME_S)) . " ("
-                . plural($acs->get($pc->contactId)->rev, "assignment") . ")";
+            if ($pc->is_listed_pc_member()) {
+                $rev_opt[$pc->email] = $pc->name(NAME_P|NAME_S) . " ("
+                    . plural($acs->get($pc->contactId)->rev, "assignment") . ")";
+            } else {
+                $unlisted[] = $pc;
+            }
+        }
+        // unlisted PC members are assignable, but grouped at the end
+        if (!empty($unlisted)) {
+            $rev_opt[] = ["optgroup", "Unlisted PC members"];
+            foreach ($unlisted as $pc) {
+                $rev_opt[$pc->email] = $pc->name(NAME_P|NAME_S) . " ("
+                    . plural($acs->get($pc->contactId)->rev, "assignment") . ")";
+            }
         }
 
         echo "<table><tr><td><strong>PC member:</strong> &nbsp;</td>",
@@ -305,7 +317,8 @@ class ManualAssign_Page {
     function run() {
         $overrides = $this->viewer->add_overrides(Contact::OVERRIDE_CONFLICT);
 
-        $this->limits = PaperSearch::viewable_manager_limits($this->viewer);
+        $this->limits = PaperSearch::viewable_manager_limits($this->viewer, $this->qreq->t);
+        array_unshift($this->limits, "reviewable");
         if (!$this->qreq->t || !in_array($this->qreq->t, $this->limits, true)) {
             $this->qreq->t = $this->limits[0];
         }
@@ -321,7 +334,7 @@ class ManualAssign_Page {
                 ? $this->conf->user_by_id(intval($this->qreq->reviewer), USER_SLICE)
                 : $this->conf->user_by_email($this->qreq->reviewer, USER_SLICE);
         }
-        if ($reviewer && ($reviewer->roles & Contact::ROLE_PC) === 0) {
+        if ($reviewer && !$reviewer->is_pc_member()) {
             $reviewer = null;
         }
 

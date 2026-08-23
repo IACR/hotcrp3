@@ -1,6 +1,6 @@
 <?php
 // listactions/la_getreviewforms.php -- HotCRP helper classes for list actions
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class GetReviewForms_ListAction extends GetReviewBase_ListAction {
     private $all;
@@ -9,7 +9,8 @@ class GetReviewForms_ListAction extends GetReviewBase_ListAction {
         $this->all = $fj->all;
     }
     function allow(Contact $user, Qrequest $qreq) {
-        return $this->all ? $user->is_manager() : $user->is_reviewer();
+        return ($this->all ? $user->is_manager() : $user->is_reviewer())
+            && $user->scope_allows_some(TokenScope::S_REV_READ);
     }
     function run(Contact $user, Qrequest $qreq, SearchSelection $ssel) {
         $rf = $user->conf->review_form();
@@ -20,14 +21,23 @@ class GetReviewForms_ListAction extends GetReviewBase_ListAction {
         }
 
         $texts = [];
-        $ms = (new MessageSet)->set_ignore_duplicates(true);
+        '@phan-var-force list<array{int,string,int}> $texts';
+        $ms = (new MessageSet)->set_ignore_duplicates(true)
+            ->set_message_formatter($user->conf);
         foreach ($ssel->paper_set($user) as $prow) {
             $whyNot = $user->perm_edit_some_review($prow);
-            if ($whyNot
-                && !isset($whyNot["deadline"])
-                && !isset($whyNot["reviewNotAssigned"])) {
-                $whyNot->append_to($ms, null, 2);
-                continue;
+            if ($whyNot) {
+                if (!$user->scope_allows(TokenScope::S_REV_READ, $prow)) {
+                    $whyNot = $prow->failure_reason();
+                    $whyNot["scope"] = "review:read";
+                } else {
+                    unset($whyNot["scope"]);
+                }
+                if (!isset($whyNot["deadline"])
+                    && !isset($whyNot["reviewNotAssigned"])) {
+                    $whyNot->append_to($ms, null, 2);
+                    continue;
+                }
             }
             $t = "";
             if ($whyNot) {
@@ -36,7 +46,7 @@ class GetReviewForms_ListAction extends GetReviewBase_ListAction {
                     $t .= prefix_word_wrap("==-== ", strtoupper($whyNot->unparse_text()) . "\n\n", "==-== ");
                 }
             }
-            if (!$this->all || !$user->allow_administer($prow)) {
+            if (!$this->all || !$user->allow_admin($prow)) {
                 $rrows = $prow->full_reviews_by_user($user);
             } else {
                 $prow->ensure_full_reviews();

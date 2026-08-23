@@ -21,9 +21,9 @@ Generic values
 * `.modal-dialog`: 16 (must be > `.modal`)
 * `.bubble`: 20
 
-* `body.page #p-header`: 3 (to occlude `.pslcard-nav`)
-* `.pspcard`: 3 (to occlude `.pslcard-nav`)
-* `.pslcard-nav`: (0)
+* `body.page #p-header`: 3 (to occlude `.s-psl-nav`)
+* `.pspcard`: 3 (to occlude `.s-psl-nav`)
+* `.s-psl-nav`: (0)
 * `.pslcard-home`: -1
 * `.home-sidebar`: 1
 * `button:hover`, `button:focus`, etc.: 1
@@ -34,15 +34,26 @@ Generic values
 * `.overlong-collapsed > .overlong-divider > .overlong-mark`: 2
 * `.cmtcard.edit.popout`: 4
 
+
+## `class`
+
+* The CleanHTML sanitizer blacklists classes matching `.ui*`, `.js-*`,
+  `.s-*`, `.need-*`, and `.pl*` except for `.pl-[0-9]`
+* `.s-` is intended for structural classes subject to broad Javascript
+  querySelectors (or `.closest` executed on cleaned HTML)
+
+
 ## `id`
 
-* Any `id` starting with `[a-z][-_]` is reserved for HotCRP use
+* Any `id` starting with `[a-z][-_0-9]` is reserved for HotCRP use
     * Paper and review fields cannot follow that pattern
     * Paper and review fields also must not match JSON keys used for papers
       and reviews
 * `id^=m-` defines the page type; it is only set on the `<body>` element
 * `id^=p-` is for page-level elements
-    * `#p-tracker` (optional)
+    * `#p-theme` (in header)
+    * `#p-banner` (optional: custom banners)
+        * `#p-tracker` (optional)
     * `#p-page`
         * `#p-header`
         * `#p-body`
@@ -66,6 +77,7 @@ Generic values
     * `#h-usermenu`
     * `#h-usermenubutton`
     * `#h-title`
+    * `#h-subtitle`
 * `id^=n-` is for navigation elements (quicklinks)
     * `#n-next`
     * `#n-prev`

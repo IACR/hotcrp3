@@ -196,7 +196,10 @@ class MailPreparation implements JsonSerializable {
         foreach ($this->recip as $ru) {
             if ($ru->can_receive_mail($this->_self_requested)) {
                 continue;
-            } else if (!Contact::is_real_email($ru->preferredEmail ?? $ru->email)) {
+            } else if ($ru->is_bot()) {
+                // bot addresses are implausible, but report them separately
+                $mx["bot"][] = $ru->email;
+            } else if (!Contact::is_plausible_email($ru->preferredEmail ?? $ru->email)) {
                 $mx["fake"][] = $ru->email;
             } else if ($ru->is_disabled()) {
                 $mx["disabled"][] = $ru->email;
@@ -212,6 +215,9 @@ class MailPreparation implements JsonSerializable {
             return [];
         }
         $ml = [];
+        if (isset($mx["bot"])) {
+            $ml[] = MessageItem::warning($this->conf->_("<0>Bot {emails:plural account} {emails:list} {emails:plural was} not notified", new FmtArg("emails", $mx["bot"], 0)));
+        }
         if (isset($mx["disabled"])) {
             $ml[] = MessageItem::warning($this->conf->_("<0>Disabled {emails:plural account} {emails:list} cannot receive mail", new FmtArg("emails", $mx["disabled"], 0)));
         }
@@ -219,7 +225,7 @@ class MailPreparation implements JsonSerializable {
             $ml[] = MessageItem::warning($this->conf->_("<0>{emails:plural Account} {emails:list} {emails:plural has} not activated their {emails:plural account}", new FmtArg("emails", $mx["dormant"], 0)));
         }
         if (isset($mx["unconfirmed"])) {
-            $ml[] = MessageItem::warning($this->conf->_("<0>{emails:plural User} {emails:list} {emails:plural has} not yet signed in to their account (this site will not send mail to unconfirmed accounts)", new FmtArg("emails", $mx["unconfirmed"], 0)));
+            $ml[] = MessageItem::warning($this->conf->_("<0>{emails:plural User} {emails:list} {emails:plural has} not yet signed in (this site will not send mail to unconfirmed accounts)", new FmtArg("emails", $mx["unconfirmed"], 0)));
         }
         if (isset($mx["other"])) {
             $ml[] = MessageItem::warning($this->conf->_("<0>Cannot send mail to {emails:plural account} {emails:list}", new FmtArg("emails", $mx["other"], 0)));
@@ -307,6 +313,7 @@ class MailPreparation implements JsonSerializable {
             }
             unset($headers["subject"]);
             $htext = substr(join("", $headers), 0, -2);
+            $extra = $extra ?? '';
             return ($this->sent = mail($to, $this->subject, $qpe_body, $htext, $extra));
         }
 

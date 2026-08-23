@@ -132,7 +132,9 @@ class PaperOptionList implements IteratorAggregate {
     static function make_intrinsic_json_map(Conf $conf, $vconf, $all) {
         // start with fixed defaults
         $map = [];
-        foreach (json_decode(file_get_contents(SiteLoader::find("etc/iacrintrinsicoptions.json"))) as $j) {
+        // IACR difference
+        // foreach (json_decode(file_get_contents(SiteLoader::resolve("etc/intrinsicoptions.json"))) as $j) {
+        foreach (json_decode(file_get_contents(SiteLoader::resolve("etc/iacrintrinsicoptions.json"))) as $j) {
             $map[$j->id] = $j;
         }
 

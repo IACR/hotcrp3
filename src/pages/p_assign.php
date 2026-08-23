@@ -1,6 +1,6 @@
 <?php
 // pages/p_assign.php -- HotCRP per-paper assignment/conflict management page
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Assign_Page {
     /** @var Conf */
@@ -25,9 +25,16 @@ class Assign_Page {
         $this->ms = new MessageSet;
     }
 
-    function error_exit(...$mls) {
+    /** @return never
+     * @throws PageCompletion */
+    function error_exit(FailureReason $perm) {
+        Navigation::http_response_code($perm->response_code($this->user));
+        if (!$perm->secondary || $this->conf->saved_messages_status() < 2) {
+            $perm->set("expand", true);
+            $perm->set("listViewable", $this->user->is_author() || $this->user->is_reviewer());
+            $this->conf->feedback_msg($perm->message_list());
+        }
         PaperTable::print_header($this->pt, $this->qreq, true);
-        $this->conf->feedback_msg(...$mls);
         $this->qreq->print_footer();
         throw new PageCompletion;
     }
@@ -44,8 +51,11 @@ class Assign_Page {
         } catch (Redirection $redir) {
             throw $redir;
         } catch (FailureReason $perm) {
-            $perm->set("expand", true);
-            $this->error_exit($perm->message_list());
+            $this->error_exit($perm);
+        }
+        // check for garbage in path
+        if ((string) $this->qreq->path_component(0) !== "") {
+            $this->error_exit(new FailureReason($this->conf, ["invalidPath" => $this->qreq->path_component(0)]));
         }
     }
 
@@ -116,14 +126,14 @@ class Assign_Page {
         $ok = $aset->execute();
         $aset->feedback_msg(AssignmentSet::FEEDBACK_ASSIGN);
         if ($ok) {
-            $this->conf->redirect_self($this->qreq);
+            $this->qreq->redirect_self();
         }
     }
 
     /** @return never
      * @throws Redirection */
     private function redirect_requestreview() {
-        $this->conf->redirect_self($this->qreq, ["email" => null, "given_name" => null, "family_name" => null, "affiliation" => null, "round" => null, "reason" => null, "override" => null, "denyreview" => null, "retractreview" => null, "undeclinereview" => null]);
+        $this->qreq->redirect_self(["email" => null, "given_name" => null, "family_name" => null, "affiliation" => null, "round" => null, "reason" => null, "override" => null, "denyreview" => null, "retractreview" => null, "undeclinereview" => null]);
     }
 
     function handle_requestreview() {
@@ -191,7 +201,7 @@ class Assign_Page {
         $qreq = $this->qreq;
         if (isset($qreq->update)
             && $qreq->valid_post()
-            && $this->user->allow_administer($this->prow)) {
+            && $this->user->allow_manage($this->prow)) {
             $this->handle_pc_update();
         }
         if ((isset($qreq->requestreview) || isset($qreq->approvereview))
@@ -310,7 +320,7 @@ class Assign_Page {
     private function print_reqrev($rrow, $time) {
         echo '<div class="ctelt"><div class="ctelti has-fold';
         if ($rrow->reviewType === REVIEW_REQUEST
-            && ($this->user->can_administer($this->prow)
+            && ($this->user->is_admin($this->prow)
                 || $rrow->requestedBy == $this->user->contactId)) {
             echo ' foldo';
         } else {
@@ -327,7 +337,7 @@ class Assign_Page {
             $name = $this->user->reviewer_html_for($rrowid);
             if ($rrow->contactId !== $this->user->contactId
                 && $this->user->privChair
-                && $this->user->allow_administer($this->prow)) {
+                && $this->user->allow_admin($this->prow)) {
                 $actas = ' ' . Ht::link(Ht::img("viewas.png", "[Act as]", ["title" => "Become user"]),
                     $this->prow->reviewurl(["actas" => $rrowid->email]));
             }
@@ -363,14 +373,14 @@ class Assign_Page {
         }
 
         // render form
-        if ($this->user->can_administer($this->prow)
+        if ($this->user->is_admin($this->prow)
             || ($rrow->reviewType !== REVIEW_REFUSAL
                 && $this->user->contactId > 0
                 && $rrow->requestedBy == $this->user->contactId)) {
-            echo Ht::form($this->conf->hoturl("=assign", [
+            echo $this->conf->hotform("=assign", [
                     "p" => $this->prow->paperId, "action" => "managerequest",
                     "email" => $rrowid->email, "round" => $rrow->reviewRound
-                ]), ["class" => "fx"]);
+                ], ["class" => "fx"]);
             if (!isset($rrow->contactId) || !$rrow->contactId) {
                 echo Ht::hidden("given_name", $rrowid->firstName),
                     Ht::hidden("family_name", $rrowid->lastName),
@@ -381,7 +391,7 @@ class Assign_Page {
                 echo Ht::hidden("reason", $reason);
             }
             if ($rrow->reviewType === REVIEW_REQUEST
-                && $this->user->can_administer($this->prow)) {
+                && $this->user->is_admin($this->prow)) {
                 echo Ht::hidden("override", 1);
                 $buttons[] = Ht::submit("approvereview", "Approve proposal", ["class" => "btn-sm btn-success"]);
                 $buttons[] = Ht::submit("denyreview", "Deny proposal", ["class" => "btn-sm ui js-deny-review-request"]); // XXX reason
@@ -462,7 +472,8 @@ class Assign_Page {
         echo '</div>'; // .pctbname
         if ($potconf) {
             echo '<div class="pcconfmatch need-tooltip" data-tooltip-class="gray" data-tooltip="',
-                str_replace('"', '&quot;', $potconf->tooltip_html($this->prow)),
+                // NB double-escaping required!
+                Ht::escape_attr($potconf->tooltip_html($this->prow)),
                 '">', $potconf->description_html(), '</div>';
         }
 
@@ -472,13 +483,9 @@ class Assign_Page {
         if ($ac->rev === 0) {
             echo "0 reviews";
         } else {
-            echo '<a class="q" href="',
-                $this->conf->hoturl("search", "q=re:" . urlencode($pc->email)), '">',
-                plural($ac->rev, "review"), "</a>";
+            echo $this->conf->hotlink(plural($ac->rev, "review"), "search", ["q" => "re:{$pc->email}"], ["class" => "q"]);
             if ($ac->pri && $ac->pri < $ac->rev) {
-                echo '&nbsp; (<a class="q" href="',
-                    $this->conf->hoturl("search", "q=pri:" . urlencode($pc->email)),
-                    "\">{$ac->pri} primary</a>)";
+                echo "&nbsp; (", $this->conf->hotlink("{$ac->pri} primary", "search", ["q" => "pri:{$pc->email}"], ["class" => "q"]), ")";
             }
         }
         echo "</div></div></div>\n"; // .pctbnrev .ctelti .ctelt
@@ -498,7 +505,7 @@ class Assign_Page {
         // reviewer information
         $t = $this->pt->review_table();
         if ($t !== "") {
-            echo '<div class="pcard revcard">',
+            echo '<div class="pcard s-review">',
                 '<h2 class="revcard-head" id="current-reviews">Current reviews</h2>',
                 '<div class="revpcard-body">', $t, '</div></div>';
         }
@@ -509,7 +516,7 @@ class Assign_Page {
             if ($rrow->reviewType < REVIEW_SECONDARY
                 && $rrow->reviewStatus < ReviewInfo::RS_DRAFTED
                 && $user->can_view_review_identity($prow, $rrow)
-                && ($user->can_administer($prow) || $rrow->requestedBy == $user->contactId)) {
+                && ($user->is_admin($prow) || $rrow->requestedBy == $user->contactId)) {
                 $requests[] = [0, max((int) $rrow->timeRequestNotified, (int) $rrow->timeRequested), count($requests), $rrow];
             }
         }
@@ -528,7 +535,7 @@ class Assign_Page {
         });
 
         if (!empty($requests)) {
-            echo '<div class="pcard revcard">',
+            echo '<div class="pcard s-review">',
                 '<h2 class="revcard-head" id="review-requests">Review requests</h2>',
                 '<div class="revcard-body"><div class="ctable-wide">';
             foreach ($requests as $req) {
@@ -538,14 +545,14 @@ class Assign_Page {
         }
 
         // PC assignments
-        if ($user->can_administer($prow)) {
+        if ($user->is_admin($prow)) {
             $acs = AssignmentCountSet::load($user, AssignmentCountSet::HAS_REVIEW);
 
             // PC conflicts row
-            echo '<div class="pcard revcard">',
+            echo '<div class="pcard s-review">',
                 '<h2 class="revcard-head" id="pc-assignments">PC assignments</h2>',
                 '<div class="revcard-body">',
-                Ht::form($this->conf->hoturl("=assign", "p=$prow->paperId"), [
+                $this->conf->hotform("=assign", ["p" => $prow->paperId], [
                     "id" => "f-pc-assignments",
                     "class" => "need-unload-protection need-diff-check",
                     "data-differs-toggle" => "paper-alert"
@@ -610,15 +617,15 @@ class Assign_Page {
 
         // add external reviewers
         $req = "Request external review";
-        if (!$user->allow_administer($prow) && $this->conf->setting("extrev_chairreq")) {
+        if (!$user->allow_admin($prow) && $this->conf->setting("extrev_chairreq")) {
             $req = "Propose external review";
         }
-        echo '<div class="pcard revcard">',
-            Ht::form($this->conf->hoturl("=assign", "p={$prow->paperId}"), ["novalidate" => true]),
+        echo '<div class="pcard s-review">',
+            $this->conf->hotform("=assign", ["p" => $prow->paperId], ["novalidate" => true]),
             "<h2 class=\"revcard-head\" id=\"external-reviews\">", $req, "</h2><div class=\"revcard-body\">";
 
         echo '<p class="w-text">', $this->conf->_i("external_review_request_description");
-        if ($user->allow_administer($prow)) {
+        if ($user->allow_admin($prow)) {
             echo "\nTo create an anonymous review with a review token, leave Name and Email blank.";
         }
         echo '</p>';
@@ -661,7 +668,7 @@ class Assign_Page {
         }
 
         // reason area
-        $null_mailer = new HotCRPMailer($this->conf);
+        $null_mailer = new HotCRPMailer($this->conf->root_user());
         $reqbody = $null_mailer->expand_template("requestreview");
         if ($reqbody && strpos($reqbody["body"], "REASON") !== false) {
             echo '<div class="f-i">',
@@ -671,7 +678,7 @@ class Assign_Page {
                 "</div>\n\n";
         }
 
-        if ($user->can_administer($prow)) {
+        if ($user->is_admin($prow)) {
             echo '<label class="', $this->ms->control_class("override", "checki"), '"><span class="checkc">',
                 Ht::checkbox("override"),
                 ' </span>Override declined requests</label>';

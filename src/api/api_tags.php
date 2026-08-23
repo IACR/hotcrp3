@@ -41,13 +41,20 @@ class Tags_API {
         Dbl::free($result);
         foreach ($allotments as $tv) {
             $t = $tv[0];
-            $link = $user->conf->hoturl("search", ["q" => "editsort:-#~{$t->tag}"]);
+            if ($tv[1] == $t->allotment) {
+                continue;
+            }
+            if ($interest && count($interest) === 1) {
+                $link = "";
+            } else {
+                $link = $user->conf->hotlink("#~{$t->tag}", "search", ["q" => "editsort:-#~{$t->tag}"]) . ": ";
+            }
             if ($tv[1] < $t->allotment) {
                 $nleft = $t->allotment - $tv[1];
-                $tmr->message_list[] = MessageItem::marked_note("<5><a href=\"{$link}\">#~{$t->tag}</a>: " . plural($nleft, "vote") . " remaining");
-            } else if ($tv[1] > $t->allotment) {
-                $tmr->message_list[] = MessageItem::warning("<5><a href=\"{$link}\">#~{$t->tag}</a>: Too many votes");
-                $tmr->message_list[] = MessageItem::inform("<0>Your vote total, {$tv[1]}, is over the allotment, {$t->allotment}.");
+                $tmr->message_list[] = MessageItem::marked_note("<5>{$link}" . plural($nleft, "vote") . " remaining")->with(["context" => $t->tag]);
+            } else {
+                $tmr->message_list[] = MessageItem::warning("<5>{$link}Too many votes")->with(["context" => $t->tag]);
+                $tmr->message_list[] = MessageItem::inform("<0>Your vote total, {$tv[1]}, is over the allotment, {$t->allotment}.")->with(["context" => $t->tag]);
             }
         }
     }
@@ -89,7 +96,7 @@ class Tags_API {
         if (($whyNot = $user->perm_view_paper($prow))) {
             return Conf::paper_error_json_result($whyNot);
         }
-        if ($qreq->is_get() || friendly_boolean($qreq->cancel)) {
+        if ($qreq->is_getlike() || friendly_boolean($qreq->cancel)) {
             $taginfo = self::tagmessages($user, $prow, null);
             $prow->add_tag_info_json($taginfo, $user);
             return new JsonResult($taginfo);
@@ -97,17 +104,21 @@ class Tags_API {
 
         // save tags using assigner
         $x = ["paper,action,tag"];
+
+        if (isset($qreq->expected_tags)) {
+            $x[] = "{$prow->paperId},checktag," . CsvGenerator::quote($qreq->expected_tags);
+        }
         if (isset($qreq->tags)) {
             $x[] = "{$prow->paperId},tag,all#clear";
             foreach (Tagger::split($qreq->tags) as $t) {
                 $x[] = "{$prow->paperId},tag," . CsvGenerator::quote($t);
             }
         }
-        foreach (Tagger::split((string) $qreq->addtags) as $t) {
+        foreach (Tagger::split((string) ($qreq->add_tags ?? $qreq->addtags)) as $t) {
             $x[] = "{$prow->paperId},tag," . CsvGenerator::quote($t);
         }
-        foreach (Tagger::split((string) $qreq->deltags) as $t) {
-            $x[] = "{$prow->paperId},tag," . CsvGenerator::quote($t . "#clear");
+        foreach (Tagger::split((string) ($qreq->remove_tags ?? $qreq->deltags)) as $t) {
+            $x[] = "{$prow->paperId},cleartag," . CsvGenerator::quote($t);
         }
 
         $assigner = new AssignmentSet($user);
@@ -117,24 +128,23 @@ class Tags_API {
         $ok = $assigner->execute();
 
         // execute
-        if ($ok) {
-            $prow->load_tags();
-            if (isset($qreq->tags)) {
-                $interest = null;
-            } else {
-                $interest = [];
-                foreach ($assigner->assignments() as $ai) {
-                    if ($ai instanceof Tag_Assigner)
-                        $interest[strtolower($ai->tag)] = true;
-                }
-            }
-            $taginfo = self::tagmessages($user, $prow, $interest);
-            $prow->add_tag_info_json($taginfo, $user);
-            $taginfo->message_list = self::combine_message_lists($mlist, $taginfo->message_list);
-            $jr = new JsonResult($taginfo);
-        } else {
-            $jr = new JsonResult(["ok" => false, "message_list" => $mlist]);
+        if (!$ok) {
+            return new JsonResult(["ok" => false, "message_list" => $mlist]);
         }
+        $prow->load_tags();
+        if (isset($qreq->tags)) {
+            $interest = null;
+        } else {
+            $interest = [];
+            foreach ($assigner->assignments() as $ai) {
+                if ($ai instanceof Tag_Assigner)
+                    $interest[strtolower($ai->tag)] = true;
+            }
+        }
+        $taginfo = self::tagmessages($user, $prow, $interest);
+        $prow->add_tag_info_json($taginfo, $user);
+        $taginfo->message_list = self::combine_message_lists($mlist, $taginfo->message_list);
+        $jr = new JsonResult($taginfo);
         if ($qreq->search) {
             Search_API::apply_search($jr, $user, $qreq, $qreq->search);
         }
@@ -164,14 +174,13 @@ class Tags_API {
         $ok = $assigner->execute();
 
         // execute
-        if ($ok) {
-            $jr = new JsonResult([
-                "ok" => true,
-                "p" => Assign_API::assigned_paper_info($user, $assigner)
-            ]);
-        } else {
-            $jr = new JsonResult(["ok" => false, "message_list" => $mlist]);
+        if (!$ok) {
+            return new JsonResult(["ok" => false, "message_list" => $mlist]);
         }
+        $jr = new JsonResult([
+            "ok" => true,
+            "p" => Assign_API::assigned_paper_info($user, $assigner)
+        ]);
         if ($qreq->search) {
             Search_API::apply_search($jr, $user, $qreq, $qreq->search);
         }

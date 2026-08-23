@@ -1,6 +1,6 @@
 <?php
 // apihelpers.php -- HotCRP API calls
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class APIHelpers {
     /** @param ?string $text
@@ -21,11 +21,24 @@ class APIHelpers {
         }
         if ($u) {
             return $u;
-        } else if ($viewer->isPC) {
+        }
+        if ($viewer->isPC) {
             JsonResult::make_not_found_error($field, "<0>User not found")->complete();
         } else {
             JsonResult::make_permission_error()->complete();
         }
+    }
+
+    /** Return `$content` as a downloadable JSON file rather than in the usual
+     * response envelope.
+     * @param mixed $content
+     * @param string $basename
+     * @return JsonResult */
+    static function make_json_download(Conf $conf, $content, $basename) {
+        return JsonResult::make_minimal(200, $content)
+            ->set_pretty_print(true)
+            ->set_header("Content-Disposition: attachment; filename="
+                . mime_quote_string("{$conf->download_prefix}{$basename}.json"));
     }
 
     /** @param ?string $text
@@ -34,10 +47,9 @@ class APIHelpers {
     static function parse_reviewer_for($text, Contact $viewer, $prow) {
         $u = self::parse_user($text, $viewer);
         if ($u->contactId === $viewer->contactId
-            || ($prow ? $viewer->can_administer($prow) : $viewer->privChair)) {
+            || ($prow ? $viewer->is_admin($prow) : $viewer->privChair)) {
             return $u;
-        } else {
-            JsonResult::make_permission_error()->complete();
         }
+        JsonResult::make_permission_error()->complete();
     }
 }

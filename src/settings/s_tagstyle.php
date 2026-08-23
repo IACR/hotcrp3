@@ -116,6 +116,12 @@ class TagStyle_SettingParser extends SettingParser {
         $bs = [];
         foreach ($sv->oblist_nondeleted_keys($si->name) as $ctr) {
             $br = $sv->newv("{$si->name}/{$ctr}");
+            if ($br->style === "") {
+                if (!$sv->has_error_at("{$si->name}/{$ctr}/style")) {
+                    $sv->error_at("{$si->name}/{$ctr}/style", "<0>Entry required");
+                }
+                continue;
+            }
             $ks = $sv->conf->tags()->known_style($br->style, $stylematch);
             $sn = $ks ? $ks->style : $br->style;
             $bs_count = count($bs);
@@ -131,7 +137,7 @@ class TagStyle_SettingParser extends SettingParser {
         }
         if ($sv->update($badge ? "tag_badge" : "tag_color", join(" ", $bs))) {
             $sv->request_store_value($si);
-            $sv->mark_invalidate_caches(["tags" => true]);
+            $sv->mark_invalidate_caches("tags");
         }
     }
 

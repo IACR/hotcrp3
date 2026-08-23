@@ -1,6 +1,6 @@
 <?php
 // contactlist.php -- HotCRP helper class for producing lists of contacts
-// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class ContactList {
     const FIELD_SELECTOR = 1000;
@@ -49,15 +49,16 @@ class ContactList {
     private $has_flags = 0;
     /** @var Tagger */
     private $tagger;
+    /** @var string */
     private $limit;
+    /** @var ?list<int> */
+    private $_user_filter;
     public $have_folds = [];
     private $qopt = [];
     /** @var array<int,Column> */
     private $_columns = [];
     /** @var array<int,string> */
     private $_fold_names = [];
-    /** @var PaperInfoSet */
-    private $_rowset;
     /** @var array<int,list<int>> */
     private $_au_data;
     /** @var array<int,bool> */
@@ -92,6 +93,10 @@ class ContactList {
     private $_selection;
     /** @var bool */
     private $_select_all = false;
+    /** @var int */
+    private $_viewable_roles = 0;
+    /** @var int */
+    private $_limit_default_roles = 0;
 
     /** @var ?array<string,int> */
     static private $field_name_map;
@@ -99,6 +104,7 @@ class ContactList {
     const HAS_SELECTOR = 1;
     const HAS_PC = 2;
     const HAS_NONPC = 4;
+    const HAS_UNLISTEDPC = 8;
 
     function __construct(Contact $user, $sortable = true, $qreq = null) {
         $this->conf = $user->conf;
@@ -138,6 +144,14 @@ class ContactList {
         if ($this->qreq->selectall) {
             $this->_select_all = true;
         }
+    }
+
+    /** @param ?list<int> $uids
+     * @return $this */
+    function set_user_filter($uids) {
+        assert($this->limit === null);
+        $this->_user_filter = $uids;
+        return $this;
     }
 
     /** @param string $name
@@ -545,9 +559,8 @@ class ContactList {
         }
         if ($this->reverseSort) {
             return array_reverse($rows);
-        } else {
-            return $rows;
         }
+        return $rows;
     }
 
     /** @param int $fieldId
@@ -576,15 +589,13 @@ class ContactList {
         case self::FIELD_REVIEWS:
             if ($this->limit === "extsub") {
                 return "Completed reviews";
-            } else {
-                return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
             }
+            return '<span class="hastitle" title="“1/2” means 1 complete review out of 2 assigned reviews">Reviews</span>';
         case self::FIELD_INCOMPLETE_REVIEWS:
             if ($this->limit === "extrev-not-accepted") {
                 return "Outstanding review requests";
-            } else {
-                return "Incomplete reviews";
             }
+            return "Incomplete reviews";
         case self::FIELD_LEADS:
             return "Leads";
         case self::FIELD_SHEPHERDS:
@@ -600,10 +611,9 @@ class ContactList {
                 return "Rejected submissions";
             } else if ($this->limit === "auuns") {
                 return "Incomplete submissions";
-            } else {
-                assert($this->limit === "au" || $this->limit === "all");
-                return "Submissions";
             }
+            assert($this->limit === "au" || $this->limit === "all");
+            return "Submissions";
         case self::FIELD_REVIEW_PAPERS:
             return "Assigned submissions";
         case self::FIELD_TAGS:
@@ -668,21 +678,18 @@ class ContactList {
     }
 
     private function test_paper_authors(PaperInfo $prow) {
-        if ($this->user->can_view_authors($prow)) {
-            if ($this->limit === "au") {
-                return $prow->timeSubmitted > 0;
-            } else if ($this->limit === "auuns") {
-                return $prow->timeSubmitted <= 0;
-            } else if ($this->limit === "aurej") {
-                return $prow->outcome_sign < 0 && $this->user->can_view_decision($prow);
-            } else if ($this->limit === "auacc") {
-                return $prow->outcome_sign > 0 && $this->user->can_view_decision($prow);
-            } else {
-                return true;
-            }
-        } else {
+        if (!$this->user->can_view_authors($prow)) {
             return false;
+        } else if ($this->limit === "au") {
+            return $prow->timeSubmitted > 0;
+        } else if ($this->limit === "auuns") {
+            return $prow->timeSubmitted <= 0;
+        } else if ($this->limit === "aurej") {
+            return $prow->outcome_sign < 0 && $this->user->can_view_decision($prow);
+        } else if ($this->limit === "auacc") {
+            return $prow->outcome_sign > 0 && $this->user->can_view_decision($prow);
         }
+        return true;
     }
 
     private function collect_paper_data() {
@@ -759,13 +766,9 @@ class ContactList {
                 $this->_re_data = $this->_reord_data = [];
             }
             foreach ($prows as $prow) {
-                if ($this->user->can_view_review_assignment($prow, null)
-                    && $this->user->can_view_review_identity($prow, null)) {
-                    foreach ($prow->all_reviews() as $rrow) {
-                        if ($this->user->can_view_review_assignment($prow, $rrow)
-                            && $this->user->can_view_review_identity($prow, $rrow)) {
-                            $this->collect_review_data($prow, $rrow, $repapers, $review_limit);
-                        }
+                foreach ($prow->all_reviews() as $rrow) {
+                    if ($this->user->can_view_review_identity($prow, $rrow)) {
+                        $this->collect_review_data($prow, $rrow, $repapers, $review_limit);
                     }
                 }
             }
@@ -786,7 +789,7 @@ class ContactList {
             $this->_rating_data = [];
             foreach ($prows as $prow) {
                 if ($this->user->can_view_review_ratings($prow)) {
-                    $allow_admin = $this->user->allow_administer($prow);
+                    $allow_admin = $this->user->allow_admin($prow);
                     foreach ($prow->all_reviews() as $rrow) {
                         if (isset($ratings[$prow->paperId][$rrow->reviewId])
                             && ($allow_admin
@@ -828,6 +831,14 @@ class ContactList {
         }
 
         $this->user->set_overrides($overrides);
+        $this->_viewable_roles = $this->user->viewable_roles_mask();
+        if ($this->limit === "pc" || $this->limit === "fullpc") {
+            $this->_limit_default_roles = Contact::ROLE_PC;
+        } else if ($this->limit === "unlistedpc") {
+            $this->_limit_default_roles = Contact::ROLE_UNLISTEDPC;
+        } else {
+            $this->_limit_default_roles = 0;
+        }
     }
 
     /** @param int $fieldId
@@ -842,24 +853,25 @@ class ContactList {
             }
             $t = '<span class="taghl">' . $t . '</span>';
             if ($this->user->privChair) {
-                $t = "<a href=\"" . $this->conf->hoturl("profile", "u=" . urlencode($row->email)) . "\"" . ($row->is_disabled() ? ' class="qh"' : "") . ">$t</a>";
+                $t = $this->conf->hotlink($t, "profile", ["u" => $row->email], $row->is_disabled() ? ["class" => "qh"] : null);
             }
             if (($viewable = $row->viewable_tags($this->user))
                 && $this->conf->tags()->has(TagInfo::TFM_DECORATION)) {
                 $tagger = new Tagger($this->user);
                 $t .= $tagger->unparse_decoration_html($viewable, Tagger::DECOR_USER);
             }
-            $roles = $row->viewable_pc_roles($this->user);
-            if ($roles === Contact::ROLE_PC && $this->limit === "pc") {
-                $roles = 0;
-            }
-            if ($roles !== 0 && ($rolet = Contact::role_html_for($roles))) {
+            $roles = $row->roles & $this->_viewable_roles;
+            if ($roles !== 0
+                && $roles !== $this->_limit_default_roles
+                && ($rolet = Contact::role_html_for($roles))) {
                 $t .= " {$rolet}";
             }
             if ($this->user->privChair && $row->email != $this->user->email) {
-                $t .= " <a href=\"" . $this->conf->hoturl("index", "actas=" . urlencode($row->email)) . "\">"
-                    . Ht::img("viewas.png", "[Act as]", ["title" => "Act as " . $row->name(NAME_P)])
-                    . "</a>";
+                $actast = "Act as " . $row->name(NAME_P);
+                $t .= " " . $this->conf->hotlink(
+                    Ht::img("viewas.png", $actast, ["title" => $actast]),
+                    "index", ["actas" => $row->email]
+                );
             }
             if ($row->is_disabled() && $this->user->isPC) {
                 $t .= ' <span class="hint">(disabled)</span>';
@@ -919,45 +931,37 @@ class ContactList {
             }
             return "{$np}P {$nt}T";
         case self::FIELD_REVIEWS:
-            if (($ct = $this->_rect_data[$row->contactId] ?? null)) {
-                $a1 = "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=re:" . urlencode($row->email)) . "\">";
-                if ($ct[0] === $ct[1]) {
-                    return $a1 . "<b>{$ct[1]}</b></a>";
-                } else {
-                    return $a1 . "<b>{$ct[1]}</b>/{$ct[0]}</a>";
-                }
-            } else {
+            if (!($ct = $this->_rect_data[$row->contactId] ?? null)) {
                 return "";
             }
+            $t = "<b>{$ct[1]}</b>" . ($ct[0] === $ct[1] ? "" : "/{$ct[0]}");
+            return $this->conf->hotlink($t, "search", ["q" => "re:{$row->email}", "t" => "s"]);
         case self::FIELD_INCOMPLETE_REVIEWS:
-            if (($ct = $this->_rect_data[$row->contactId] ?? null)) {
-                return "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=ire:" . urlencode($row->email)) . "\">{$ct[0]}</a>";
-            } else {
+            if (!($ct = $this->_rect_data[$row->contactId] ?? null)) {
                 return "";
             }
+            return $this->conf->hotlink($ct[0], "search", ["q" => "ire:{$row->email}", "t" => "s"]);
         case self::FIELD_LEADS:
-            if (($c = $this->_lead_data[$row->contactId] ?? null)) {
-                return "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=lead:" . urlencode($row->email)) . "\">$c</a>";
-            } else {
+            if (!($c = $this->_lead_data[$row->contactId] ?? null)) {
                 return "";
             }
+            return $this->conf->hotlink($c, "search", ["q" => "lead:{$row->email}", "t" => "s"]);
         case self::FIELD_SHEPHERDS:
-            if (($c = $this->_shepherd_data[$row->contactId] ?? null)) {
-                return "<a href=\"" . $this->conf->hoturl("search", "t=s&amp;q=shepherd:" . urlencode($row->email)) . "\">$c</a>";
-            } else {
+            if (!($c = $this->_shepherd_data[$row->contactId] ?? null)) {
                 return "";
             }
+            return $this->conf->hotlink($c, "search", ["q" => "shepherd:{$row->email}", "t" => "s"]);
         case self::FIELD_REVIEW_RATINGS:
             if (($c = $this->_rating_data[$row->contactId] ?? null)
                 && ($c[0] || $c[1])) {
                 $a = $b = [];
                 if ($c[0]) {
                     $a[] = "{$c[0]} positive";
-                    $b[] = "<a href=\"" . $this->conf->hoturl("search", "q=rate:good:" . urlencode($row->email)) . "\">+{$c[0]}</a>";
+                    $b[] = $this->conf->hotlink("+{$c[0]}", "search", ["q" => "rate:good:" . $row->email]);
                 }
                 if ($c[1]) {
                     $a[] = "{$c[1]} negative";
-                    $b[] = "<a href=\"" . $this->conf->hoturl("search", "q=rate:bad:" . urlencode($row->email)) . "\">&minus;{$c[1]}</a>";
+                    $b[] = $this->conf->hotlink("&minus;{$c[1]}", "search", ["q" => "rate:bad:" . $row->email]);
                 }
                 return '<span class="hastitle" title="' . join(", ", $a) . '">' . join(" ", $b) . '</span>';
             } else {
@@ -967,7 +971,7 @@ class ContactList {
             if (($pids = $this->_au_data[$row->contactId] ?? null)) {
                 $t = [];
                 foreach ($pids as $p) {
-                    $t[] = '<a href="' . $this->conf->hoturl("paper", "p=$p") . '">' . $p . '</a>';
+                    $t[] = $this->conf->hotlink($p, "paper", ["p" => $p]);
                 }
                 $lsx = "au:{$row->email}";
                 if ($this->limit === "auuns") {
@@ -990,29 +994,27 @@ class ContactList {
                 foreach ($reords as $reord) {
                     if ($last !== $reord[0])  {
                         if ($reord[2]) {
-                            $url = $this->conf->hoturl("paper", "p={$reord[0]}#r{$reord[0]}" . unparse_latin_ordinal($reord[2]));
+                            $t[] = $this->conf->hotlink($reord[0], "paper", ["p" => $reord[0], "#" => "r" . $reord[0] . unparse_latin_ordinal($reord[2])]);
                         } else {
-                            $url = $this->conf->hoturl("review", "p={$reord[0]}&amp;r={$reord[1]}");
+                            $t[] = $this->conf->hotlink($reord[0], "review", ["p" => $reord[0], "r" => $reord[1]]);
                         }
-                        $t[] = "<a href=\"{$url}\">{$reord[0]}</a>";
                     }
                     $last = $reord[0];
                 }
             }
-            if (!empty($t)) {
-                $ls = htmlspecialchars("p/s/" . urlencode("re:" . $row->email));
-                return '<div class="has-hotlist" data-hotlist="' . $ls . '">'
-                    . join(", ", $t) . '</div>';
-            } else {
+            if (empty($t)) {
                 return "";
             }
+            $ls = htmlspecialchars("p/s/" . urlencode("re:" . $row->email));
+            return '<div class="has-hotlist" data-hotlist="' . $ls . '">'
+                . join(", ", $t) . '</div>';
         case self::FIELD_TAGS:
             if ($this->user->isPC
                 && ($tags = $row->viewable_tags($this->user))) {
                 $x = [];
                 foreach (Tagger::split($tags) as $t) {
                     if ($t !== "pc#0")
-                        $x[] = '<a class="q nw" href="' . $this->conf->hoturl("users", "t=%23" . Tagger::tv_tag($t)) . '">' . $this->tagger->unparse_hashed($t) . '</a>';
+                        $x[] = $this->conf->hotlink($this->tagger->unparse_hashed($t), "users", ["t" => "#" . Tagger::tv_tag($t)], ["class" => "q nw"]);
                 }
                 return join(" ", $x);
             } else {
@@ -1072,16 +1074,87 @@ class ContactList {
         return $cols;
     }
 
-    /** @return list<Column> */
-    private function list_columns($listname) {
-        $this->limit = $listname;
+    /** @param string $listname
+     * @return bool */
+    static function can_view_list(Contact $viewer, $listname) {
+        if (str_starts_with($listname, "#")) {
+            return $viewer->can_view_pc()
+                && strlen($listname) > 1
+                && $viewer->can_view_user_tag(substr($listname, 1));
+        }
         switch ($listname) {
         case "pc":
+        case "fullpc":
+            return ($viewer->viewable_roles_mask() & Contact::ROLE_PC) !== 0;
+        case "unlistedpc":
+            return ($viewer->viewable_roles_mask() & Contact::ROLE_UNLISTEDPC) !== 0;
+        case "admin":
+        case "pcadmin":
+        case "pcadminx":
+            return ($viewer->viewable_roles_mask() & Contact::ROLE_ADMIN) !== 0;
+        case "re":
+        case "ext":
+        case "extsub":
+        case "extrev-not-accepted":
+            return $viewer->is_manager()
+                || ($viewer->isPC
+                    && $viewer->conf->setting("viewrev") > 0);
+        case "req":
+            return $viewer->isPC;
+        case "au":
+            return $viewer->is_manager()
+                || ($viewer->isPC
+                    && $viewer->conf->submission_blindness() !== Conf::BLIND_ALWAYS);
+        case "auacc":
+            return $viewer->is_manager()
+                || ($viewer->isPC
+                    && $viewer->can_view_some_decision()
+                    && $viewer->can_view_some_authors());
+        case "aurej":
+            return $viewer->is_manager()
+                || ($viewer->isPC
+                    && $viewer->can_view_some_decision()
+                    && $viewer->conf->submission_blindness() !== Conf::BLIND_ALWAYS);
+        case "auuns":
+            return $viewer->is_manager();
+        case "all":
+        case "bot":
+            return $viewer->privChair;
+        default:
+            return false;
+        }
+    }
+
+    /** @return list<Column> */
+    private function resolve_list_columns($listname) {
+        if (!self::can_view_list($this->user, $listname)) {
+            return [];
+        }
+        $this->qopt = [];
+        if (isset($this->_user_filter)) {
+            $this->qopt["where"][] = "contactId" . sql_in_int_list($this->_user_filter);
+        }
+        if (str_starts_with($listname, "#")) {
+            if (strcasecmp($listname, "#pc") === 0) {
+                $listname = "pc";
+            } else {
+                $x = sqlq(Dbl::escape_like(substr($listname, 1)));
+                $this->qopt["where"][] = "(contactTags like " . Dbl::utf8ci("'% {$x}#%'") . ")";
+                $listname = $this->user->isPC ? "pcadmin" : "pc";
+            }
+        }
+        $this->limit = $listname;
+        switch ($this->limit) {
+        case "pc":
+        case "unlistedpc":
+        case "fullpc":
         case "admin":
         case "pcadmin":
             return $this->_resolve_columns("sel name email aff orcid country lastvisit tags collab topicshi topicslo nprefs reviews revratings lead shepherd scores");
         case "pcadminx":
             return $this->_resolve_columns("name email aff orcid country lastvisit tags collab topicshi topicslo nprefs");
+        case "bot":
+            return $this->_resolve_columns("sel name email lastvisit tags topicshi topicslo nprefs reviews revratings scores");
         case "re":
             return $this->_resolve_columns("sel name email aff orcid country lastvisit tags collab topicshi topicslo nprefs reviews revratings scores");
         case "ext":
@@ -1121,7 +1194,7 @@ class ContactList {
 
         if ($this->user->privChair) {
             $plft = PaperList::make_tab("tag", "Tag");
-            $plft->content =Ht::select("tagfn", ["a" => "Add", "d" => "Remove", "s" => "Define"], $this->qreq->tagfn)
+            $plft->content = Ht::select("tagfn", ["a" => "Add", "d" => "Remove", "s" => "Define"], $this->qreq->tagfn)
                 . ' &nbsp;tag(s) &nbsp;'
                 . Ht::entry("tag", $this->qreq->tag, ["size" => 15, "class" => "want-focus js-autosubmit", "data-submit-fn" => "tag"])
                 . Ht::submit("fn", "Go", ["value" => "tag", "class" => "uic js-submit-list ml-2"]);
@@ -1138,8 +1211,9 @@ class ContactList {
             $mods[] = null;
             if ($this->has("nonpc")) {
                 $mods["add_pc"] = "Add to PC";
+                $mods["add_unlistedpc"] = "Add to unlisted PC";
             }
-            if ($this->has("pc")) {
+            if ($this->has("pc") || $this->has("unlistedpc")) {
                 $mods["remove_pc"] = "Remove from PC";
             }
             $plft = PaperList::make_tab("modify", "Modify");
@@ -1155,21 +1229,34 @@ class ContactList {
             . "</tfoot>\n";
     }
 
+    /** @return list<Contact> */
     function _rows() {
         // Collect paper data first
         $this->collect_paper_data();
 
-        $mainwhere = [];
-        if (isset($this->qopt["where"])) {
-            $mainwhere[] = $this->qopt["where"];
-        }
+        $mainwhere = $this->qopt["where"] ?? [];
         if ($this->limit == "pc") {
-            $mainwhere[] = "roles!=0 and (roles&" . Contact::ROLE_PC . ")!=0";
+            $rolemask = Contact::ROLE_PC;
+        } else if ($this->limit == "unlistedpc") {
+            $rolemask = Contact::ROLE_UNLISTEDPC;
+        } else if ($this->limit == "fullpc") {
+            $rolemask = Contact::ROLE_ANYPC;
         } else if ($this->limit == "admin") {
-            $mainwhere[] = "roles!=0 and (roles&" . (Contact::ROLE_ADMIN | Contact::ROLE_CHAIR) . ")!=0";
+            $rolemask = Contact::ROLE_ADMIN | Contact::ROLE_CHAIR;
         } else if ($this->limit == "pcadmin" || $this->limit == "pcadminx") {
-            $mainwhere[] = "roles!=0 and (roles&" . Contact::ROLE_PCLIKE . ")!=0";
+            $rolemask = Contact::ROLE_ANYPC | Contact::ROLE_ADMIN | Contact::ROLE_CHAIR;
+        } else {
+            $rolemask = null;
         }
+        if ($rolemask !== null) {
+            $rolemask &= $this->user->viewable_roles_mask(); // might yield 0
+            $mainwhere[] = "roles!=0 and (roles&{$rolemask})!=0";
+        }
+
+        if ($this->limit === "bot") {
+            $mainwhere[] = "(cflags&" . Contact::CF_BOT . ")!=0";
+        }
+
         if ($this->limit === "all") {
             $mainwhere[] = "(roles!=0 or lastLogin>0 or contactId" . sql_in_int_list(array_keys($this->_limit_cids)) . ")";
         } else if ($this->_limit_cids !== null) {
@@ -1194,7 +1281,6 @@ class ContactList {
         }
         if (isset($this->qopt["preferences"]) && $this->user->isPC) {
             $this->_pref_data = [];
-            $uids = [];
             if ($this->user->can_view_pc()) {
                 foreach ($rows as $row) {
                     $this->_pref_data[$row->contactId] = 0;
@@ -1225,19 +1311,10 @@ class ContactList {
     }
 
     function print_table_html($listname, $url, $listtitle = "", $foldsession = null) {
-        // PC tags
-        $listquery = $listname;
-        $this->qopt = [];
-        if (str_starts_with($listname, "#")) {
-            $x = sqlq(Dbl::escape_like(substr($listname, 1)));
-            $this->qopt["where"] = "(contactTags like " . Dbl::utf8ci("'% {$x}#%'") . ")";
-            $listquery = "pcadmin";
-        }
-
-        // get paper list
-        $columns = $this->list_columns($listquery);
+        // resolve columns
+        $columns = $this->resolve_list_columns($listname);
         if (empty($columns)) {
-            echo Ht::feedback_msg(MessageItem::error("<0>User set ‘{$listquery}’ not found"));
+            echo Ht::feedback_msg(MessageItem::error("<0>User set ‘{$listname}’ not found"));
             return;
         }
 
@@ -1297,7 +1374,7 @@ class ContactList {
 
         $anyData = [];
         $bodyrows = [];
-        $extrainfo = $hascolors = false;
+        $hascolors = false;
         $ids = [];
         foreach ($srows as $row) {
             if (($this->limit == "resub" || $this->limit == "extsub")
@@ -1322,6 +1399,8 @@ class ContactList {
             $ids[] = (int) $row->contactId;
             if ($row->roles & Contact::ROLE_PC) {
                 $this->has_flags |= self::HAS_PC;
+            } else if ($row->roles & Contact::ROLE_UNLISTEDPC) {
+                $this->has_flags |= self::HAS_UNLISTEDPC;
             } else {
                 $this->has_flags |= self::HAS_NONPC;
             }
@@ -1396,12 +1475,11 @@ class ContactList {
         echo "  <thead class=\"pltable-thead\">\n  <tr class=\"pl_headrow\">";
 
         if ($this->sortable && $url) {
-            $sortUrl = $url . (strpos($url, "?") ? "&amp;" : "?") . "sort=";
+            $sortUrl = $url . (strpos($url, "?") ? "&" : "?") . "sort=";
             $sortField = $this->sortField;
             if ($sortField === self::FIELD_FIRST || $sortField === self::FIELD_LAST) {
                 $sortField = self::FIELD_NAME;
             }
-            $q = '<a class="pl_sort" rel="nofollow" href="' . $sortUrl;
             foreach ($fieldDef as $fieldId => $fdef) {
                 if ($fdef->as_row) {
                     continue;
@@ -1410,16 +1488,15 @@ class ContactList {
                     echo "<th class=\"pl plh {$fdef->className}\"></th>";
                     continue;
                 }
-                echo "<th class=\"pl plh {$fdef->className}\">";
+                echo "<th class=\"pl plh ", $fdef->className;
                 $ftext = $this->header($fieldId);
                 if ($fieldId === $sortField) {
                     $klass = $this->reverseSort ? "sort-descending" : "sort-ascending";
-                    $qx = $this->_next_sort_link($sortUrl);
-                    echo "<a class=\"pl_sort {$klass}\" rel=\"nofollow\" href=\"{$qx}\">{$ftext}</a>";
+                    echo " sortable\">", Ht::link($ftext, $this->_next_sort_link($sortUrl), ["class" => "pl_sort {$klass}", "rel" => "nofollow"]);
                 } else if ($fdef->sort) {
-                    echo "{$q}{$fdef->name}\">{$ftext}</a>";
+                    echo " sortable\">", Ht::link($ftext, $sortUrl . $fdef->name, ["class" => "pl_sort", "rel" => "nofollow"]);
                 } else {
-                    echo $ftext;
+                    echo "\">", $ftext;
                 }
                 echo "</th>";
             }
@@ -1450,7 +1527,7 @@ class ContactList {
                 }
             }
             $l = (new SessionList("u/{$listlink}", $ids, $listtitle))
-                ->set_urlbase($this->conf->hoturl_raw("users", ["t" => $listlink], Conf::HOTURL_SITEREL));
+                ->set_urlbase($this->conf->hoturl("users", ["t" => $listlink], Conf::HOTURL_SITEREL));
             echo " has-hotlist\" data-hotlist=\"", htmlspecialchars($l->info_string());
         }
         echo "\">";
@@ -1474,23 +1551,14 @@ class ContactList {
         return ob_get_clean();
     }
 
-    function rows($listname) {
-        // PC tags
-        $this->qopt = [];
-        if (str_starts_with($listname, "#")) {
-            $x = sqlq(Dbl::escape_like(substr($listname, 1)));
-            $this->qopt["where"] = "(contactTags like " . Dbl::utf8ci("'% {$x}#%'") . ")";
-            $listname = "pc";
+    /** @return list<Contact> */
+    function sorted_users($listname) {
+        if (!$this->resolve_list_columns($listname)) {
+            return [];
         }
-
-        // get paper list
-        if (!$this->list_columns($listname)) {
-            $this->conf->error_msg("<0>User list ‘{$listname}’ not found");
-            return null;
-        }
-
-        // run query
-        return $this->_rows();
+        $users = $this->_rows();
+        usort($users, $this->conf->user_comparator());
+        return $users;
     }
 
     /** @param string $field
@@ -1502,6 +1570,8 @@ class ContactList {
             return ($this->has_flags & self::HAS_PC) !== 0;
         } else if ($field === "nonpc") {
             return ($this->has_flags & self::HAS_NONPC) !== 0;
+        } else if ($field === "unlistedpc") {
+            return ($this->has_flags & self::HAS_UNLISTEDPC) !== 0;
         }
         return false;
     }

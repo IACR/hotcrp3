@@ -77,6 +77,7 @@ class DocumentInfo implements JsonSerializable {
 
     const DF_PREFER_S3 = 1;
     const DF_WAS_INSERTED = 2;
+    const DF_PREFER_INACTIVE = 4;
 
     function __construct(Conf $conf) {
         $this->conf = $conf;
@@ -466,6 +467,15 @@ class DocumentInfo implements JsonSerializable {
     }
 
     /** @return $this */
+    function set_prefer_inactive() {
+        $this->_dflags |= self::DF_PREFER_INACTIVE;
+        if ($this->paperStorageId <= 0) {
+            $this->inactive = 1;
+        }
+        return $this;
+    }
+
+    /** @return $this */
     function analyze_content() {
         $info = Mimetype::content_info(null, $this->mimetype, $this);
         if (!$info) {
@@ -726,6 +736,11 @@ class DocumentInfo implements JsonSerializable {
     }
 
     /** @return bool */
+    function prefer_inactive() {
+        return ($this->_dflags & self::DF_PREFER_INACTIVE) !== 0;
+    }
+
+    /** @return bool */
     function store_skeleton() {
         if (!$this->timestamp) {
             $this->timestamp = Conf::$now;
@@ -854,13 +869,20 @@ class DocumentInfo implements JsonSerializable {
             && @filesize($dspath) === @filesize($this->content_file);
     }
 
-    /** @param string $text_hash
+    /** @param string|HashAnalysis $text_hash
      * @param string|Mimetype $mimetype
      * @return non-empty-string */
     static function s3_key_for($text_hash, $mimetype) {
         // Format: `doc/%[2/3]H/%h%x`. Why not algorithm in subdirectory?
         // Because S3 works better if keys are partitionable.
-        if (strlen($text_hash) === 40) {
+        if (!is_string($text_hash)) {
+            $dlen = $text_hash->prefix() === "" ? 2 : 3;
+            $x = substr($text_hash->partial_text_data(), 0, $dlen);
+            if (!$text_hash->complete()) {
+                $mimetype = "";
+            }
+            $text_hash = $text_hash->partial_text();
+        } else if (strlen($text_hash) === 40) {
             $x = substr($text_hash, 0, 2);
         } else {
             $x = substr($text_hash, strpos($text_hash, "-") + 1, 3);
@@ -1065,9 +1087,13 @@ class DocumentInfo implements JsonSerializable {
     }
 
 
-    const SAVEF_SKIP_VERIFY = 1;
-    const SAVEF_SKIP_CONTENT = 2;
-    const SAVEF_DELAY_PROP = 4;
+    const SAVEF_SKIP_VERIFY = 1;          // do not verify content hash
+    const SAVEF_SKIP_CONTENT = 2;         // do not store content
+    const SAVEF_DELAY_PROP = 4;           // do not save skeleton
+    // These properties are defined for convenience in caller code:
+    const SAVEF_ANY_CONTENT_FILE = 8;     // allow any content_file
+    const SAVEF_IGNORE_CONTENT_FILE = 16; // ignore content_file
+    const SAVEF_ALLOW_HASH_WITHOUT_CONTENT = 32; // allow finding document by hash
 
     /** @param int $savef
      * @return bool */
@@ -1270,14 +1296,14 @@ class DocumentInfo implements JsonSerializable {
         $adocs = [];
         '@phan-var-force list<array{DocumentInfo,CurlS3Result,int|float,?string,?string}> $adocs';
         $curlm = curl_multi_init();
-        $starttime = $stoptime = null;
+        $starttime = microtime(true);
+        $stoptime = null;
         $docstore = ($flags & self::FLAG_NO_DOCSTORE) === 0;
 
         while (true) {
             // check time
             $time = microtime(true);
             if ($stoptime === null) {
-                $starttime = $time;
                 $stoptime = $time + 20 * max(ceil(count($pfdocs) / 8), 1);
                 S3Client::$retry_timeout_allowance += 5 * count($pfdocs) / 4;
             }
@@ -1310,18 +1336,27 @@ class DocumentInfo implements JsonSerializable {
                 break;
             }
 
-            // block if needed
+            // start requests that are ready to go
+            // ($adoc[2] is 0 if never attempted, -1 if in flight, otherwise
+            // the time at which the next attempt should start; $mintime is
+            // the earliest time at which a waiting request comes due)
             $mintime = $stoptime;
+            $nactive = 0;
             foreach ($adocs as &$adoc) {
-                if ($adoc[2] === 0 || $adoc[2] >= $time) {
+                if ($adoc[2] === 0 || ($adoc[2] > 0 && $adoc[2] <= $time)) {
                     $adoc[1]->prepare();
                     curl_multi_add_handle($curlm, $adoc[1]->curlh);
                     $adoc[2] = -1;
                 }
-                $mintime = min($mintime, $adoc[2]);
+                if ($adoc[2] < 0) {
+                    ++$nactive;
+                } else {
+                    $mintime = min($mintime, $adoc[2]);
+                }
             }
             unset($adoc);
-            if ($mintime > $time) {
+            // block if every request is waiting to be retried
+            if ($nactive === 0) {
                 usleep((int) (($mintime - $time) * 1000000));
                 S3Client::$retry_timeout_allowance -= $mintime - $time;
                 continue;
@@ -1337,7 +1372,12 @@ class DocumentInfo implements JsonSerializable {
             // handle results
             while (($minfo = curl_multi_info_read($curlm))) {
                 $curlh = $minfo["handle"];
-                for ($i = 0; $i < count($adocs) && $adocs[$i][1]->curlh !== $curlh; ++$i) {
+                for ($i = 0; $i !== count($adocs) && $adocs[$i][1]->curlh !== $curlh; ++$i) {
+                }
+                if ($i === count($adocs)) {
+                    // unknown handle: should not happen, but do not lose it
+                    curl_multi_remove_handle($curlm, $curlh);
+                    continue;
                 }
                 $adoc = $adocs[$i];
                 $s3l = $adoc[1];
@@ -1346,22 +1386,36 @@ class DocumentInfo implements JsonSerializable {
                     $adoc[0]->handle_load_s3_curl($s3l, $adoc[3], $adoc[4]);
                     array_splice($adocs, $i, 1);
                 } else {
-                    $adocs[$i][2] = microtime(true) + 0.005 * (1 << $s3l->runindex);
+                    $retrytime = microtime(true) + 0.005 * (1 << $s3l->runindex);
+                    $adocs[$i][2] = $retrytime;
+                    $mintime = min($mintime, $retrytime);
                 }
             }
 
-            // maybe block
-            if ($mrunning) {
-                curl_multi_select($curlm, $stoptime - microtime(true));
+            // maybe block, but no longer than the next waiting request needs
+            if ($mrunning
+                && ($delay = $mintime - microtime(true)) > 0
+                && curl_multi_select($curlm, $delay) < 0) {
+                // no file descriptors to wait on; avoid spinning
+                usleep(50000);
             }
         }
 
-        // clean up leftovers
+        // clean up leftovers; these requests never reached a final status
         foreach ($adocs as $adoc) {
-            $adoc[1]->status = null;
-            $adoc[0]->handle_load_s3_curl($adoc[1], $adoc[3], $adoc[4]);
+            $s3l = $adoc[1];
+            // detach the request and close its curl handle *before* its
+            // response body stream is closed
+            if ($s3l->curlh !== null) {
+                curl_multi_remove_handle($curlm, $s3l->curlh);
+                $s3l->close();
+            }
+            $s3l->status = 598;
+            $s3l->s3->account(598);
+            $adoc[0]->handle_load_s3_curl($s3l, $adoc[3], $adoc[4]);
         }
         curl_multi_close($curlm);
+        Conf::$blocked_time += microtime(true) - $starttime;
     }
 
 
@@ -1432,7 +1486,7 @@ class DocumentInfo implements JsonSerializable {
         } else if (($path = $this->available_content_file())) {
             $ha->set_hash_file($path);
         }
-        return $ha->ok() ? $ha->binary() : false;
+        return $ha->complete() ? $ha->binary() : false;
     }
 
     /** @param string $file
@@ -1441,7 +1495,7 @@ class DocumentInfo implements JsonSerializable {
     function file_binary_hash($file, $like_hash = null) {
         $ha = HashAnalysis::make_algorithm($this->conf, $like_hash);
         $ha->set_hash_file($file);
-        return $ha->ok() ? $ha->binary() : false;
+        return $ha->complete() ? $ha->binary() : false;
     }
 
 
@@ -1621,9 +1675,10 @@ class DocumentInfo implements JsonSerializable {
     const DOCURL_INCLUDE_DOCID = 1024;
 
     /** @param ?list<FileFilter> $filters
-     * @param int $hoturl_flags
+     * @param ?int $hoturl_flags
      * @return string */
-    function url($filters = null, $hoturl_flags = 0) {
+    function url($filters = null, $hoturl_flags = null) {
+        $hoturl_flags = $hoturl_flags ?? 0;
         if ($this->mimetype) {
             $f = ["file" => $this->export_filename($filters ?? $this->filters_applied)];
         } else {
@@ -1648,9 +1703,10 @@ class DocumentInfo implements JsonSerializable {
     /** @param string $html
      * @param int $flags
      * @param ?list<FileFilter> $filters
+     * @param ?array<string,mixed> $attr
      * @return string */
-    function link_html($html = "", $flags = 0, $filters = null) {
-        $p = $this->url($filters);
+    function link_html($html = "", $flags = 0, $filters = null, $attr = null) {
+        $p = htmlspecialchars($this->url($filters));
         $suffix = $info = "";
         $title = null;
         $small = ($flags & self::L_SMALL) != 0;
@@ -1685,7 +1741,8 @@ class DocumentInfo implements JsonSerializable {
             $alt = "[" . ($m && $m->description ? $m->description : $this->mimetype) . "]";
         }
 
-        $x = "<a href=\"{$p}\" class=\"qo" . ($need_run ? " need-format-check" : "") . '">'
+        $x = "<a href=\"{$p}\" class=\"qo" . ($need_run ? " need-format-check" : "") . '"'
+            . Ht::extra($attr) . '>'
             . Ht::img($img . $suffix . ($small ? "" : "24") . ".png", $alt, ["class" => $small ? "sdlimg" : "dlimg", "title" => $title]);
         if ($html) {
             $x .= " <u class=\"x\">{$html}</u>";
@@ -1729,7 +1786,12 @@ class DocumentInfo implements JsonSerializable {
             }
             if (($flags & self::L_SMALL) === 0) {
                 $ffh = htmlspecialchars($cf->full_feedback_html());
-                $message = "<strong class=\"need-tooltip\" aria-label=\"{$ffh}\">ⓘ</strong>";
+                $message = "<strong class=\"need-tooltip\" data-tooltip=\""
+                    // NB note double escape!
+                    . Ht::escape_attr($cf->full_feedback_html())
+                    . "\" aria-label=\""
+                    . Ht::escape_attr($cf->full_feedback_text())
+                    . "\">ⓘ</strong>";
             }
         }
         return [$message, $suffix, $need_run];
@@ -1904,7 +1966,7 @@ class DocumentInfo implements JsonSerializable {
             // prevent recursive computation of npages
             $this->npages = -1000000;
 
-            $cfx = $cf ?? new CheckFormat($this->conf);
+            $cfx = $cf ?? new CheckFormat($this->conf, CheckFormat::RUN_ALWAYS);
             $cfx->check_document($this);
 
             // if default format checker fails, it will not succeed later;
@@ -1916,13 +1978,25 @@ class DocumentInfo implements JsonSerializable {
         return $this->npages >= 0 ? $this->npages : null;
     }
 
+    /** @param ?string $pagetype
+     * @param ?CheckFormat $cf
+     * @return ?int */
+    function npages_of_type($pagetype, ?CheckFormat $cf = null) {
+        if ($pagetype === null) {
+            return $this->npages($cf);
+        } else if ($cf->check_document($this)) {
+            return $cf->npages_of_type($pagetype);
+        }
+        return null;
+    }
+
     /** @param ?CheckFormat $cf
      * @return ?int */
     function nwords(?CheckFormat $cf = null) {
         if ($this->mimetype && $this->mimetype !== "application/pdf") {
             return null;
         } else {
-            $cf = $cf ?? new CheckFormat($this->conf);
+            $cf = $cf ?? new CheckFormat($this->conf, CheckFormat::RUN_ALWAYS);
             $cf->check_document($this);
             return $cf->nwords;
         }
@@ -2032,7 +2106,7 @@ class DocumentInfo implements JsonSerializable {
         if ($this->has_hash()) {
             $x["hash"] = $this->text_hash();
         }
-        $x["siteurl"] = $this->url(null, Conf::HOTURL_RAW | Conf::HOTURL_SITEREL);
+        $x["siteurl"] = $this->url(null, Conf::HOTURL_SITEREL);
         return (object) $x;
     }
 

@@ -1,6 +1,6 @@
 <?php
 // o_attachments.php -- HotCRP helper class for attachments options
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Attachments_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
@@ -14,7 +14,7 @@ class Attachments_PaperOption extends PaperOption {
         return true;
     }
     function view_option_schema() {
-        return ["type"];
+        return ["format=type^"];
     }
 
     function attachment(PaperValue $ov, $name) {
@@ -52,7 +52,7 @@ class Attachments_PaperOption extends PaperOption {
         foreach ($docs as $dj) {
             if (is_int($dj)) {
                 $dids[] = $dj;
-            } else if (($doc = $ps->upload_document($dj, $this))) {
+            } else if (($doc = $ps->upload_document($dj, $this->id))) {
                 $dids[] = $doc->paperStorageId;
             }
         }
@@ -94,7 +94,7 @@ class Attachments_PaperOption extends PaperOption {
                     }
                 }
             }
-            if ($qreq["{$name}:delete"]) {
+            if (friendly_boolean($qreq["{$name}:delete"])) {
                 continue;
             }
             if (DocumentInfo::has_request_for($qreq, $name)) {
@@ -153,21 +153,34 @@ class Attachments_PaperOption extends PaperOption {
             echo ' data-document-max-size="', (int) $this->max_size, '"';
         }
         echo '>';
+        // Need option title for accessibility
+        $otitle = $this->edit_title($ov->prow);
         foreach ($ov->document_set() as $i => $doc) {
             $ctr = $i + 1;
             $oname = "{$this->formid}:{$ctr}";
+            $dfn = $doc->member_filename();
+            $aria_dfn = $dfn . ($doc->size() > 0 ? " (" . unparse_byte_size($doc->size()) . ")" : "") . " ({$otitle})";
             echo '<div class="has-document" data-dt="', $this->id,
                 '" data-document-name="', $oname, '"><div class="document-file">',
                 Ht::hidden($oname, $doc->paperStorageId),
-                $doc->link_html(htmlspecialchars($doc->member_filename())),
+                $doc->link_html(htmlspecialchars($dfn), 0, null, ["aria-label" => $aria_dfn]),
                 '</div><div class="document-stamps">';
             if (($stamps = PaperTable::pdf_stamps_html($doc))) {
                 echo $stamps;
             }
-            echo '</div><div class="document-actions">', Ht::button("Delete", ["class" => "link ui js-remove-document"]), '</div></div>';
+            echo '</div><div class="document-actions">',
+                Ht::button("Delete", [
+                    "class" => "link ui js-remove-document",
+                    "aria-label" => "Delete {$aria_dfn}"
+                ]), '</div></div>';
         }
         echo '</div><div class="mt-2">',
-            Ht::button("Add attachment", ["class" => "ui js-add-attachment", "data-editable-attachments" => "{$this->formid}:attachments"]),
+            Ht::button("Add attachment", [
+                "class" => "ui js-add-attachment",
+                "data-editable-attachments" => "{$this->formid}:attachments",
+                "aria-label" => "Add attachment ({$otitle})",
+                "aria-describedby" => "sf-{$this->formid}:d"
+            ]),
             "</div></fieldset>\n\n";
     }
     function print_web_edit_hidden(PaperTable $pt, $ov) {
@@ -183,33 +196,9 @@ class Attachments_PaperOption extends PaperOption {
     }
 
     function render(FieldRender $fr, PaperValue $ov) {
-        $want_mimetype = $fr->column && $fr->column->view_option("type");
         $ts = [];
         foreach ($ov->document_set() as $d) {
-            if ($want_mimetype) {
-                $t = $d->mimetype;
-            } else {
-                $t = $d->member_filename();
-            }
-            if ($fr->want(FieldRender::CFTEXT)) {
-                $ts[] = $t;
-            } else if ($want_mimetype) {
-                $ts[] = htmlspecialchars($t);
-            } else {
-                $linkname = htmlspecialchars($t);
-                $dif = 0;
-                if ($fr->want(FieldRender::CFLIST)) {
-                    $dif = DocumentInfo::L_SMALL | DocumentInfo::L_NOSIZE;
-                } else if ($fr->want(FieldRender::CFFORM)) {
-                    $dif = 0;
-                } else if ($this->display() === PaperOption::DISP_TOP) {
-                    $dif = 0;
-                    $linkname = '<span class="pavfn">' . $this->title_html() . '</span>/' . $linkname;
-                } else {
-                    $dif = DocumentInfo::L_SMALL;
-                }
-                $ts[] = Document_PaperOption::link_html($d, $linkname, $dif);
-            }
+            $ts[] = Document_PaperOption::render_document($fr, $this, $d);
         }
         if (empty($ts)) {
             if ($fr->verbose()) {
@@ -219,7 +208,7 @@ class Attachments_PaperOption extends PaperOption {
         }
         if ($fr->want(FieldRender::CFTEXT)) {
             $fr->set_text(join("; ", $ts));
-        } else if ($fr->want(FieldRender::CFLIST | FieldRender::CFROW)) {
+        } else if ($fr->want_all(FieldRender::CFLIST | FieldRender::CFROW)) {
             $fr->set_html('<ul class="semi"><li>' . join("</li><li>", $ts) . '</li></ul>');
         } else {
             $fr->set_html('<ul class="x"><li class="od">' . join('</li><li class="od">', $ts) . '</li></ul>');

@@ -42,7 +42,7 @@ class ReviewVisibility_SettingParser extends SettingParser {
             if ($qe instanceof Tag_SearchTerm) {
                 foreach ($qe->tsm->tag_patterns() as $tag) {
                     if (strpos($tag, "*") === false
-                        && !$sv->conf->tags()->is_readonly($tag)) {
+                        && !$sv->conf->tags()->find_having($tag, TagInfo::TFM_PC_NONEDITABLE)) {
                         $sv->warning_at($name, "<5>PC members can change the tag ‘" . htmlspecialchars($tag) . "’. Tags referenced in visibility conditions should usually be " . $sv->setting_link("read-only", "tag_readonly") . ".");
                         $sv->warning_at("tag_readonly");
                         if ($parent_setting) {
@@ -87,7 +87,7 @@ class ReviewVisibility_SettingParser extends SettingParser {
             ])
             . "</div></div>";
 
-        $hint = '<p class="f-d mt-0 if-response-active';
+        $hint = '<p class="f-d mt-0 js-if-response-active';
         if (!$sv->conf->setting("resp_active")) {
             $hint .= ' hidden';
         }

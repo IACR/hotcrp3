@@ -1,6 +1,6 @@
 <?php
 // formulas/f_reviewermatch.php -- HotCRP helper class for formula expressions
-// Copyright (c) 2009-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2009-2026 Eddie Kohler; see LICENSE.
 
 class ReviewerMatch_Fexpr extends Fexpr {
     /** @var Contact */
@@ -35,6 +35,9 @@ class ReviewerMatch_Fexpr extends Fexpr {
         }
         return new ReviewerMatch_Fexpr($user, $arg);
     }
+    function about() {
+        return SearchTerm::ABOUT_REVIEWS;
+    }
     function inferred_index() {
         return self::IDX_REVIEW;
     }
@@ -45,8 +48,7 @@ class ReviewerMatch_Fexpr extends Fexpr {
         if ($this->csearch->is_empty()) {
             return "null";
         }
-        $state->queryOptions["reviewSignatures"] = true;
-        $t = $state->review_identity_loop_cid();
+        $t = $state->current_uid();
         return "({$t} !== null ? array_search({$t}, [" . join(", ", $this->csearch->user_ids()) . "]) !== false : null)";
     }
     function matches_at_most_once() {

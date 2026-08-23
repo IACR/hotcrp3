@@ -1,6 +1,6 @@
 <?php
 // reviewfields/rf_checkboxes.php -- HotCRP checkboxes review fields
-// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
     const MASK2SCORE = "012 3   4       5               6";
@@ -33,19 +33,11 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
     /** @param ?int $fval
      * @return list<int|string> */
     private function unpack_value_symbols($fval) {
-        if ($fval === null || $fval === 0) {
-            return [];
+        $sym = [];
+        foreach (self::unpack_value($fval ?? 0, $this->flip) as $id) {
+            $sym[] = $this->symbols[$id - 1];
         }
-        if ($fval < strlen(self::MASK2SCORE)
-            && ($o = ord(self::MASK2SCORE[$fval])) > 48) {
-            return [$this->symbols[$o - 49]];
-        }
-        $r = [];
-        for ($s = 0, $b = 1; $b <= $fval; ++$s, $b <<= 1) {
-            if (($fval & $b) !== 0)
-                $r[] = $this->symbols[$s];
-        }
-        return $this->flip ? array_reverse($r) : $r;
+        return $sym;
     }
 
     function unparse_value($fval) {
@@ -57,6 +49,20 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
             return null;
         }
         return $this->unpack_value_symbols($fval);
+    }
+
+    function unparse_verbose_json($fval) {
+        if ($fval === null) {
+            return null;
+        }
+        $v = [];
+        foreach (self::unpack_value($fval ?? 0, $this->flip) as $id) {
+            $v[] = (object) [
+                "value" => $this->symbols[$id - 1],
+                "description" => $this->values[$id - 1]
+            ];
+        }
+        return $v;
     }
 
     function unparse_search($fval) {
@@ -198,6 +204,10 @@ class Checkboxes_ReviewField extends DiscreteValues_ReviewField {
         foreach ($j as $sym) {
             if (($i = array_search($sym, $this->symbols, true)) !== false) {
                 $b |= 1 << $i;
+            } else if (is_string($sym)
+                       && ($sc = $this->find_symbol($sym)) > 0) {
+                // JSON may quote a numeric symbol
+                $b |= 1 << ($sc - 1);
             } else {
                 return false;
             }
@@ -341,9 +351,8 @@ class Checkboxes_ReviewFieldSearch extends ReviewFieldSearch {
             return null;
         } else if ($this->rf->main_storage) {
             return "({$this->rf->main_storage}&{$this->fvm})>0";
-        } else {
-            return "sfields is not null";
         }
+        return "sfields is not null";
     }
 
     function test_value($rrow, $fv) {

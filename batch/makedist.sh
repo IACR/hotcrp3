@@ -1,4 +1,4 @@
-export VERSION=3.2
+export VERSION=3.4
 
 # check that schema.sql and updateschema.php agree on schema version
 updatenum=`grep 'settings.*allowPaperOption.*=\|update_schema_version' src/updateschema.php | tail -n 1 | sed 's/.*= *//;s/.*[(] *//;s/[;)].*//'`
@@ -9,11 +9,26 @@ if [ "$updatenum" != "$schemanum" ]; then
     exit 1
 fi
 
-# check that HOTCRP_VERSION is up to date -- unless first argument is -n
+# check that HOTCRP_VERSION is up to date (unless -n)
 versionnum=`grep 'HOTCRP_VERSION' src/init.php | head -n 1 | sed 's/.*= "//;s/".*//'`
 if [ "$versionnum" != "$VERSION" -a "$1" != "-n" ]; then
     echo "error: HOTCRP_VERSION in src/init.php ($versionnum)" 1>&2
     echo "error: differs from current version ($VERSION)" 1>&2
+    exit 1
+fi
+
+# check that `version` in package.json is up to date (unless -n)
+versionnum=`grep '^  "version": ' package.json | head -n 1 | sed 's/.*: "//;s/".*//'`
+if [ "$versionnum" != "$VERSION" -a "$1" != "-n" ]; then
+    echo "error: version in package.json ($versionnum)" 1>&2
+    echo "error: differs from current version ($VERSION)" 1>&2
+    exit 1
+fi
+
+# check that NEWS.md is up to date (unless -n)
+versionnum=`grep '^## Version '"$VERSION"' –' NEWS.md | head -n 1`
+if [ -z "$versionnum" -a "$1" != "-n" ]; then
+    echo "error: NEWS.md lacks information about $VERSION" 1>&2
     exit 1
 fi
 
@@ -25,7 +40,7 @@ mkdistdir () {
     while read f; do
         if [ -n "$f" ]; then
             d=`echo "$f" | sed 's/[^\/]*$//'`
-            [ -n "$d" -a ! -d "$crpd/$d" ] && mkdir "$crpd/$d"
+            [ -n "$d" -a ! -d "$crpd/$d" ] && mkdir -p "$crpd/$d"
             if [ -f "$f" ]; then
                 ln "$f" "$crpd/$f"
             else
@@ -45,6 +60,7 @@ mkdistdir <<EOF
 LICENSE
 NEWS.md
 README.md
+SECURITY.md
 api.php
 assign.php
 authorize.php
@@ -68,6 +84,7 @@ mergeaccounts.php
 newaccount.php
 oauth.php
 offline.php
+package.json
 paper.php
 profile.php
 resetpassword.php
@@ -81,18 +98,23 @@ signout.php
 users.php
 
 batch/.htaccess
+batch/account.php
 batch/actionlog.php
 batch/apispec.php
+batch/apitoken.php
 batch/assign.php
 batch/autoassign.php
 batch/backupdb.php
+batch/checkformat.php
 batch/checkinvariants.php
 batch/cli/cli_assign.php
 batch/cli/cli_autoassign.php
+batch/cli/cli_comment.php
 batch/cli/cli_document.php
 batch/cli/cli_job.php
 batch/cli/cli_paper.php
 batch/cli/cli_parameterhelp.php
+batch/cli/cli_review.php
 batch/cli/cli_search.php
 batch/cli/cli_settings.php
 batch/cli/cli_test.php
@@ -101,11 +123,15 @@ batch/collaboratordiff.php
 batch/createdb.php
 batch/deletepapers.php
 batch/fixdelegation.php
+batch/fileinfo.php
 batch/hotcrapi.php
+batch/hotcrp-daemonize
 batch/killinactivedoc.php
 batch/paperjson.php
 batch/pcemails.php
+batch/render.php
 batch/reviewcsv.php
+batch/rewindreviews.php
 batch/s3test.php
 batch/s3transfer.php
 batch/s3verifyall.php
@@ -118,7 +144,6 @@ batch/updatecontactdb.php
 
 conf/.htaccess
 
-devel/hotcrp-daemonize.c
 devel/manual/components.md
 devel/manual/css.md
 devel/manual/docstore.md
@@ -128,6 +153,7 @@ devel/manual/index.md
 devel/manual/oauth.md
 devel/manual/pages.md
 devel/manual/sessions.md
+devel/manual/settings.md
 devel/openapi.json
 
 etc/.htaccess
@@ -184,6 +210,7 @@ lib/getopt.php
 lib/gmpshim.php
 lib/hashanalysis.php
 lib/hclcolor.php
+lib/headerset.php
 lib/ht.php
 lib/icons.php
 lib/isovideomimetype.php
@@ -217,6 +244,7 @@ lib/s3result.php
 lib/scoreinfo.php
 lib/subprocess.php
 lib/tagger.php
+lib/toposort.php
 lib/text.php
 lib/uconvertershim.php
 lib/unicodehelper.php
@@ -286,6 +314,8 @@ src/autoassigners/aa_prefconflict.php
 src/autoassigners/aa_review.php
 src/backuppattern.php
 src/banal
+src/botcontact.php
+src/capabilities/cap_authorization.php
 src/capabilities/cap_authorview.php
 src/capabilities/cap_job.php
 src/capabilities/cap_manageemail.php
@@ -293,6 +323,7 @@ src/capabilities/cap_reviewaccept.php
 src/cdbuserupdate.php
 src/checkformat.php
 src/commentinfo.php
+src/commentstatus.php
 src/componentset.php
 src/confactions.php
 src/conference.php
@@ -302,18 +333,22 @@ src/contact.php
 src/contactalerts.php
 src/contactcounter.php
 src/contactcountmatcher.php
+src/contactintersection.php
 src/contactlist.php
 src/contactprimary.php
 src/contactsearch.php
 src/contactset.php
+src/custombanners.php
 src/databaseidrandomizer.php
 src/decisioninfo.php
 src/decisionset.php
 src/docstore.php
 src/documentfiletree.php
+src/documentimporter.php
 src/documentinfo.php
 src/documentinfoset.php
 src/documenthashmatcher.php
+src/documentlocator.php
 src/documentrequest.php
 src/failurereason.php
 src/fieldchangeset.php
@@ -322,6 +357,7 @@ src/filefilter.php
 src/formatspec.php
 src/formula.php
 src/formulacall.php
+src/formulaconfig.php
 src/formulagraph.php
 src/formulaparser.php
 src/formulas/f_author.php
@@ -337,6 +373,7 @@ src/formulas/f_realnumberoption.php
 src/formulas/f_reviewer.php
 src/formulas/f_reviewermatch.php
 src/formulas/f_reviewround.php
+src/formulas/f_reviewstatus.php
 src/formulas/f_reviewwordcount.php
 src/formulas/f_revtype.php
 src/formulas/f_search.php
@@ -391,9 +428,13 @@ src/mailsender.php
 src/meetingtracker.php
 src/mentionlister.php
 src/mentionparser.php
+src/mentionphrase.php
 src/multiconference.php
 src/namedformula.php
 src/notificationinfo.php
+src/oauthclient.php
+src/oauthclientdocument.php
+src/oauthprovider.php
 src/options/o_abstract.php
 src/options/o_attachments.php
 src/options/o_authorcertification.php
@@ -440,6 +481,7 @@ src/pages/p_search.php
 src/pages/p_settings.php
 src/pages/p_signin.php
 src/pages/p_users.php
+src/pages/p_wellknown.php
 src/papercolumn.php
 src/papercolumns/pc_administrator.php
 src/papercolumns/pc_assignreview.php
@@ -447,6 +489,7 @@ src/papercolumns/pc_color.php
 src/papercolumns/pc_commenters.php
 src/papercolumns/pc_conflict.php
 src/papercolumns/pc_conflictmatch.php
+src/papercolumns/pc_decision.php
 src/papercolumns/pc_desirability.php
 src/papercolumns/pc_formula.php
 src/papercolumns/pc_formulagraph.php
@@ -480,6 +523,7 @@ src/papertable.php
 src/paperrank.php
 src/papervalue.php
 src/quicklinksrenderer.php
+src/rendercapture.php
 src/responseround.php
 src/reviewdiffinfo.php
 src/reviewfield.php
@@ -508,7 +552,6 @@ src/search/st_conflict.php
 src/search/st_decision.php
 src/search/st_documentcount.php
 src/search/st_documentname.php
-src/search/st_editfinal.php
 src/search/st_emoji.php
 src/search/st_formula.php
 src/search/st_namedsearch.php
@@ -584,6 +627,7 @@ src/tagrankparser.php
 src/tagsearchmatcher.php
 src/textformat.php
 src/tokeninfo.php
+src/tokenscope.php
 src/topicset.php
 src/track.php
 src/updateschema.php

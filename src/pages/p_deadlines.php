@@ -39,7 +39,7 @@ class Deadlines_Page {
         $qreq->print_header("Deadlines", "deadlines");
 
         if ($this->user->privChair) {
-            echo "<p>As PC chair, you can <a href=\"", $this->conf->hoturl("settings"), "\">change the deadlines</a>.</p>\n";
+            echo "<p>As PC chair, you can ", $this->conf->hotlink("change the deadlines", "settings"), ".</p>\n";
         }
 
         // If you change these, also change Contact::has_reportable_deadline().
@@ -48,17 +48,17 @@ class Deadlines_Page {
         foreach ($this->conf->submission_round_list() as $sr) {
             $srarg = new FmtArg("sclass", $sr->label, 0);
             if ($sr->register > 0
-                && ($sr->update <= 0 || $sr->register < $sr->update)) {
+                && ($sr->submit <= 0 || $sr->register < $sr->submit)) {
                 $this->dl1($sr->register, "<5>{sclass} registration deadline",
                            "<5>You can register new {sclass} {submissions} until this deadline.", $srarg);
             }
-            if ($sr->update > 0 && $sr->update != $sr->submit) {
-                $this->dl1($sr->update, "<5>{sclass} update deadline",
-                           "<5>You can update {sclass} {submissions} and upload new versions until this deadline.", $srarg);
-            }
             if ($sr->submit) {
                 $this->dl1($sr->submit, "<5>{sclass} submission deadline",
-                           "<5>{sclass} {submissions} must be ready by this deadline to be reviewed.", $srarg);
+                           "<5>{sclass} {submissions} must be completed by this deadline to be reviewed.", $srarg);
+            }
+            if ($sr->resubmit > 0 && $sr->resubmit > $sr->submit) {
+                $this->dl1($sr->resubmit, "<5>{sclass} resubmission deadline",
+                           "<5>Completed {sclass} {submissions} may be updated until this deadline.", $srarg);
             }
         }
 
@@ -78,15 +78,14 @@ class Deadlines_Page {
             $dlbyround = [];
             $last_dlbyround = null;
             foreach ($conf->defined_rounds() as $i => $round_name) {
-                $isuf = $i ? "_{$i}" : "";
-                $es = +$conf->setting("extrev_soft{$isuf}");
-                $eh = +$conf->setting("extrev_hard{$isuf}");
+                $es = $conf->review_deadline($i, REVIEW_EXTERNAL, false);
+                $eh = $conf->review_deadline($i, REVIEW_EXTERNAL, true);
                 $ps = $ph = -1;
 
                 $thisdl = [];
                 if ($this->user->isPC) {
-                    $ps = +$conf->setting("pcrev_soft{$isuf}");
-                    $ph = +$conf->setting("pcrev_hard{$isuf}");
+                    $ps = $conf->review_deadline($i, REVIEW_PC, false);
+                    $ph = $conf->review_deadline($i, REVIEW_PC, true);
                     if ($ph && ($ph < Conf::$now || $ps < Conf::$now)) {
                         $thisdl[] = "PH{$ph}";
                     } else if ($ps) {

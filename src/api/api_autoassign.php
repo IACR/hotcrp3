@@ -1,6 +1,6 @@
 <?php
 // api_autoassign.php -- HotCRP autoassignment API calls
-// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class Autoassign_API {
     /** @param Qrequest $qreq
@@ -58,23 +58,26 @@ class Autoassign_API {
     }
 
     static function autoassign(Contact $user, Qrequest $qreq) {
-        if (!isset($qreq->autoassigner)) {
+        if (!$user->is_manager()) {
+            return JsonResult::make_permission_error();
+        } else if (!isset($qreq->autoassigner)) {
             return JsonResult::make_missing_error("autoassigner");
         } else if (!($aa = $user->conf->autoassigner($qreq->autoassigner))) {
             return JsonResult::make_not_found_error("autoassigner");
-        }
-        if (!isset($qreq->q)) {
+        } else if (!isset($qreq->q)) {
             return JsonResult::make_missing_error("q");
         }
 
-        $argv = ["-q{$qreq->q}", "-t" . ($qreq->t ?? "s"), "-a{$aa->name}"];
+        $qreq->t = $qreq->t ?? "alladmin";
+        // Ouch! Must supply `=` signs because these arguments might be empty
+        $argv = ["-q={$qreq->q}", "-t={$qreq->t}", "-a={$aa->name}"];
 
         $us = self::parse_param($qreq, "u", false);
         if ($us === null) {
             return JsonResult::make_parameter_error("u");
         }
         foreach ($us as $u) {
-            $argv[] = "-u{$u}";
+            $argv[] = "-u={$u}";
         }
 
         $disjoints = self::parse_param($qreq, "disjoint", false);
@@ -82,7 +85,7 @@ class Autoassign_API {
             return JsonResult::make_parameter_error("disjoint");
         }
         foreach ($disjoints as $dj) {
-            $argv[] = "-X{$dj}";
+            $argv[] = "-X={$dj}";
         }
 
         $params = self::parse_param($qreq, "param", true);
@@ -105,7 +108,7 @@ class Autoassign_API {
             $jargv[] = "-d";
         }
 
-        $tok = Job_Capability::make($user, "Autoassign", $jargv)
+        $tok = Job_Token::make($user, "Autoassign", $jargv)
             ->set_input("assign_argv", $argv)
             ->insert();
         $jobid = $tok->salt;
@@ -114,7 +117,7 @@ class Autoassign_API {
             $jr = new JsonResult(202 /* Accepted */, [
                 "ok" => true,
                 "job" => $jobid,
-                "job_url" => $qreq->conf()->hoturl("api/job", ["job" => $jobid], Conf::HOTURL_RAW | Conf::HOTURL_ABSOLUTE)
+                "job_url" => $qreq->conf()->hoturl("api/job", ["job" => $jobid], Conf::HOTURL_ABSOLUTE)
             ]);
             $jr->emit($qreq);
             $qreq->qsession()->commit();
@@ -133,12 +136,17 @@ class Autoassign_API {
         if ($tok->data("exit_status") === 0) {
             return $tok->json_result("string");
         }
-        $jr = JsonResult::make_message_list($tok->data("message_list") ?? []);
+        // The job ran but failed; report `status: failed`, matching `/job`.
+        $jr = JsonResult::make_message_list($tok->data("message_list") ?? [])
+            ->set("status", "failed");
         $tok->delete();
         return $jr;
     }
 
     static function autoassigners(Contact $user, Qrequest $qreq) {
+        if (!$user->is_manager()) {
+            return JsonResult::make_permission_error();
+        }
         $conf = $user->conf;
         $exs = [];
         $xtp = (new XtParams($conf, $user))->set_warn_deprecated(false);

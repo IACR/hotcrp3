@@ -97,8 +97,8 @@ class Autoassign_Tester {
     function xassert_run_autoassigner(Autoassigner $aa) {
         $aa->run();
         if ($aa->has_message()) {
-            Xassert::print_landmark();
-            fwrite(STDERR, preg_replace('/^/m', "  ", $aa->full_feedback_text(true)));
+            list($first, $rest) = Xassert::landmark(true);
+            fwrite(STDERR, $first . preg_replace('/^/m', "  ", $aa->full_feedback_text(true)) . $rest);
         }
         xassert($aa->has_assignment());
         xassert_assign($this->user, join("", $aa->assignments()), true);
@@ -457,5 +457,66 @@ class Autoassign_Tester {
             xassert_le($an[2][$this->cur_pcc[1]] ?? 0, 3);
             xassert_le($an[3][$this->cur_pcc[2]] ?? 0, 3);
         });
+    }
+
+    function test_unlisted_pc_is_assignable() {
+        // unlisted PC members are absent from `pc_members`, so every
+        // assignment path has to reach them through `full_pc_members`
+        $conf = $this->conf;
+        $email = "unlassign@_.com";
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $conf->invalidate_caches("users", "pc");
+
+        $us = new UserStatus($conf->root_user());
+        $acct = $us->save_user((object) ["email" => $email, "roles" => ["unlistedpc"]]);
+        xassert(!!$acct, $us->full_feedback_text());
+        $conf->invalidate_caches("users", "pc");
+        $uid = $acct->contactId;
+        xassert(isset($conf->pc_members()[$uid]));
+        xassert(!isset($conf->listed_pc_members()[$uid]));
+        xassert(!!$conf->pc_member_by_id($uid));
+
+        // the default candidate set includes them
+        $pids = range(1, 10);
+        $aa = $this->autoassigner("review", null, $pids, ["count" => 1]);
+        xassert_in_eqq($uid, $aa->user_ids());
+
+        // ...and an assignment restricted to just this user still produces one
+        $aa = $this->autoassigner("review", [$uid], $pids, ["count" => 1]);
+        $aa->run();
+        xassert($aa->has_assignment());
+        $atext = join("", $aa->assignments());
+        xassert_str_contains($atext, $email);
+        xassert_assign($this->user, $atext, true);
+        xassert_gt($conf->fetch_ivalue("select count(*) from PaperReview where contactId=?", $uid), 0);
+
+        // the `enabled` keyword — how the page spells “use entire PC” — reaches
+        // unlisted members too
+        $eids = ContactSearch::make_pc("enabled", $conf->root_user())->user_ids();
+        xassert_in_eqq($uid, $eids);
+        xassert_eqq(count($conf->pc_members()),
+                    count($conf->listed_pc_members()) + 1);
+
+        $conf->qe("delete from PaperReview where contactId=?", $uid);
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $conf->invalidate_caches("users", "pc");
+        $conf->update_automatic_tags();
+    }
+
+    function test_api_requires_manager() {
+        // Regression: the autoassign API must require manager rights (parity
+        // with Autoassign_Page). An ordinary PC member must not run the
+        // autoassigner — its output discloses individual PC review preferences.
+        $conf = $this->conf;
+        $lixia = $conf->checked_user_by_email("lixia@cs.ucla.edu");
+        xassert($lixia->isPC && !$lixia->is_manager());
+        $jr = call_api_result("=autoassign", $lixia,
+            ["autoassigner" => "review", "q" => "", "t" => "s", "minimal_dry_run" => "1"]);
+        xassert_eqq($jr->status, 403);
+        xassert(!($jr->content["ok"] ?? false));
+        xassert_eqq(call_api_result("autoassigners", $lixia, [])->status, 403);
+        // a chair is still allowed
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        xassert_eqq(call_api_result("autoassigners", $chair, [])->status ?? 200, 200);
     }
 }

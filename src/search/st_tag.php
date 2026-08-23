@@ -35,10 +35,12 @@ class Tag_SearchTerm extends SearchTerm {
 
         // check value matchers
         $tsm = new TagSearchMatcher($srch->user);
-        if (preg_match('/\A([^\#=!<>\x80-\xFF]+)(?:\#|=)(-?(?:\.\d+|\d+\.?\d*))(?:\.\.\.?|-|–|—)(-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)) {
+        if (preg_match('/\A([^\#=!<>\x80-\xFF]+)[\#=](-?(?:\.\d+|\d+\.?\d*))(?:\.\.\.?|-|–|—)(|-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)) {
             $tagword = $m[1];
             $tsm->add_value_matcher(new CountMatcher(">={$m[2]}"));
-            $tsm->add_value_matcher(new CountMatcher("<={$m[3]}"));
+            if ($m[3] !== "") {
+                $tsm->add_value_matcher(new CountMatcher("<={$m[3]}"));
+            }
         } else if (preg_match('/\A([^\#=!<>\x80-\xFF]+)(\#?)([=!<>]=?|≠|≤|≥|)(-?(?:\.\d+|\d+\.?\d*))\z/s', $word, $m)
                    && $m[1] !== "any"
                    && $m[1] !== "none"
@@ -82,6 +84,9 @@ class Tag_SearchTerm extends SearchTerm {
     /** @return list<SearchTerm> */
     static function expand_automatic(TagSearchMatcher $tsm, SearchWord $sword,
                                      PaperSearch $srch) {
+        assert($srch->user->is_root_user());
+        // The expansion below requres that `$srch->user` be able to view
+        // automatic tags on ALL papers.
         $dt = $srch->conf->tags();
         $allterms = $nomatch = [];
         foreach ($dt->entries_having(TagInfo::TF_AUTOMATIC) as $ti) {
@@ -136,6 +141,8 @@ class Tag_SearchTerm extends SearchTerm {
     function sqlexpr(SearchQueryInfo $sqi) {
         if ($this->tsm->test_empty()) {
             return "true";
+        } else if (!$this->tsm->user->can_view_tags()) {
+            return "false";
         }
         $sql = $this->tsm->sqlexpr("PaperTag");
         return self::SQLEXPR_PREFIX . ($sql ? " and {$sql}" : "") . ')';
@@ -148,22 +155,24 @@ class Tag_SearchTerm extends SearchTerm {
     static function combine_sqlexpr($ff) {
         if (count($ff) === 1) {
             return $ff[0];
-        } else {
-            $x = [];
-            foreach ($ff as $f) {
-                if ($f === "true" || !str_starts_with($f, self::SQLEXPR_PREFIX)) {
-                    return "true";
-                } else if ($f === self::SQLEXPR_PREFIX . ")") {
-                    return $f;
-                } else {
-                    $x[] = substr($f, strlen(self::SQLEXPR_PREFIX) + 5, -1);
-                }
-            }
-            return self::SQLEXPR_PREFIX . " and (" . join(" or ", $x) . "))";
         }
+        $x = [];
+        foreach ($ff as $f) {
+            if ($f === "true" || !str_starts_with($f, self::SQLEXPR_PREFIX)) {
+                return "true";
+            } else if ($f === self::SQLEXPR_PREFIX . ")") {
+                return $f;
+            } else {
+                $x[] = substr($f, strlen(self::SQLEXPR_PREFIX) + 5, -1);
+            }
+        }
+        return self::SQLEXPR_PREFIX . " and (" . join(" or ", $x) . "))";
     }
     function test(PaperInfo $row, $xinfo) {
         return $this->tsm->test($row->searchable_tags($this->tsm->user));
+    }
+    function about() {
+        return self::ABOUT_TAGS;
     }
     /** @param PaperList $pl
      * @param string $tag
@@ -198,12 +207,8 @@ class Tag_SearchTerm extends SearchTerm {
     function debug_json() {
         if (($t = $this->tsm->single_tag())) {
             return ["type" => $this->type, "tag" => $t];
-        } else {
-            return ["type" => $this->type, "tag_regex" => $this->tsm->regex()];
         }
-    }
-    function about() {
-        return self::ABOUT_PAPER;
+        return ["type" => $this->type, "tag_regex" => $this->tsm->regex()];
     }
     function drag_assigners(Contact $user) {
         $t = $this->tsm->single_tag();

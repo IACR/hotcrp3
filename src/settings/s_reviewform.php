@@ -98,12 +98,19 @@ class ReviewForm_SettingParser extends SettingParser {
     }
 
     private function _apply_req_name(Si $si, SettingValues $sv) {
-        if (($name = $sv->base_parse_req($si)) !== null) {
-            if (ReviewField::clean_name($name) !== $name
-                && $sv->oldv($si) !== $name
-                && !$sv->reqstr("{$si->name0}{$si->name1}/name_force")) {
+        if (($name = $sv->base_parse_req($si)) !== null
+            && $sv->oldv($si) !== $name) {
+            if (preg_match('/\A(?:[_$]|[a-z][a-z0-9_:]*+\z)/', $name)) {
+                if ($name[0] === "_" || $name[0] === "\$") {
+                    $sv->error_at($si->name, "<0>Field names cannot begin with ‘{}’", $name[0]);
+                } else {
+                    $sv->error_at($si->name, "<0>Field name ‘{}’ is reserved", $name);
+                    $sv->inform_at($si->name, "<0>Please pick a name with at least one space or capital letter.");
+                }
+            } else if (ReviewField::clean_name($name) !== $name
+                       && !$sv->reqstr("{$si->name0}{$si->name1}/name_force")) {
                 $lparen = strrpos($name, "(");
-                $sv->error_at($si->name, "<0>Please remove ‘" . substr($name, $lparen) . "’ from the field name");
+                $sv->error_at($si->name, "<0>Please remove ‘{}’ from the field name", substr($name, $lparen));
                 $sv->inform_at($si->name, "<0>Visibility descriptions are added automatically.");
             }
             $sv->save($si, $name);
@@ -341,7 +348,7 @@ class ReviewForm_SettingParser extends SettingParser {
             $sv->request_write_lock("PaperReview");
             $sv->request_write_lock("PaperReviewHistory");
             $sv->request_store_value($si);
-            $sv->mark_invalidate_caches(["rf" => true]);
+            $sv->mark_invalidate_caches("rf");
             // don’t claim there’s a diff if there’s no real diff, just a format change
             if (json_encode_db($sv->conf->review_form()->export_storage_json())
                 === $newv) {
@@ -406,11 +413,11 @@ class ReviewForm_SettingParser extends SettingParser {
                 }
                 //error_log("{$rrow->paperId}#{$rrow->reviewId}: {$f->short_id}[" . json_encode($fval) . "→" . json_encode($nfval) . "]");
                 if ($nfval !== $fval) {
-                    $rrow->set_fval_prop($f, $nfval, true);
+                    $rrow->set_fval_prop($f, $nfval);
                 }
             }
-            if ($rrow->prop_changed()) {
-                $rrow->save_prop($stager);
+            if ($rrow->save_prop($stager) >= 0) {
+                $rrow->commit_prop();
             }
         }
         $stager(null);

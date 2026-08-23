@@ -5,49 +5,60 @@
 class Decision_SearchTerm extends SearchTerm {
     /** @var Contact */
     private $user;
-    /** @var string|list<int> */
-    private $match;
+    /** @var list<int> */
+    private $decs;
 
     /** @param string|list<int> $match */
     function __construct(Contact $user, $match) {
         parent::__construct("decision");
         $this->user = $user;
-        $this->match = $match;
+        if (is_string($match)) {
+            $this->decs = [];
+            foreach ($user->conf->decision_set()->filter_using($match) as $d) {
+                $this->decs[] = $d->id;
+            }
+        } else {
+            $this->decs = $match;
+        }
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
-        $dec = $srch->conf->decision_set()->matchexpr($word);
-        if (is_array($dec) && empty($dec)) {
+        $decs = $srch->conf->decision_set()->match($word);
+        if (empty($decs)) {
             $srch->lwarning($sword, "<0>Decision not found");
-            $dec[] = -10000000;
+            return new Decision_SearchTerm($srch->user, [-10000000]);
         }
-        return new Decision_SearchTerm($srch->user, $dec);
-    }
-    /** @return string|list<int> */
-    function matchexpr() {
-        return $this->match;
+        $lim = new Limit_SearchTerm($srch, "dec:" . SearchWord::quote($word));
+        $lim->set_implicit();
+        $st = new Decision_SearchTerm($srch->user, $decs);
+        $st->set_float("xlimit", $lim);
+        return $st;
     }
     function sqlexpr(SearchQueryInfo $sqi) {
-        $f = ["Paper.outcome" . CountMatcher::sqlexpr_using($this->match)];
-        if (CountMatcher::compare_using(0, $this->match)
-            && !$this->user->allow_administer_all()) {
-            $f[] = "Paper.outcome=0";
+        if (!$this->user->can_view_some_decision()) {
+            return in_array(0, $this->decs, true) ? "true" : "false";
+        } else if (in_array(0, $this->decs, true)
+                   && !$this->user->can_view_all_decision()) {
+            return "true";
         }
-        return "(" . join(" or ", $f) . ")";
+        return "Paper.outcome" . CountMatcher::sqlexpr_using($this->decs);
+    }
+    function is_sqlexpr_precise() {
+        return $this->user->can_view_all_decision();
     }
     function test(PaperInfo $row, $xinfo) {
         $d = $this->user->can_view_decision($row) ? $row->outcome : 0;
-        return CountMatcher::compare_using($d, $this->match);
+        return in_array($d, $this->decs, true);
     }
     function about() {
-        return self::ABOUT_PAPER;
+        return self::ABOUT_DECISION;
     }
     function drag_assigners(Contact $user) {
-        $ds = $user->conf->decision_set()->filter_using($this->match);
-        if (count($ds) !== 1 || !$user->can_set_some_decision()) {
+        if (count($this->decs) !== 1 || !$user->can_set_some_decision()) {
             return null;
         }
+        $d = $user->conf->decision_set()->get($this->decs[0]);
         return [
-            ["action" => "decision", "decision" => $ds[0]->name, "ondrag" => "enter"],
+            ["action" => "decision", "decision" => $d->name, "ondrag" => "enter"],
             ["action" => "decision", "decision" => "none", "ondrag" => "leave"]
         ];
     }

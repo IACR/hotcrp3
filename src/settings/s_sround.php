@@ -13,7 +13,6 @@ class Sround_Setting {
     /** @var int */
     public $open;
     public $register;
-    // XXX update
     public $submit;
     public $resubmit;
     public $grace;
@@ -44,7 +43,6 @@ class Sround_Setting {
         if ($this->register > 0) {
             $j["register"] = $this->register;
         }
-        // XXX update
         if ($this->submit > 0) {
             $j["submit"] = $this->submit;
         }
@@ -103,11 +101,13 @@ class Sround_SettingParser extends SettingParser {
         $namesi = $sv->si("submission/{$ctr}/tag");
         echo '<legend>', $sv->label($namesi->name, "Submission class"), ' &nbsp;',
             $sv->entry($namesi->name, ["class" => "uii uich js-settings-submission-round-name want-focus want-delete-marker"]),
-            Ht::button(Icons::ui_use("trash"), ["name" => "submission/{$ctr}/deleter", "class" => "ui js-settings-submission-round-delete ml-2 btn-licon-s need-tooltip", "aria-label" => "Delete submission class", "tabindex" => -1]);
+            Ht::button(Icons::ui_use("trash", "m"), ["name" => "submission/{$ctr}/deleter", "class" => "ui js-settings-submission-round-delete ml-2 btn-licon-s need-tooltip", "aria-label" => "Delete submission class", "tabindex" => -1]);
         /*if ($id > 0 && ($round_map[$id - 1] ?? 0) > 0) {
             echo '<span class="ml-3 d-inline-block">',
-                '<a href="', $sv->conf->hoturl("search", ["q" => "re:" . ($id > 1 ? $sv->conf->round_name($id - 1) : "unnamed")]), '" target="_blank" rel="noopener">',
-                plural($round_map[$id - 1], "review"), '</a></span>';
+                $sv->conf->hotlink(plural($round_map[$id - 1], "review"),
+                    "search", ["q" => "re:" . ($id > 1 ? $sv->conf->round_name($id - 1) : "unnamed")],
+                    ["target" => "_blank", "rel" => "noopener"]),
+                '</span>';
         }*/
         echo '</legend>';
         $sv->print_feedback_at($namesi->name);
@@ -164,11 +164,11 @@ class Sround_SettingParser extends SettingParser {
             $pfx = "submission/{$ctr}";
             if ($sv->oldv("{$pfx}/registration") !== $sv->newv("{$pfx}/registration")
                 || $sv->oldv("{$pfx}/done") !== $sv->newv("{$pfx}/done")) {
-                $sv->check_date_before("{$pfx}/registration", "{$pfx}/done", false);
+                $sv->check_date_before("{$pfx}/registration", "{$pfx}/done");
             }
             if ($sv->oldv("{$pfx}/done") !== $sv->newv("{$pfx}/done")
                 || $sv->oldv("{$pfx}/resubmission") !== $sv->newv("{$pfx}/resubmission")) {
-                $sv->check_date_before("{$pfx}/done", "{$pfx}/resubmission", false);
+                $sv->check_date_before("{$pfx}/done", "{$pfx}/resubmission");
             }
             $srs[] = $sv->newv($pfx);
         }

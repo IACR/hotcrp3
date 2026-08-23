@@ -1,6 +1,6 @@
 <?php
 // paperexport.php -- HotCRP helper for reading/storing papers as JSON
-// Copyright (c) 2008-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class PaperExport {
     /** @var Conf
@@ -11,13 +11,13 @@ class PaperExport {
     public $viewer;
     /** @var bool
      * @readonly */
-    public $use_ids = false;
-    /** @var bool
-     * @readonly */
     public $include_docids = false;
     /** @var bool
      * @readonly */
-    public $include_content = false;
+    public $include_document_content = false;
+    /** @var bool
+     * @readonly */
+    public $ignore_soft_word_limits = false;
     /** @var bool
      * @readonly */
     public $include_permissions = true;
@@ -27,6 +27,9 @@ class PaperExport {
     /** @var bool
      * @readonly */
     public $override_ratings = false;
+    /** @var bool
+     * @readonly */
+    public $include_comment_content = true;
     /** @var list<callable> */
     private $_on_document_export = [];
 
@@ -38,15 +41,6 @@ class PaperExport {
     function __construct(Contact $viewer) {
         $this->conf = $viewer->conf;
         $this->viewer = $viewer;
-
-    }
-
-    /** @param bool $x
-     * @return $this
-     * @suppress PhanAccessReadOnlyProperty */
-    function set_use_ids($x) {
-        $this->use_ids = $x;
-        return $this;
     }
 
     /** @param bool $x
@@ -60,8 +54,16 @@ class PaperExport {
     /** @param bool $x
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
-    function set_include_content($x) {
-        $this->include_content = $x;
+    function set_include_document_content($x) {
+        $this->include_document_content = $x;
+        return $this;
+    }
+
+    /** @param bool $x
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    function set_ignore_soft_word_limits($x) {
+        $this->ignore_soft_word_limits = $x;
         return $this;
     }
 
@@ -86,6 +88,14 @@ class PaperExport {
      * @suppress PhanAccessReadOnlyProperty */
     function set_override_ratings($x) {
         $this->override_ratings = $x;
+        return $this;
+    }
+
+    /** @param bool $x
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    function set_include_comment_content($x) {
+        $this->include_comment_content = $x;
         return $this;
     }
 
@@ -122,7 +132,7 @@ class PaperExport {
         if ($doc->filename) {
             $d->filename = $doc->filename;
         }
-        if ($this->include_content
+        if ($this->include_document_content
             && ($content = $doc->content()) !== false) {
             $d->content_base64 = base64_encode($content);
         }
@@ -137,7 +147,7 @@ class PaperExport {
     }
 
     /** @param object $d */
-    private function decorate_pdf_document_json($d, DocumentInfo $doc) {
+    function decorate_pdf_document_json($d, DocumentInfo $doc) {
         if (($spec = $this->conf->format_spec($doc->documentType))
             && !$spec->is_empty()) {
             $this->_cf = $this->_cf ?? new CheckFormat($this->conf, CheckFormat::RUN_NEVER);
@@ -147,12 +157,14 @@ class PaperExport {
                 }
                 if ($this->_cf->has_problem()) {
                     $d->format_status = $this->_cf->has_error() ? "error" : "warning";
-                    $d->format = join(" ", $this->_cf->problem_fields());
+                    $d->format_problem_fields = $this->_cf->problem_fields();
                 } else {
                     $d->format_status = "ok";
                 }
+                return;
             }
-        } else if (($np = $doc->npages()) !== null) {
+        }
+        if (($np = $doc->npages()) !== null) {
             $d->pages = $np;
         }
     }
@@ -174,6 +186,7 @@ class PaperExport {
         if (($sr = $prow->submission_round()) && !$sr->unnamed) {
             $pj->submission_class = $sr->tag;
         }
+        $overlong = $truncated = [];
 
         foreach ($prow->form_fields() as $opt) {
             if (!$this->viewer->can_view_option($prow, $opt)) {
@@ -184,13 +197,34 @@ class PaperExport {
             if ($oj === null) {
                 continue;
             }
-            if ($this->use_ids) {
-                $pj->{$opt->field_key()} = $oj;
-            } else {
-                $pj->{$opt->json_key()} = $oj;
+            $key = $opt->json_key();
+            if (is_string($oj)
+                && ($tt = $opt->json_value_truncate($oj, $this))) {
+                if ($tt->overlong) {
+                    $overlong[$key] = true;
+                }
+                if ($tt->truncation !== null) {
+                    $truncated[$key] = $tt->truncation_band;
+                    $oj = $tt->truncation;
+                }
             }
+            $pj->{$key} = $oj;
         }
 
+        $this->apply_paper_status($prow, $pj);
+        $this->apply_paper_tags($prow, $pj);
+
+        if (!empty($overlong)) {
+            $pj->overlong = $overlong;
+        }
+        if (!empty($truncated)) {
+            $pj->truncated = $truncated;
+        }
+        return $pj;
+    }
+
+    /** @param object $pj */
+    function apply_paper_status(PaperInfo $prow, $pj) {
         $submitted_status = "submitted";
         $dec = $prow->viewable_decision($this->viewer);
         if ($dec->id !== 0) {
@@ -230,12 +264,13 @@ class PaperExport {
         if ($prow->timeModified > 0) {
             $pj->modified_at = $prow->timeModified;
         }
+    }
 
+    /** @param object $pj */
+    function apply_paper_tags(PaperInfo $prow, $pj) {
         if (($tlist = $prow->sorted_viewable_tags($this->viewer))) {
             $pj->tags = Tagger::split($tlist);
         }
-
-        return $pj;
     }
 
     /** @return ?object */
@@ -270,7 +305,7 @@ class PaperExport {
         if ($rrow->is_subreview()) {
             $rj["subreview"] = true;
         }
-        if ($rrow->reviewBlind) {
+        if ($rrow->is_blind()) {
             $rj["blind"] = true;
         }
 
@@ -280,6 +315,10 @@ class PaperExport {
             $rj["reviewer"] = $this->viewer->reviewer_html_for($rrow);
             if (!Contact::is_anonymous_email($reviewer->email)) {
                 $rj["reviewer_email"] = $reviewer->email;
+            }
+            if ($reviewer->is_bot()) {
+                // machine-readable, since `reviewer` carries the mark as HTML
+                $rj["reviewer_bot"] = true;
             }
         }
 
@@ -333,7 +372,7 @@ class PaperExport {
                 $rj[$f->uid()] = $f->unparse_json($fval);
             } else if ($fval !== null
                        && $this->include_permissions
-                       && ($my_review || $this->viewer->can_administer($prow))) {
+                       && ($my_review || $this->viewer->is_admin($prow))) {
                 $hidden[] = $f->uid();
             }
         }
@@ -403,5 +442,13 @@ class PaperExport {
             }
         }
         return (object) $rj;
+    }
+
+    /** @return ?object */
+    function comment_json(PaperInfo $prow, CommentInfo $crow) {
+        // XXX should move unparsing code from CommentInfo here eventually
+        $fl = ($this->include_comment_content ? 0 : CommentInfo::UNPARSE_NO_CONTENT)
+            | ($this->ignore_soft_word_limits ? CommentInfo::UNPARSE_HARD_LIMIT : 0);
+        return $crow->unparse_json($this->viewer, $fl);
     }
 }

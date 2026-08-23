@@ -10,7 +10,7 @@
     },
     {
         "name": "Submission", "id": 0,
-        "type": "document",
+      "type": "document", "include_empty": true,
         "json_key": "submission",
         "form_order": 1001, "required": "submit",
         "display": "top",
@@ -24,7 +24,7 @@
         "form_order": 2001, "required": true,
         "display": "left", "page_expand": true,
         "function": "+Abstract_PaperOption",
-        "configurable": true, "properties": ["name", "description", "condition", "exists_if", "edit_condition", "editable_if", "required"]
+        "configurable": true, "properties": ["name", "description", "condition", "exists_if", "edit_condition", "editable_if", "required", "wordlimit", "hard_wordlimit"]
     },
     {
         "name": "Authors", "id": -1001,
@@ -34,10 +34,11 @@
         "form_order": 3001, "required": true,
         "display": "right",
         "function": "+Authors_PaperOption",
-        "configurable": true, "properties": ["name", "description", "edit_condition", "editable_if", "max"]
+        "configurable": true, "properties": ["name", "description", "edit_condition", "editable_if", "max"],
+        "authorlike": true
     },
     {
-        "name": "Anonymous submission", "id": -1002,
+        "name": "Anonymity", "id": -1002,
         "type": "nonblind", "include_empty": true,
         "json_key": "nonblind",
         "form_order": 3002,
@@ -48,10 +49,11 @@
         "name": "Contacts", "id": -1003,
         "type": "contacts", "include_empty": true,
         "json_key": "contacts",
-        "visibility": "conflict",
+        "visibility": "nonblind",
         "form_order": 3050,
         "display": "none",
-        "configurable": false, "function": "+Contacts_PaperOption"
+        "configurable": false, "function": "+Contacts_PaperOption",
+        "authorlike": true
     },
     {
         "name": "Topics", "id": -1005,
@@ -71,7 +73,8 @@
         "display": "none",
         "function": "+PCConflicts_PaperOption",
         "editable_if": "phase:review",
-        "configurable": true, "properties": ["name"]
+        "configurable": true, "properties": ["name"],
+        "authorlike": true
     },
     {
         "name": "Collaborators", "id": -1007,
@@ -82,6 +85,7 @@
         "display": "none",
         "function": "+Collaborators_PaperOption",
         "editable_if": "phase:review",
-        "configurable": true, "properties": ["name", "description"]
+        "configurable": true, "properties": ["name", "description"],
+        "authorlike": true
     }
 ]

@@ -33,7 +33,7 @@ class Tag_ListAction extends ListAction {
             . $pl->action_submit("tag");
         if ($pl->user->privChair) {
             $t .= '<div class="fx99"><div style="margin:2px 0">'
-                . Ht::checkbox("tagcr_gapless", 1, !!$qreq->tagcr_gapless, ["class" => "ml-0"])
+                . Ht::checkbox("tagcr_gapless", 1, friendly_boolean($qreq->tagcr_gapless) ?? false, ["class" => "ml-0"])
                 . "&nbsp;" . Ht::label("Gapless order") . "</div>"
                 . '<div style="margin:2px 0">Using: &nbsp;'
                 . Ht::select("tagcr_method", PaperRank::default_method_selector(), $qreq->tagcr_method)
@@ -159,6 +159,6 @@ class Tag_ListAction extends ListAction {
         $assignset->execute();
         $assignset->feedback_msg(AssignmentSet::FEEDBACK_CHANGE);
         $args = ["atab" => "tag"] + $qreq->subset_as_array("tag", "tagfn", "tagcr_method", "tagcr_source", "tagcr_gapless");
-        return new Redirection($user->conf->selfurl($qreq, $args, Conf::HOTURL_RAW | Conf::HOTURL_REDIRECTABLE));
+        return new Redirection($user->conf->selfurl($qreq, $args, Conf::HOTURL_REDIRECTABLE));
     }
 }

@@ -1,6 +1,165 @@
 HotCRP NEWS
 ===========
 
+## Version 3.4 – 5.Aug.2026
+
+* Security updates
+
+    * This release fixes a group of security vulnerabilities found by an
+      internal audit, and other vulnerabilities reported via GitHub.
+    * Fixed a high-severity vulnerability where reviewers could gain author
+      access to submissions. GitHub Security Advisory GHSA-v8jx-vq6p-jq52.
+    * Fixed a range of medium-to-low-severity information exposures via
+      searches, error messages, and APIs. Thanks to Nebula Security for one
+      report. GitHub Security Advisories GHSA-pwrf-v6wh-9qc5 and
+      GHSA-4v58-pj7j-xc8j.
+    * Fixed timing channels remotely exploitable by authors. Thanks to Taehyun
+      Kang, Sangyun Kim, Youngmin Kim, and Byoungyoung Lee at Seoul National
+      University for the report. GitHub Security Advisory GHSA-fr3q-pp37-9wcg.
+    * Improve sanitization of @mentions in comments.
+
+* Settings
+
+    * Text submission fields gain word limits (advanced settings only).
+    * Author certification: Withdrawing a submission deletes all its author
+      certifications. This plugs a hole where withdrawing and reviving a
+      submission could evade max-author limits.
+    * Fix JSON export/import of format settings.
+    * Remove separate `sub_update` deadline (which only direct database access
+      could turn on before). If you want to allow submitting a paper but not
+      editing its fields, mark the fields as read-only.
+
+* Reviews
+
+    * Improve handling of review-acceptor links.
+
+* Tags
+
+    * Improve UI around allotment votes: don’t allow overvoting, show vote
+      counts more often, use checkboxes if the allotment is 1.
+
+* API
+
+    * Support `GET /review`, `GET /reviews`, `DELETE /review`, `POST /review`,
+      `POST /reviews`, `DELETE /comment`, `GET /comments`, and `POST /comments`.
+      `POST` endpoints support JSON, ZIP, and form requests; `POST /review`
+      endpoints support textual review form uploads; `POST /comment` gains
+      `dry_run` support.
+    * The `hotcrapi` batch script understands `review` and `comment`.
+    * Removed obsolete `GET /fieldtext` and `GET /fieldhtml` APIs; use `GET
+      /search` instead.
+
+* Other changes
+
+    * Bump minimum PHP version to 8.1.
+    * Correct deadline display.
+    * Improve site robustness around deadlines by rate-limiting `banal` runs and
+      preventing redundant runs.
+    * Review history: Fix recovery of draft reviews after decline; new reviews
+      never reuse IDs from deleted reviews.
+    * Site creation supports `%` wildcards in `--grant-host`.
+    * Graphs support `numdots` style.
+    * New batch scripts for maintenance, including `account.php`,
+      `apitoken.php`, and `checkformat.php`.
+    * Fix action log for non-chair users.
+
+
+## Version 3.3.1 – 14.Jun.2026
+
+* Bug fix: Correct crash in forgot-password redirection
+
+
+## Version 3.3 – 12.Jun.2026
+
+* Security updates
+
+    * Patched serious search vulnerability that could expose commenter
+      identities. In prior versions, searching for a comment by commenter
+      identity worked even if the comment should be anonymous. Thanks to Nebula
+      Security for the report. GitHub Security Advisory GHSA-x3g6-4c5h-7p29;
+      CVE-2026-55493.
+
+* Authorization
+
+    * Bearer token scopes can grant rights for specific subsets of papers;
+      for instance, a token with scope `paper:read#10` can read paper #10.
+    * OAuth supports dynamic client registration.
+
+* API
+
+    * Add `hotcrapi document list` and `hotcrapi document history`.
+
+* Search
+
+    * Add `listedau:` to search listed authors (not including contact-only
+      authors).
+    * Fix `au:` to check authors with no accounts.
+
+* Settings
+
+    * Numeric submission fields gain limits and precision (advanced settings
+      only).
+    * Add `conflict_document_visibility` advanced setting, which hides PDFs
+      from conflicted PC members.
+    * Add `preference_editable` advanced setting, which prevents users from
+      editing their own review preferences.
+
+* Mail
+
+    * Mail tool searches interact intelligently with intended recipients; if
+      you send mail to reviewers and the paper search mentions reviewers
+      (e.g., `ire:R1`), then each recipient is tested against the search.
+    * Improve mail tool usage for track administrators.
+
+* Formulas
+
+    * Formulas learn `xor`.
+    * Formula `let` can parse multiple bindings.
+    * Formulas recover support for alphabetic scores.
+
+* Other changes
+
+    * Support very long collaborator lists.
+    * Recover `re:unnamed` and `re:0` searches.
+    * Better support for simultaneous updates of tag lists for the same paper.
+    * Continue to improve the settings for fresh comments: default more
+      frequently to reviewer-visible comments on the review thread.
+    * Fix malplacement of mention markers on comments; we were censoring
+      comment identities differently in two places that should have been the
+      same.
+    * Add `batch/rewindreviews.php` script, which rewinds specified reviews to
+      an earlier version.
+    * HTML cleaning improvements: Strip classes; strip `data-*` attributes;
+      support a simplified adoption-agency algorithm so `<b><i>x</b></i>` is
+      parsable.
+    * Back-end support for custom page banners.
+    * Improve test framework.
+    * Add `batch/render.php` for tests, which renders a HotCRP page to stdout
+      and supports diffs.
+    * Improve and harmonize tag permission checks.
+    * Improve HTML escaping.
+    * Improve procrastination graph.
+
+
+## Version 3.2.1 – 30.Jan.2026
+
+* Security updates
+
+    * High-severity vulnerability patched in document API. In version 3.2, all
+      documents were delivered with inline Content-Disposition. This opened a
+      vector for cross-site scripting: an attacker could upload an HTML document
+      which, if opened, ran in the user’s browser with their HotCRP credentials.
+      Thanks to Nils Bars for the report (MPI-SP). GitHub Security Advisory
+      GHSA-p88p-2f2p-2476; CVE-2026-25156.
+    * Recover automatic checking for security notices. To opt out, set
+      `$Opt["updatesSite"] = false`.
+
+* Other
+
+    * Display potential conflicts even for new papers.
+    * Improve responses to range requests, and other bug fixes.
+
+
 ## Version 3.2 – 16.Jan.2026
 
 * Upgrade notes
@@ -9,11 +168,12 @@ HotCRP NEWS
 
 * Security updates
 
-    * Critical vulnerability patched in formula construction. Thanks to Luca
-      Di Bartolomeo and Philipp Mao for the report (HexHive Lab, EPFL, PI
-      Mathias Payer).
+    * Critical vulnerability patched in formula construction. Thanks to Luca Di
+      Bartolomeo and Philipp Mao for the report (HexHive Lab, EPFL, PI Mathias
+      Payer). GitHub Security Advisory GHSA-hpqh-j6qx-x57h; CVE-2026-23836.
     * Serious vulnerability patched in document API that allowed any author to
-      download any submitted document associated with any paper.
+      download any submitted document associated with any paper. GitHub Security
+      Advisory GHSA-vh3x-xwj4-jvqx; CVE-2026-23878.
     * Default to not generating author view links.
 
 * Submissions

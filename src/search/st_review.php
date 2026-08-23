@@ -101,12 +101,12 @@ class Review_SearchTerm extends SearchTerm {
                 return null;
             }
         }
-        if (($qr = SearchTerm::make_constant($rsm->tautology()))) {
-            return $qr;
+        if ($rsm->tautology() !== null) {
+            return SearchTerm::make_constant($rsm->tautology());
         }
         if ($contacts !== null && $contacts !== "") {
             $rsm->set_contacts($srch->matching_uids($contacts, null, $rsm->only_pc()));
-            if (strcasecmp($contacts, "me") == 0) {
+            if (strcasecmp($contacts, "me") === 0) {
                 $rsm->apply_tokens($srch->user->review_tokens());
             }
         }
@@ -248,6 +248,7 @@ class Review_SearchTerm extends SearchTerm {
         }
         return "(select count(*) from PaperReview r where paperId=Paper.paperId and {$wheres}){$cexpr}";
     }
+
     function test(PaperInfo $prow, $xinfo) {
         $this->rsm->prepare_reviews($prow);
         $n = 0;
@@ -266,7 +267,7 @@ class Review_SearchTerm extends SearchTerm {
         return ["type" => $this->type] + $this->rsm->unparse_json($this->user->conf);
     }
     function about() {
-        return $this->rsm->has_count() ? self::ABOUT_REVIEW_SET : self::ABOUT_REVIEW;
+        return $this->rsm->about();
     }
 
 

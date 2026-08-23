@@ -353,7 +353,7 @@
         {"name": "Deborah Estrin", "email": "estrin@isi.edu", "affiliation": "Information Sciences Institute, University of Southern California"},
         {"name": "Mark Handley", "email": "mjh@isi.edu", "affiliation": "Information Sciences Institute, University of Southern California"}
     ],
-    "submission": {"content": "%PDF-whatever27"},
+    "submission": {"content": "%PDF-whatever27\n"},
     "submitted": true
 },
 {
@@ -385,7 +385,11 @@
     "authors": [
         {"name": "Sandeep Bajaj", "email": "bajaj@parc.xerox.com", "affiliation": "Xerox Palo Alto Research Center"},
         {"name": "Lee Breslau", "email": "breslau@parc.xerox.com", "affiliation": "Xerox Palo Alto Research Center"},
-        {"name": "Scott Shenker", "email": "shenker@parc.xerox.com", "affiliation": "Xerox Palo Alto Research Center", "contact": true}
+        {"name": "Scott Shenker", "email": "shenker@parc.xerox.com", "affiliation": "Xerox Palo Alto Research Center", "contact": true},
+        {"name": "Christopher Walken", "affiliation": "Screen Actors Guild"}
+    ],
+    "contacts": [
+        "d.francis2@place.edu"
     ],
     "submission": {"content": "%PDF-whatever30"},
     "submitted": true

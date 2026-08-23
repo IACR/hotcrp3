@@ -97,11 +97,7 @@ class AuthenticationChecker {
         if (!$this->user->has_email()) {
             return false;
         }
-        if ($this->user === $this->qreq->user()
-            && $this->user->is_bearer_authorized()) {
-            $this->ok = true;
-            return true;
-        }
+        // NB bearer tokens have no security events, so this intentionally fails
         foreach ($this->security_events() as $use) {
             if (($use->reason === UserSecurityEvent::REASON_REAUTH
                  && $use->timestamp >= Conf::$now - $this->max_age)
@@ -135,7 +131,7 @@ class AuthenticationChecker {
                 '<div class="', $this->actions_class(), '">',
                 Ht::submit("Sign out", ["type" => "submit", "class" => "btn-danger", "form" => "f-signout"]),
                 '</div>';
-            Ht::stash_html(Ht::form($this->conf->hoturl("=signout", ["cap" => null]), ["id" => "f-signout"]) . "</form>", "f-signout");
+            Ht::stash_html($this->conf->hotform("=signout", ["cap" => null], ["id" => "f-signout"]) . "</form>", "f-signout");
             return false;
         }
         echo Ht::hidden("reason", $this->reason, ["form" => "f-reauth", "class" => "ignore-diff"]);
@@ -155,19 +151,13 @@ class AuthenticationChecker {
         }
 
         // OAuth
-        $authi = null;
-        foreach ($this->conf->oauth_providers() as $authdata) {
-            if ($authdata->name === $use->subtype
-                && !($authdata->disabled ?? false)) {
-                $authi = $authdata;
-            }
-        }
+        $authi = (HotCRP\OAuthProvider::list($this->conf))[$use->subtype] ?? null;
         if (!$authi) {
             return false;
         }
         $url = $this->conf->hoturl("oauth", [
             "reauth" => 1, "max_age" => $this->max_age, "redirect" => $this->redirect()
-        ], Conf::HOTURL_SITEREL | Conf::HOTURL_RAW);
+        ], Conf::HOTURL_SITEREL);
         if (($uindex = Contact::session_index_by_email($this->qreq, $this->user->email)) >= 0) {
             $url = $this->qreq->navigation()->base_path . "u/{$uindex}/" . $url;
         } else {
@@ -176,7 +166,7 @@ class AuthenticationChecker {
         $this->print_actions(Ht::submit("Confirm " . htmlspecialchars($this->user->email), [
             "class" => "btn-success",
             "form" => "f-reauth",
-            "formaction" => htmlspecialchars($url),
+            "formaction" => $url,
             "formmethod" => "post"
         ]));
         return true;
@@ -189,7 +179,7 @@ class AuthenticationChecker {
         $info = $this->user->check_password_info($this->qreq->password);
         foreach ($info["usec"] ?? [] as $use) {
             $use->set_reason(UserSecurityEvent::REASON_REAUTH)
-                ->store($this->qreq->qsession());
+                ->store($this->qreq);
         }
         $ms = new MessageSet;
         if ($info["ok"]) {

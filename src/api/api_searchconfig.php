@@ -19,8 +19,8 @@ class SearchConfig_API {
             $pl->parse_view($qreq->display, PaperList::VIEWORIGIN_MAX);
             $parsed_view = $pl->unparse_view(PaperList::VIEWORIGIN_REPORT, true);
             $pl->prepare_table_view();
-            if ($pl->message_set()->has_error()) {
-                return new JsonResult(["ok" => false, "message_list" => $pl->message_set()->message_list()]);
+            if ($pl->has_error()) {
+                return new JsonResult(["ok" => false, "message_list" => $pl->message_list()]);
             }
 
             $want = join(" ", $parsed_view);
@@ -263,7 +263,7 @@ class SearchConfig_API {
             $ps->main_term()->visit(function (SearchTerm $qe, ...$args) use ($ps) {
                 if ($qe instanceof Tag_SearchTerm
                     && ($single_tag = $qe->tsm->single_tag())
-                    && $ps->conf->tags()->is_chair($single_tag)) {
+                    && $ps->conf->tags()->is_chair_hidden($single_tag)) {
                     $ps->lwarning($qe, "<0>Some parts of this PC-visible search only work for chairs");
                 }
                 return null;
@@ -290,9 +290,8 @@ class SearchConfig_API {
             return "Name required";
         } else if (preg_match('/\A(?:formula[:\d].*|[fs]:.*|ss:.*|search:.*|[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d*)?|none|any|all|unknown|new)\z|[()\[\]\{\}\\\\"\'\#]|\A(?:~.|\d+~|(?=[^~\d])).*~|~\z|\pZ/u', $name)) {
             return "Name reserved";
-        } else {
-            return null;
         }
+        return null;
     }
 
     /** @param string $name
@@ -319,7 +318,10 @@ class SearchConfig_API {
     }
 
     static function save_namedsearch(Contact $user, Qrequest $qreq) {
-        // NB permissions handled in loop
+        // NB permissions handled in loop; for safety, only PC can save searches
+        if (!$user->isPC) {
+            return JsonResult::make_permission_error();
+        }
 
         // capture current named searches set
         $ssjs = $user->conf->named_searches();

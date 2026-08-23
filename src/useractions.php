@@ -15,6 +15,7 @@ class UserActions extends MessageSet {
     function __construct(Contact $viewer) {
         $this->conf = $viewer->conf;
         $this->viewer = $viewer;
+        $this->set_message_formatter($this->conf);
     }
 
     /** @param string $kind
@@ -150,13 +151,30 @@ class UserActions extends MessageSet {
             return;
         }
         $users = $this->load_users("select *, 0 _slice from ContactInfo where contactId?a and (roles&?)=0",
-            [$ids, Contact::ROLE_PCLIKE]);
+            [$ids, Contact::ROLE_PC]);
         if (empty($users)) {
             return;
         }
-        $this->conf->qe("update ContactInfo set roles=roles|? where contactId?a and (roles&?)=0",
-            Contact::ROLE_PC, array_keys($users), Contact::ROLE_PCLIKE);
-        $this->change_roles($users, Contact::ROLE_PC, 0, "add_pc");
+        $this->conf->qe("update ContactInfo set roles=(roles&~?)|? where contactId?a and (roles&?)=0",
+            Contact::ROLE_UNLISTEDPC, Contact::ROLE_PC, array_keys($users), Contact::ROLE_PC);
+        $this->change_roles($users, Contact::ROLE_PC, Contact::ROLE_UNLISTEDPC, "add_pc");
+    }
+
+    /** @param list<int> $ids */
+    function add_unlistedpc($ids) {
+        $this->unames["add_unlistedpc"] = [];
+        if (!$this->viewer->privChair) {
+            $this->error_at(null, "<0>Permission error");
+            return;
+        }
+        $users = $this->load_users("select *, 0 _slice from ContactInfo where contactId?a and (roles&?)=0 and contactId!=?",
+            [$ids, Contact::ROLE_UNLISTEDPC | Contact::ROLE_CHAIR, $this->viewer->contactId]);
+        if (empty($users)) {
+            return;
+        }
+        $this->conf->qe("update ContactInfo set roles=(roles&~?)|? where contactId?a and (roles&?)=0",
+            Contact::ROLE_PC, Contact::ROLE_UNLISTEDPC, array_keys($users), Contact::ROLE_UNLISTEDPC | Contact::ROLE_CHAIR);
+        $this->change_roles($users, Contact::ROLE_UNLISTEDPC, Contact::ROLE_PC, "add_unlistedpc");
     }
 
     /** @param list<int> $ids */
@@ -167,16 +185,19 @@ class UserActions extends MessageSet {
             return;
         }
         $users = $this->load_users("select *, 0 _slice from ContactInfo where contactId?a and (roles&?)!=0 and contactId!=?",
-            [$ids, Contact::ROLE_PC, $this->viewer->contactId]);
+            [$ids, Contact::ROLE_ANYPC, $this->viewer->contactId]);
         if (empty($users)) {
             return;
         }
         $this->conf->qe("update ContactInfo set roles=roles&~? where contactId?a and (roles&?)!=0",
-            Contact::ROLE_PC | Contact::ROLE_CHAIR, array_keys($users), Contact::ROLE_PC);
-        $this->change_roles($users, 0, Contact::ROLE_PC | Contact::ROLE_CHAIR, "remove_pc");
+            Contact::ROLE_ANYPC | Contact::ROLE_CHAIR, array_keys($users), Contact::ROLE_ANYPC);
+        $this->change_roles($users, 0, Contact::ROLE_ANYPC | Contact::ROLE_CHAIR, "remove_pc");
     }
 
-    private function check_delete(Contact $user) {
+    const DELETE_FORCE = 1;
+    const DELETE_LOCK = 2;
+
+    private function check_delete(Contact $user, $flags) {
         if (!$this->viewer->privChair) {
             $this->error_at(null, "<0>Only administrators can delete accounts");
             return false;
@@ -197,6 +218,9 @@ class UserActions extends MessageSet {
             $this->append_item(MessageItem::error("<0>Account {} is locked and can’t be deleted", $user->email));
             return false;
         }
+        if ($flags & self::DELETE_FORCE) {
+            return true;
+        }
         if (($user->cflags & Contact::CF_PRIMARY) !== 0) {
             $links = Dbl::fetch_first_columns($this->conf->dblink,
                 "select email from ContactInfo join ContactPrimary using (contactId)
@@ -216,19 +240,20 @@ class UserActions extends MessageSet {
         return true;
     }
 
-    function delete(Contact $user) {
+    /** @param 0|1|2|3 $flags */
+    function delete(Contact $user, $flags = 0, $reason = null) {
         $this->unames["deleted"] = [];
-        if (!$this->check_delete($user)) {
+        if (!$this->check_delete($user, $flags)) {
             return;
         }
-
-        // insert deletion marker
-        $this->conf->qe("insert into DeletedContactInfo set contactId=?, firstName=?, lastName=?, unaccentedName=?, email=?, affiliation=?", $user->contactId, $user->firstName, $user->lastName, $user->unaccentedName, $user->email, $user->affiliation);
 
         // change cflags to mark user as deleted
         // also change roles (do not log roles change, as we will shortly log deletion)
         // and delete password
         $user->set_prop("cflags", $user->cflags | Contact::CF_DELETED);
+        if ($flags & self::DELETE_LOCK) {
+            $user->set_prop("cflags", $user->cflags | Contact::CF_SECURITYLOCK);
+        }
         $user->set_prop("roles", 0);
         $user->set_prop("contactTags", null);
         $user->set_prop("password", "");
@@ -236,6 +261,11 @@ class UserActions extends MessageSet {
         $user->set_prop("passwordUseTime", 0);
         $user->set_prop("lastLogin", 0);
         $user->set_prop("defaultWatch", 2);
+        $user->set_prop("orcid", null);
+        $user->set_prop("phone", null);
+        $user->set_prop("country", null);
+        $user->set_prop("collaborators", null);
+        $user->set_prop("preferredEmail", null);
         $user->clear_data_prop();
         $user->save_prop();
 
@@ -244,16 +274,29 @@ class UserActions extends MessageSet {
             (new ContactPrimary($this->viewer))->link($user, null);
         }
 
+        // unlink secondaries
+        if (($user->cflags & Contact::CF_PRIMARY) !== 0
+            && ($secids = $this->conf->linked_user_ids($user->contactId))
+            && is_array($secids)) {
+            $this->conf->prefetch_users_by_id($secids);
+            foreach ($secids as $secid) {
+                if (($secu = $this->conf->user_by_id($secid))
+                    && $secu->primaryContactId === $user->contactId) {
+                    (new ContactPrimary($this->viewer))->link($secu, null);
+                }
+            }
+        }
+
         // load paper set for reviews and comments
         $prows = $this->conf->paper_set([
-            "where" => "paperId in (select paperId from PaperReview where contactId={$user->contactId} union select paperId from PaperComment where contactId={$user->contactId})"
+            "where" => "exists (select * from PaperReview where paperId=Paper.paperId and contactId={$user->contactId}) or exists (select * from PaperComment where paperId=Paper.paperId and contactId={$user->contactId})"
         ]);
 
         // delete reviews (needs to be logged, might update other information)
         $result = $this->conf->qe("select * from PaperReview where contactId=?",
             $user->contactId);
         while (($rrow = ReviewInfo::fetch($result, $prows, $this->conf))) {
-            $rrow->delete($this->viewer, ["no_autosearch" => true]);
+            $rrow->delete($this->viewer, ["no_autosearch" => true, "no_rights" => true]);
         }
         Dbl::free($result);
 
@@ -261,7 +304,7 @@ class UserActions extends MessageSet {
         $result = $this->conf->qe("select * from PaperComment where contactId=? and (commentType&?)=0",
             $user->contactId, CommentInfo::CT_RESPONSE);
         while (($crow = CommentInfo::fetch($result, $prows, $this->conf))) {
-            $crow->delete($this->viewer, ["no_autosearch" => true]);
+            $crow->delete($this->viewer);
         }
         Dbl::free($result);
 
@@ -287,12 +330,16 @@ class UserActions extends MessageSet {
 
         // clear caches
         if ($user->isPC || $user->privChair) {
-            $this->conf->invalidate_caches(["pc" => true]);
+            $this->conf->invalidate_caches("pc");
         }
 
         // done
         $user->update_cdb_roles();
-        $this->viewer->log_activity_for($user, "Account deleted {$user->email}");
+        $message = "Account deleted {$user->email}";
+        if (is_string($reason) && $reason !== "") {
+            $message .= " " . trim($reason);
+        }
+        $this->viewer->log_activity_for($user, $message);
         $this->unames["deleted"][] = $user->name(NAME_E);
     }
 }

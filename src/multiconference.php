@@ -1,6 +1,6 @@
 <?php
 // multiconference.php -- HotCRP multiconference installations
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Multiconference {
     /** @var array<string,?Conf> */
@@ -14,14 +14,14 @@ class Multiconference {
         if ($confid === null && PHP_SAPI !== "cli") {
             $nav = Navigation::get();
             if (($max = $Opt["multiconferenceAnalyzer"] ?? null)) {
-                if (is_string($max)) {
-                    $confid = self::test_multiconference_analyzer($max, $nav);
-                } else {
+                if (is_array($max)) {
                     foreach ($max as $ma) {
-                        if (($confid = self::test_multiconference_analyzer($ma, $nav))) {
-                            break;
+                        if (self::test_multiconference_analyzer($ma, $nav)) {
+                            return;
                         }
                     }
+                } else if (self::test_multiconference_analyzer($max, $nav)) {
+                    return;
                 }
             } else if ($nav->base_path !== "/") {
                 $slash = strrpos($nav->base_path, "/", -2);
@@ -39,21 +39,30 @@ class Multiconference {
         }
     }
 
-    /** @param string $ma
+    /** @param mixed $ma
      * @param NavigationState $nav
-     * @return ?string */
+     * @return bool */
     static private function test_multiconference_analyzer($ma, $nav) {
-        $sp = strpos($ma, " ");
-        $p = 0;
-        if ($sp === 1) {
-            $t = $ma[0];
-            $p = 2;
-            $sp = strpos($ma, " ", 2);
+        if (is_object($ma)) {
+            $mao = $ma;
+            $t = $ma->type;
+            $match = $ma->match;
+            $p = null;
         } else {
-            $t = "b";
-        }
-        if ($sp === false) {
-            return null;
+            $mao = null;
+            $sp = strpos($ma, " ");
+            $p = 0;
+            if ($sp === 1 && $ma[0] !== "/") {
+                $t = $ma[0];
+                $p = 2;
+                $sp = strpos($ma, " ", $p);
+            } else {
+                $t = "b";
+            }
+            if ($sp === false) {
+                return false;
+            }
+            $match = substr($ma, $p, $sp - $p);
         }
         if ($t === "b") {
             $subject = $nav->base_absolute(true);
@@ -61,17 +70,35 @@ class Multiconference {
             $subject = strtolower($nav->host);
         } else if ($t === "p") {
             $subject = $nav->base_path;
+        } else if ($t === "P") {
+            $subject = $nav->base_path . $nav->raw_page . $nav->path;
+        } else if ($t === "a") {
+            $subject = $nav->site_absolute(true) . $nav->raw_page . $nav->path;
         } else {
-            return null;
+            return false;
         }
-        if (!preg_match("\1\\A" . substr($ma, $p, $sp - $p) . "\1", $subject, $m)) {
-            return null;
+        if (!preg_match("\1\\A{$match}\1", $subject, $m)) {
+            return false;
         }
-        $confid = substr($ma, $sp + 1);
-        for ($i = 1; isset($m[$i]); ++$i) {
-            $confid = str_replace("\${$i}", $m[$i], $confid);
+        $confid = $mao ? $mao->confid ?? "\$1" : substr($ma, $sp + 1);
+        if ($confid === "\$1") {
+            $confid = $m[1] ?? "\$1";
+        } else {
+            for ($i = 1; isset($m[$i]); ++$i) {
+                $confid = str_replace("\${$i}", $m[$i], $confid);
+            }
         }
-        return $confid;
+        if (!preg_match('/\A[a-zA-Z0-9_][-a-zA-Z0-9_.]*\z/', $confid)) {
+            return false;
+        }
+        global $Opt;
+        $Opt["confid"] = $confid;
+        if ($mao && isset($mao->opt)) {
+            foreach ($mao->opt as $k => $v) {
+                $Opt[$k] = $v;
+            }
+        }
+        return true;
     }
 
 
@@ -112,7 +139,7 @@ class Multiconference {
         return $newconf;
     }
 
-    /** @param 403|404|array{title?:string,link?:bool,action_bar?:string}|Qrequest|MessageItem|FailureReason|string|null ...$arg
+    /** @param 401|403|404|array{title?:string,link?:bool,action_bar?:string}|Qrequest|MessageItem|FailureReason|string|null ...$arg
      * @return never */
     static function fail(...$arg) {
         global $Opt;
@@ -169,36 +196,36 @@ class Multiconference {
         }
 
         // print message
-        if (PHP_SAPI === "cli") {
+        if (PHP_SAPI === "cli" && Navigation::$test_mode <= 0) {
             fwrite(STDERR, MessageSet::feedback_text($mis));
             exit(1);
         }
 
         if ($qreq->page() === "api" || ($_GET["ajax"] ?? null)) {
-            http_response_code($status);
-            header("Content-Type: application/json; charset=utf-8");
+            Navigation::http_response_code($status);
+            Navigation::header("Content-Type: application/json; charset=utf-8");
             $j = ["ok" => false, "message_list" => $mis];
             if ($maintenance && $status === 503) {
                 $j["maintenance"] = true;
             }
             echo json_encode_browser($j), "\n";
-            exit(0);
+            Navigation::complete();
         }
 
-        http_response_code($status);
+        Navigation::http_response_code($status);
         $qreq->print_header($title, "", [
             "action_bar" => $action_bar, "body_class" => "body-error"
         ]);
         $mis[0] = $mis[0] ?? MessageItem::error("<0>Internal error");
         if ($link && $mis[0]->status >= 2 && $qreq->page() !== "index") {
             if (!is_string($link)) {
-                $link = Conf::$main->hoturl_raw("index");
+                $link = Conf::$main->hoturl("index");
             }
             $mis[] = MessageItem::plain("<5><a href=\"" . htmlspecialchars($link) . "\">" . htmlspecialchars(Conf::$main->short_name) . " main site</a>");
         }
         echo '<div class="msg mx-auto msg-error">', MessageSet::feedback_html($mis), '</div>';
         $qreq->print_footer();
-        exit(0);
+        Navigation::complete();
     }
 
     /** @param Contact $user
@@ -213,7 +240,7 @@ class Multiconference {
         } else if ($user->is_empty()) {
             $e = "signin_required";
             $t = "";
-            $args[] = new FmtArg("url", $user->conf->hoturl_raw("signin"), 0);
+            $args[] = new FmtArg("url", $user->conf->hoturl("signin"), 0);
             $args[] = new FmtArg("expand", true);
         } else {
             $e = "account_disabled";

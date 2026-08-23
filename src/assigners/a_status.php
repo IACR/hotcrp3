@@ -1,6 +1,6 @@
 <?php
 // a_status.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Status_Assignable extends Assignable {
     /** @var ?int */
@@ -9,19 +9,21 @@ class Status_Assignable extends Assignable {
     public $_withdrawn;
     /** @var ?string */
     public $_withdraw_reason;
+    /** @var ?int */
+    public $_time_submitted_reviewable;
     /** @var ?bool */
     public $_notify;
     /** @param int $pid
      * @param ?int $submitted
      * @param ?int $withdrawn
      * @param ?string $withdraw_reason
-     * @param ?bool $notify */
-    function __construct($pid, $submitted = null, $withdrawn = null, $withdraw_reason = null, $notify = null) {
+     * @param ?int $tsr */
+    function __construct($pid, $submitted = null, $withdrawn = null, $withdraw_reason = null, $tsr = null) {
         $this->pid = $pid;
         $this->_submitted = $submitted;
         $this->_withdrawn = $withdrawn;
         $this->_withdraw_reason = $withdraw_reason;
-        $this->_notify = $notify;
+        $this->_time_submitted_reviewable = $tsr;
     }
     /** @return string */
     function type() {
@@ -52,14 +54,10 @@ class WithdrawVotesAssigner implements AssignmentPreapplyFunction {
                 $wpids[] = $pid;
             }
         }
-        if (empty($wpids)) {
+        if (empty($wpids)
+            || ($tag_re = $state->conf->tags()->votish_tag_regex()) === null) {
             return;
         }
-        $ltre = [];
-        foreach ($state->conf->tags()->entries_having(TagInfo::TFM_VOTES) as $ti) {
-            $ltre[] = $ti->tag_regex();
-        }
-        $tag_re = '{\A(?:\d+~|)(?:' . join("|", $ltre) . ')\z}i';
         foreach ($wpids as $pid) {
             foreach ($state->query(new Tag_Assignable($pid, null)) as $x) {
                 if (preg_match($tag_re, $x->ltag)) {
@@ -77,12 +75,13 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
         $this->xtype = $aj->type;
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
-        return $state->user->can_administer($prow) || $prow->has_author($state->user);
+        return $state->user->can_manage($prow)
+            || $prow->has_author($state->user);
     }
     static function load_status_state(AssignmentState $state) {
         if ($state->mark_type("status", ["pid"], "Status_Assigner::make")) {
             foreach ($state->prows() as $prow) {
-                $state->load(new Status_Assignable($prow->paperId, (int) $prow->timeSubmitted, (int) $prow->timeWithdrawn, $prow->withdrawReason));
+                $state->load(new Status_Assignable($prow->paperId, (int) $prow->timeSubmitted, (int) $prow->timeWithdrawn, $prow->withdrawReason, (int) $prow->timeSubmittedReviewable));
             }
         }
     }
@@ -117,7 +116,7 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
             }
             if (isset($req["notify"])
                 && ($notify = friendly_boolean($req["notify"])) !== null
-                && $state->user->can_administer($prow)) {
+                && $state->user->allow_manage($prow)) {
                 $res->_notify = $notify;
             }
         } else if ($this->xtype === "revive") {
@@ -166,10 +165,12 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                                   AssignmentState $state) {
         $prow->set_prop("timeWithdrawn", $res->_withdrawn);
         $prow->set_prop("timeSubmitted", $res->_submitted);
+        $prow->set_prop("timeSubmittedReviewable", $res->_time_submitted_reviewable);
         $pstatus = new PaperStatus($state->user);
         $j = (object) ["submitted" => true, "draft" => false, "withdrawn" => false];
         if ($pstatus->prepare_save_paper_json($j, $prow)) {
             $res->_submitted = $prow->timeSubmitted;
+            $res->_time_submitted_reviewable = $prow->timeSubmittedReviewable;
         } else {
             foreach ($pstatus->message_list() as $mi) {
                 if ($mi->message !== "")
@@ -188,6 +189,9 @@ class Status_Assigner extends Assigner {
     }
     static function make(AssignmentItem $item, AssignmentState $state) {
         return new Status_Assigner($item, $state);
+    }
+    function about() {
+        return SearchTerm::ABOUT_SUB;
     }
     private function status_html($type) {
         if ($this->item->get($type, "_withdrawn")) {
@@ -224,7 +228,14 @@ class Status_Assigner extends Assigner {
         $old_submitted = $this->item->pre("_submitted");
         $withdrawn = $this->item["_withdrawn"];
         $old_withdrawn = $this->item->pre("_withdrawn");
-        $aset->stage_qe("update Paper set timeSubmitted=?, timeWithdrawn=?, withdrawReason=? where paperId=?", $submitted, $withdrawn, $this->item["_withdraw_reason"], $this->pid);
+        $qf = ["timeSubmitted=?", "timeWithdrawn=?", "withdrawReason=?"];
+        $qv = [$submitted, $withdrawn, $this->item["_withdraw_reason"]];
+        if ($this->item["_time_submitted_reviewable"] !== $this->item->pre("_time_submitted_reviewable")) {
+            $qf[] = "timeSubmittedReviewable=?";
+            $qv[] = $this->item["_time_submitted_reviewable"];
+        }
+        $qv[] = $this->pid;
+        $aset->stage_qe("update Paper set " . join(", ", $qf) . " where paperId=?", ...$qv);
         if (($withdrawn > 0) !== ($old_withdrawn > 0)) {
             $aset->user->log_activity($withdrawn > 0 ? "Paper withdrawn" : "Paper revived", $this->pid);
         } else if (($submitted > 0) !== ($old_submitted > 0)) {
@@ -238,8 +249,16 @@ class Status_Assigner extends Assigner {
                 $aset->conf->update_paperacc_setting(min($vals));
             }, 0);
         }
-        if ($withdrawn > 0 && $old_withdrawn <= 0 && ($this->item["_notify"] ?? true)) {
-            $aset->register_cleanup_function("withdraw {$this->pid}", [$this, "notify_for_withdraw"]);
+        if ($withdrawn > 0 && $old_withdrawn <= 0) {
+            if ($this->item["_notify"] ?? true) {
+                $aset->register_cleanup_function("withdraw {$this->pid}", [$this, "notify_for_withdraw"]);
+            }
+            foreach ($aset->conf->options() as $opt) {
+                if ($opt->reset_on_withdraw()) {
+                    $aset->register_cleanup_function("reset_options_on_withdraw", [$this, "reset_options_on_withdraw"], $this->pid);
+                    break;
+                }
+            }
         }
     }
 
@@ -287,5 +306,14 @@ class Status_Assigner extends Assigner {
         }
 
         HotCRPMailer::send_combined_preparations($preps);
+    }
+
+    function reset_options_on_withdraw(AssignmentSet $aset, $pids) {
+        $oids = [];
+        foreach ($aset->conf->options() as $opt) {
+            if ($opt->reset_on_withdraw())
+                $oids[] = $opt->id;
+        }
+        $aset->conf->qe("delete from PaperOption where paperId?a and optionId?a", $pids, $oids);
     }
 }

@@ -174,7 +174,7 @@ class Track_SettingParser extends SettingParser {
         if ($si->name === "track") {
             $this->settings_json = $this->settings_json ?? $sv->conf->setting_json("tracks");
             $m = [];
-            foreach ($sv->conf->track_tags() as $tag) {
+            foreach ($sv->conf->tags()->sort_array($sv->conf->track_tags()) as $tag) {
                 $m[] = new Track_Setting($sv->conf->track($tag),
                                          $this->settings_json->{$tag} ?? null);
             }
@@ -221,7 +221,8 @@ class Track_SettingParser extends SettingParser {
 
         $hint = "";
         if (is_array($label)) {
-            list($label, $hint) = $label;
+            $hint = $label[1] ?? "";
+            $label = $label[0];
         }
 
         echo '<div class="', $sv->control_class($pfx, "entryi wide"),
@@ -263,7 +264,7 @@ class Track_SettingParser extends SettingParser {
             echo 'Submissions not on other tracks';
         } else {
             echo 'Track #', $sv->entry("track/{$ctr}/tag", ["class" => "settings-track-name need-suggest tags want-delete-marker ml-1", "spellcheck" => false, "autocomplete" => "off"]),
-                Ht::button(Icons::ui_use("trash"), ["id" => "track/{$ctr}/deleter", "class" => "ui js-settings-track-delete ml-2 btn-licon-s need-tooltip", "aria-label" => "Delete track", "tabindex" => -1]),
+                Ht::button(Icons::ui_use("trash", "m"), ["id" => "track/{$ctr}/deleter", "class" => "ui js-settings-track-delete ml-2 btn-licon-s need-tooltip", "aria-label" => "Delete track", "tabindex" => -1]),
                 $sv->feedback_at("track/{$ctr}/tag");
             if ($sv->reqstr("track/{$ctr}/delete")) {
                 echo Ht::hidden("track/{$ctr}/delete", "1", ["data-default-value" => ""]);
@@ -291,12 +292,12 @@ class Track_SettingParser extends SettingParser {
         echo "<fieldset class=\"settings-tracks\"><legend class=\"mb-1\">General permissions</legend>";
         $this->ctr = $sv->search_oblist("track", "id", "any");
         $this->cur_trx = $sv->oldv("track/{$this->ctr}");
-        $this->print_perm($sv, "viewtracker", "Who can see the <a href=\"" . $sv->conf->hoturl("help", "t=chair#meeting") . "\">meeting tracker</a>?", self::PERM_DEFAULT_UNFOLDED);
+        $this->print_perm($sv, "viewtracker", "Who can see the " . $sv->conf->hotlink("meeting tracker", "help", ["t" => "chair", "#" => "meeting"]) . "?", self::PERM_DEFAULT_UNFOLDED);
         echo "</fieldset>\n\n";
     }
 
     function print(SettingValues $sv) {
-        echo "<p>Tracks offer fine-grained permission control over submissions with specific tags. <span class=\"nw\">(<a href=\"" . $sv->conf->hoturl("help", "t=tracks") . "\">Help</a>)</span></p>",
+        echo "<p>Tracks offer fine-grained permission control over submissions with specific tags. <span class=\"nw\">(" . $sv->conf->hotlink("Help", "help", ["t" => "tracks"]) . ")</span></p>",
             Ht::hidden("has_track", 1);
 
         foreach ($sv->oblist_keys("track") as $ctr) {

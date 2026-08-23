@@ -2,6 +2,9 @@
 // settingvalues.php -- HotCRP conference settings manager
 // Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
+// A SettingValues manages one settings request: it holds current ("old")
+// and requested ("new") values, parses and validates changes, and saves
+// them. See `devel/manual/settings.md`.
 class SettingValues extends MessageSet {
     /** @var Conf
      * @readonly */
@@ -17,6 +20,8 @@ class SettingValues extends MessageSet {
     public $link_json = false;
     /** @var bool */
     private $allowed;
+    /** @var bool */
+    private $edit_allowed;
 
     /** @var array<string,?string> */
     public $req = [];
@@ -68,11 +73,11 @@ class SettingValues extends MessageSet {
     private $_cleanup_callbacks = [];
     /** @var array<string,int> */
     private $_table_lock = [];
-    /** @var associative-array<string,true> */
+    /** @var associative-array<string,null|int|string> */
     private $_diffs = [];
     /** @var associative-array<string,false> */
     private $_no_diffs = [];
-    /** @var associative-array<string,true> */
+    /** @var list<string> */
     private $_invalidate_caches = [];
 
     /** @var ?SearchExpr */
@@ -91,14 +96,19 @@ class SettingValues extends MessageSet {
 
     function __construct(Contact $user) {
         $this->conf = $user->conf;
+        $this->set_message_formatter($this->conf);
         $this->user = $user;
-        $this->allowed = $user->privChair || $user->check_xtrack("settings!");
+        $this->allowed = ($user->privChair || $user->check_xtrack("settings!"))
+            && $user->scope_allows(TokenScope::S_SETTINGS_READ);
+        $this->edit_allowed = $this->allowed
+            && $user->scope_allows(TokenScope::S_SETTINGS_ADMIN);
         $this->_icollator = new Collator("en_US.utf8");
         $this->_icollator->setAttribute(Collator::NUMERIC_COLLATION, Collator::ON);
         $this->_icollator->setAttribute(Collator::STRENGTH, Collator::SECONDARY);
     }
 
-    /** @param Qrequest|array<string,string|int|float> $qreq */
+    /** Create a SettingValues containing the settings requests in `$qreq`.
+     * @param Qrequest|array<string,string|int|float> $qreq */
     static function make_request(Contact $user, $qreq) {
         return (new SettingValues($user))->add_request($qreq);
     }
@@ -199,7 +209,8 @@ class SettingValues extends MessageSet {
         return $this;
     }
 
-    /** @param string $jstr
+    /** Add settings requests from a JSON-format settings string.
+     * @param string $jstr
      * @param ?string $filename
      * @return $this */
     function add_json_string($jstr, $filename = null) {
@@ -353,6 +364,8 @@ class SettingValues extends MessageSet {
         return $this->cs()->get($g);
     }
 
+    /** Run `__crosscheck` components, which add warnings to `$this` concerning
+     * suspicious saved settings. Called on initial display. */
     function crosscheck() {
         foreach ($this->cs()->members("__crosscheck", "crosscheck_function") as $gj) {
             $this->cs()->call_function($gj, $gj->crosscheck_function, $gj);
@@ -425,12 +438,18 @@ class SettingValues extends MessageSet {
      * @return MessageItem */
     function append_item_at($field, $mi) {
         $fname = $field instanceof Si ? $field->name : $field;
-        if ($this->_jp !== null) {
-            $mi = $this->with_jfield($mi, $fname);
-        } else {
-            $mi = $mi->with_field($fname);
+        if ($this->_jp === null) {
+            return $this->append_item($mi->with_field($fname));
         }
-        return $this->append_item($mi);
+        $xmi = $this->append_item($this->with_jfield($mi, $fname));
+        if ($mi->context !== null && $xmi->context === null) {
+            $ymi = new MessageItem(MessageSet::INFORM, $xmi->field);
+            $ymi->pos1 = $mi->pos1;
+            $ymi->pos2 = $mi->pos2;
+            $ymi->context = $mi->context;
+            $this->append_item($ymi);
+        }
+        return $xmi;
     }
 
     /** @param null|string|Si $field
@@ -469,7 +488,6 @@ class SettingValues extends MessageSet {
     private function decorated_message_list() {
         $lastmi = $prevmi = null;
         $lastloc = [];
-        $this->apply_fmt($this->conf);
         foreach ($this->message_list() as $mi) {
             $mi = clone $mi;
             if ($mi->status === MessageSet::WARNING
@@ -553,18 +571,22 @@ class SettingValues extends MessageSet {
                 || !$this->_si_exclude->evaluate_simple([$si, "expr_matches"]));
     }
 
-    /** @param string|Si $id
+    /** Test whether the owning user may edit setting `$id`.
+     * @param string|Si $id
      * @return bool */
     function editable($id) {
         $si = is_string($id) ? $this->conf->si($id) : $id;
         return $si
             && $si->configurable
-            && $this->allowed
+            && $this->edit_allowed
             && $this->test_si_filter($si);
     }
 
 
-    /** @param string|Si $id
+    /** Return the old (current/saved) value of setting `$id`.
+     * This is an int or string for primitive settings and an object for
+     * `object` settings.
+     * @param string|Si $id
      * @return mixed */
     function oldv($id) {
         $si = is_string($id) ? $this->si($id) : $id;
@@ -596,7 +618,9 @@ class SettingValues extends MessageSet {
         return $val;
     }
 
-    /** @param string|Si $id
+    /** Set the old value of setting `$id`. (Typically called from
+     * a SettingParser’s `set_oldv` or `prepare_oblist` hook.)
+     * @param string|Si $id
      * @param mixed $value */
     function set_oldv($id, $value) {
         $n = is_string($id) ? $id : $id->name;
@@ -638,7 +662,8 @@ class SettingValues extends MessageSet {
         return array_key_exists($name, $this->req);
     }
 
-    /** @param string $name
+    /** Return the request string for setting `$name`, if any.
+     * @param string $name
      * @return ?string */
     function reqstr($name) {
         return $this->req[$name] ?? null;
@@ -651,7 +676,10 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @param string|Si $id
+    /** Return the display string for setting `$id`: the request string
+     * if this request has one, otherwise the unparsed old value.
+     * Form controls should render `vstr`.
+     * @param string|Si $id
      * @return string */
     function vstr($id) {
         if ($this->_use_req) {
@@ -665,7 +693,10 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @param string|Si $id
+    /** Return the value of setting `$id` after this request: the pending
+     * parsed value if the request changes the setting, otherwise the
+     * old value.
+     * @param string|Si $id
      * @return mixed */
     function newv($id) {
         // XXX Beware: This function is inconsistent about whether it parses `$id`.
@@ -803,7 +834,15 @@ class SettingValues extends MessageSet {
         return $si->base_unparse_jsonv($this->choosev($si, $new), $this);
     }
 
-    /** @param array{new?:bool,reset?:?bool} $args
+    /** Export all JSON-visible settings as an object, in the format
+     * accepted by `add_json_string`. With `"new" => true`, export pending
+     * (parsed but unsaved) values.
+     *
+     * Object-list ids are conference-specific; exclude them with
+     * `set_si_exclude` and the `id` filter token to produce an export
+     * that can be imported into another conference, where objects will
+     * match by name.
+     * @param array{new?:bool,reset?:?bool} $args
      * @return object */
     function all_jsonv($args = []) {
         $new = $args["new"] ?? false;
@@ -821,6 +860,23 @@ class SettingValues extends MessageSet {
             }
         }
         return (object) $j;
+    }
+
+    /** Export all JSON-visible settings as a pretty-printed JSON string.
+     * @param array{new?:bool,reset?:?bool} $args
+     * @return string */
+    function all_json_string($args = []) {
+        return json_encode($this->all_jsonv($args), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+    }
+
+    /** @param string $old_jsonstr
+     * @param string $new_jsonstr
+     * @return string */
+    static function json_unified_diff($old_jsonstr, $new_jsonstr) {
+        $dmp = new dmp\diff_match_patch;
+        $dmp->Line_Histogram = true;
+        $diff = $dmp->line_diff($old_jsonstr, $new_jsonstr);
+        return $dmp->line_diff_toUnified($diff);
     }
 
 
@@ -844,7 +900,10 @@ class SettingValues extends MessageSet {
         }
     }
 
-    /** @param string $pfx
+    /** Populate object-list setting `$pfx` with objects `$obs`, matching
+     * request slots to objects by `id` (and by `$namekey` if given).
+     * Typically called from a SettingParser’s `prepare_oblist` hook.
+     * @param string $pfx
      * @param iterable<object> $obs
      * @param ?non-empty-string $namekey */
     function append_oblist($pfx, $obs, $namekey = null) {
@@ -885,10 +944,11 @@ class SettingValues extends MessageSet {
                 && !array_key_exists($id, $matches)) {
                 $matches[$id] = $ctr;
             } else if ($namekey !== null
-                       && ($name = $this->reqstr("{$pfx}/{$ctr}/{$namekey}")) !== null
-                       && ($lname = strtolower($name)) !== ""
-                       && !array_key_exists($lname, $name_matches)) {
-                $name_matches[$lname] = $ctr;
+                       && ($name = $this->reqstr("{$pfx}/{$ctr}/{$namekey}")) !== null) {
+                $lname = strtolower($name);
+                if (!array_key_exists($lname, $name_matches)) {
+                    $name_matches[$lname] = $ctr;
+                }
             }
         }
 
@@ -910,8 +970,10 @@ class SettingValues extends MessageSet {
         if (!empty($name_matches) && !empty($next_obs)) {
             $next_obs2 = [];
             foreach ($next_obs as $i => $ob) {
-                if (($name = $ob->$namekey ?? "") !== ""
-                    && ($obctr = $name_matches[strtolower($name)] ?? null) !== null) {
+                $name = $ob->$namekey ?? null;
+                $lname = $name !== null ? strtolower($name) : null;
+                if ($lname !== null
+                    && ($obctr = $name_matches[$lname] ?? null) !== null) {
                     $this->set_req("{$pfx}/{$obctr}/id", (string) $ob->id);
                     $this->set_oldv("{$pfx}/{$obctr}/id", $ob->id);
                     $this->set_oldv("{$pfx}/{$obctr}", $ob);
@@ -965,7 +1027,9 @@ class SettingValues extends MessageSet {
         $this->_oblist_ctrmap[$pfx] = $ctrmap;
     }
 
-    /** @param string $pfx
+    /** Return the slot counters for object-list setting `$pfx`, so that
+     * its members are named `$pfx/CTR/MEMBER`.
+     * @param string $pfx
      * @return list<int> */
     function oblist_keys($pfx) {
         $this->ensure_oblist($pfx);
@@ -1170,7 +1234,9 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @param string|Si $id
+    /** Test whether setting `$id` belongs to the page being processed
+     * (or has been changed by this request).
+     * @param string|Si $id
      * @return bool */
     function has_interest($id) {
         if (!$this->canonical_page || $this->all_interest) {
@@ -1198,9 +1264,8 @@ class SettingValues extends MessageSet {
 
     /** @param string $name0
      * @param string $name1
-     * @param bool $force_name0
      * @return bool */
-    function check_date_before($name0, $name1, $force_name0) {
+    function check_date_before($name0, $name1) {
         $d1 = $this->newv($name1);
         if (!$d1) {
             return true;
@@ -1212,9 +1277,6 @@ class SettingValues extends MessageSet {
             $this->error_at($name1);
             return false;
         }
-        if (!$d0 && $force_name0) {
-            $this->save($name0, $d1);
-        }
         return true;
     }
 
@@ -1223,7 +1285,7 @@ class SettingValues extends MessageSet {
      * @return array{subject:string,body:string} */
     function expand_mail_template($name, $use_default) {
         if (!$this->_null_mailer) {
-            $this->_null_mailer = new HotCRPMailer($this->conf, null, ["width" => false]);
+            $this->_null_mailer = new HotCRPMailer($this->conf->root_user(), null, ["width" => 0]);
         }
         return $this->_null_mailer->expand_template($name, $use_default);
     }
@@ -1235,7 +1297,9 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @param string|Si $id
+    /** Set the value of setting `$id` to `$value`. The value is collected
+     * in memory; the database is not modified until `execute`.
+     * @param string|Si $id
      * @return void */
     function save($id, $value) {
         // check that storage is allowed
@@ -1311,7 +1375,8 @@ class SettingValues extends MessageSet {
         }
     }
 
-    /** @param string|Si $id
+    /** Like `save`, but do nothing if `$value` equals the old value.
+     * @param string|Si $id
      * @return bool */
     function update($id, $value) {
         if ($value !== $this->oldv($id)) {
@@ -1332,7 +1397,9 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @return SettingValuesConf */
+    /** Return a Conf-like accessor for settings and options that reflects
+     * pending values collected by `save`.
+     * @return SettingValuesConf */
     function make_svconf() {
         return new SettingValuesConf($this);
     }
@@ -1383,7 +1450,9 @@ class SettingValues extends MessageSet {
         }
     }
 
-    /** @return $this */
+    /** Parse and validate all requested settings, collecting pending
+     * values and error messages. Does not modify the database.
+     * @return $this */
     function parse() {
         assert($this->_req_parse_state === 0);
         assert($this->_use_req);
@@ -1472,7 +1541,10 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @return bool */
+    /** Apply the settings request: parse if needed, then, if there were
+     * no errors, save all changed settings to the database and run
+     * `store_value` hooks and cleanup functions.
+     * @return bool */
     function execute() {
         assert($this->_req_parse_state !== 1 && $this->_req_parse_state !== 4);
         if ($this->_req_parse_state === 0) {
@@ -1540,15 +1612,24 @@ class SettingValues extends MessageSet {
             //error_log("{$n}: " . json_encode($dbsettings[$n][1] ?? null) . "=>" . json_encode($v[0] ?? null) . "; " . json_encode($dbsettings[$n][2] ?? null) . "=>" . json_encode($v[1] ?? null));
             // remember what changed
             if (!isset($this->_no_diffs[$n])) {
-                $this->_diffs[$n] = true;
-                if ($v === null || !isset($dbsettings[$n])) {
-                    $chmap[$n] = 3;
-                } else if ($dbsettings[$n][1] === $v[0]) {
-                    $chmap[$n] = 2;
-                } else if ($dbsettings[$n][2] === $v[1]) {
-                    $chmap[$n] = 1;
-                } else {
-                    $chmap[$n] = 3;
+                $chtype = 3;
+                if ($v !== null && isset($dbsettings[$n])) {
+                    if ($dbsettings[$n][1] === $v[0]) {
+                        $chtype = 2;
+                    } else if ($dbsettings[$n][2] === $v[1]) {
+                        $chtype = 1;
+                    }
+                }
+                $chmap[$n] = $chtype;
+                if (!isset($this->_diffs[$n])) {
+                    $this->_diffs[$n] = null;
+                    if ($v !== null
+                        && $chtype !== 2
+                        && ($v[0] !== 1 || $v[1] === null)) {
+                        $this->_diffs[$n] = $v[0];
+                    } else {
+                        $this->_diffs[$n] = null;
+                    }
                 }
             }
             if ($v !== null) {
@@ -1569,7 +1650,11 @@ class SettingValues extends MessageSet {
         $this->conf->qe_raw("unlock tables");
         $this->conf->resume_log();
         if (!empty($this->_diffs)) {
-            $this->user->log_activity("Settings edited: " . join(", ", array_keys($this->_diffs)));
+            $difftext = [];
+            foreach ($this->_diffs as $n => $dv) {
+                $difftext[] = ($dv === null ? $n : "{$n}={$dv}");
+            }
+            $this->user->log_activity("Settings edited: " . join(", ", $difftext));
         }
 
         // clean up
@@ -1579,8 +1664,9 @@ class SettingValues extends MessageSet {
             $cb();
         }
         if (!empty($this->_invalidate_caches)) {
-            $this->conf->invalidate_caches($this->_invalidate_caches);
+            $this->conf->invalidate_caches(...$this->_invalidate_caches);
         }
+        $this->conf->invalidate_mcache();
 
         // create changed_si
         foreach ($this->_saveable_si as $si) {
@@ -1600,9 +1686,10 @@ class SettingValues extends MessageSet {
     }
 
 
-    /** @param string $siname */
-    function mark_diff($siname)  {
-        $this->_diffs[$siname] = true;
+    /** @param string $siname
+     * @param null|int|string $diffmarker */
+    function mark_diff($siname, $diffmarker = null)  {
+        $this->_diffs[$siname] = $diffmarker;
     }
 
     /** @param string $siname */
@@ -1610,42 +1697,56 @@ class SettingValues extends MessageSet {
         $this->_no_diffs[$siname] = false;
     }
 
-    /** @param associative-array<string,true> $caches */
-    function mark_invalidate_caches($caches) {
-        foreach ($caches as $c => $t) {
-            $this->_invalidate_caches[$c] = true;
+    /** Schedule invalidation of named conference caches (e.g. `"tags"`,
+     * `"autosearch"`) after a successful save.
+     * @param string ...$caches */
+    function mark_invalidate_caches(...$caches) {
+        if (count($caches) === 1 && is_array($caches[0])) { // XXX backward compat
+            $caches = array_keys($caches[0]);
+        }
+        foreach ($caches as $c) {
+            if (!in_array($c, $this->_invalidate_caches, true))
+                $this->_invalidate_caches[] = $c;
         }
     }
 
-    /** @param Si $si */
+    /** Schedule `$si`’s parser’s `validate` hook to run after parsing,
+     * with pending values visible through `$conf`.
+     * @param Si $si */
     function request_validate($si) {
         if (!in_array($si, $this->_validate_si, true)) {
             $this->_validate_si[] = $si;
         }
     }
 
-    /** @param string ...$tables */
+    /** Lock `$tables` for reading during the save in `execute`.
+     * @param string ...$tables */
     function request_read_lock(...$tables) {
         foreach ($tables as $t) {
             $this->_table_lock[$t] = max($this->_table_lock[$t] ?? 0, 1);
         }
     }
 
-    /** @param string ...$tables */
+    /** Lock `$tables` for writing during the save in `execute`.
+     * @param string ...$tables */
     function request_write_lock(...$tables) {
         foreach ($tables as $t) {
             $this->_table_lock[$t] = max($this->_table_lock[$t] ?? 0, 2);
         }
     }
 
-    /** @param Si $si */
+    /** Schedule `$si`’s parser’s `store_value` hook to run during the
+     * locked save in `execute`.
+     * @param Si $si */
     function request_store_value($si) {
         if (!in_array($si, $this->_store_value_si, true)) {
             $this->_store_value_si[] = $si;
         }
     }
 
-    /** @param ?string $name
+    /** Register a function to run after a successful save. If `$name` is
+     * not null, at most one cleanup function per `$name` is registered.
+     * @param ?string $name
      * @param callable() $func */
     function register_cleanup_function($name, $func) {
         if ($name !== null) {
@@ -1659,17 +1760,18 @@ class SettingValues extends MessageSet {
 
     private function saveable_si_changed(Si $si) {
         $sn = $si->storage_name();
-        $vp = $this->_savedv[$sn];
+        $vp = $this->_savedv[$sn] ?? [null, null];
         if (str_starts_with($sn, "opt.")) {
             $okey = substr($sn, 4);
             $oldv = $this->conf->opt($okey);
             $vi = Si::$option_is_value[$okey] ? 0 : 1;
-            return $oldv !== ($vp[$vi] ?? null)
-                && (!is_bool($oldv) || (int) $oldv !== ($vp[$vi] ?? null));
-        } else if (($si->storage_type & Si::SI_VALUE) !== 0) {
-            return $this->conf->setting($sn) !== ($vp[0] ?? null);
+            return $oldv !== $vp[$vi]
+                && (!is_bool($oldv) || (int) $oldv !== $vp[$vi]);
         }
-        return $this->conf->setting_data($sn) !== ($vp[1] ?? null);
+        $vi = $si->storage_type & Si::SI_VALUE ? 0 : 1;
+        $vc = $vi === 0 ? $this->conf->setting($sn) : $this->conf->setting_data($sn);
+        return $vc !== $vp[$vi]
+            && ($vp[$vi] !== null || !$si->value_nullable($vc, $this));
     }
 
     /** @return list<Si> */
@@ -1690,6 +1792,110 @@ class SettingValues extends MessageSet {
     /** @return list<string> */
     function saved_keys() {
         return array_keys($this->_diffs);
+    }
+
+    /** Describe parsed changes as human-readable text, one line per
+     * changed top-level setting. Call after `parse()`. Object-list
+     * elements are paired by id, so the `id` members must not be
+     * excluded by `set_si_exclude`.
+     * @return list<string> */
+    function change_descriptions() {
+        $dl = [];
+        foreach ($this->changed_top_si() as $si) {
+            $dl[] = $this->change_description($si);
+        }
+        return $dl;
+    }
+
+    /** @param Si $si
+     * @return string */
+    private function change_description($si) {
+        $title = $si->title($this);
+        if ($si->type === "oblist") {
+            $old = $this->json_choosev($si, false) ?? [];
+            $new = $this->json_choosev($si, true) ?? [];
+            return "{$title}: " . self::oblist_change_description($old, $new);
+        }
+        if ($si->type === "object") {
+            return "{$title}: changed";
+        }
+        $oldv = self::json_value_description($this->json_choosev($si, false));
+        $newv = self::json_value_description($this->json_choosev($si, true));
+        return "{$title}: {$oldv} → {$newv}";
+    }
+
+    /** @param mixed $v
+     * @return string */
+    static private function json_value_description($v) {
+        if ($v === null) {
+            return "default";
+        }
+        $s = json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return UnicodeHelper::utf8_word_abbreviate($s, 48);
+    }
+
+    /** @param object $ob
+     * @return string */
+    static private function oblist_element_label($ob) {
+        foreach (["name", "tag", "style"] as $k) {
+            if (($ob->$k ?? "") !== "")
+                return $ob->$k;
+        }
+        if (($ob->id ?? "") !== "") {
+            return "#{$ob->id}";
+        }
+        return "(unnamed)";
+    }
+
+    /** @param list<string> $labels
+     * @return string */
+    static private function oblist_label_list($labels) {
+        if (count($labels) > 5) {
+            $labels = array_slice($labels, 0, 5);
+            $labels[] = "…";
+        }
+        return join(", ", $labels);
+    }
+
+    /** @param list<object> $old
+     * @param list<object> $new
+     * @return string */
+    static private function oblist_change_description($old, $new) {
+        $oldmap = [];
+        foreach ($old as $ob) {
+            if (($ob->id ?? null) !== null) {
+                $oldmap[(string) $ob->id] = $ob;
+            }
+        }
+        $added = $changed = $deleted = [];
+        $newids = [];
+        foreach ($new as $ob) {
+            $id = $ob->id ?? null;
+            if ($id === null || !isset($oldmap[(string) $id])) {
+                $added[] = self::oblist_element_label($ob);
+            } else {
+                $newids[(string) $id] = true;
+                if (json_encode($ob) !== json_encode($oldmap[(string) $id])) {
+                    $changed[] = self::oblist_element_label($ob);
+                }
+            }
+        }
+        foreach ($oldmap as $id => $ob) {
+            if (!isset($newids[$id])) {
+                $deleted[] = self::oblist_element_label($ob);
+            }
+        }
+        $parts = [];
+        if (!empty($added)) {
+            $parts[] = count($added) . " added (" . self::oblist_label_list($added) . ")";
+        }
+        if (!empty($changed)) {
+            $parts[] = count($changed) . " changed (" . self::oblist_label_list($changed) . ")";
+        }
+        if (!empty($deleted)) {
+            $parts[] = count($deleted) . " deleted (" . self::oblist_label_list($deleted) . ")";
+        }
+        return empty($parts) ? "reordered" : join("; ", $parts);
     }
 
 

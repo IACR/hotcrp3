@@ -18,16 +18,29 @@ class Session_API {
     }
 
     static function getsession(Contact $user, Qrequest $qreq) {
+        // create session cookie
         $qreq->open_session();
+
+        // SECURITY NOTE: This API’s purpose is to allow browser JS to
+        // update its CSRF token. It also may be called by unauthenticated
+        // users (`auth: false`), which enables CORS. We do not want to
+        // expose user information or the CSRF token to other origins!
+        if (!$qreq->same_origin()) {
+            return ["ok" => true];
+        }
+
         return self::session_result($user, $qreq, true);
     }
 
     /** @param Qrequest $qreq
      * @param string $v
-     * @return bool */
+     * @return true */
     static function change_session($qreq, $v) {
+        // Best effort: apply every preference component we understand and
+        // silently ignore the rest. These preferences are cosmetic and
+        // independent, so partial application is correct, and lenient parsing
+        // keeps clients and servers of different versions interoperable.
         $qreq->open_session();
-        $ok = true;
         $view = [];
         preg_match_all('/(?:\A|\s)(foldpaper|foldpscollab|foldhomeactivity|(?:pl|pf|ul)display|(?:|ul)scoresort)(|\.[^=]*)(=\S*|)(?=\s|\z)/', $v, $ms, PREG_SET_ORDER);
         foreach ($ms as $m) {
@@ -78,23 +91,22 @@ class Session_API {
                 } else {
                     $qreq->unset_csession($m[1]);
                 }
-            } else {
-                $ok = false;
             }
         }
         foreach ($view as $report => $viewlist) {
             self::parse_view($qreq, $report, join(" ", $viewlist));
         }
-        return $ok;
+        return true;
     }
 
     /** @param Qrequest $qreq
      * @return array{ok:bool,sessioninfo:array} */
     static function setsession(Contact $user, $qreq) {
+        // NB This is for POSTs and requires authentication.
         assert($user === $qreq->user());
         $qreq->open_session();
-        $ok = self::change_session($qreq, $qreq->v);
-        return self::session_result($user, $qreq, $ok);
+        self::change_session($qreq, $qreq->v);
+        return self::session_result($user, $qreq, true);
     }
 
     /** @param string $report
@@ -178,6 +190,22 @@ class Session_API {
         return $j;
     }
 
+    /** @param string $s
+     * @return ?string */
+    static function clean_ftext($s) {
+        // the only formats allowed are <0>, <1>, and clean <5>
+        $fmt = Ftext::format($s);
+        if ($fmt === null) {
+            return "<0>{$s}";
+        } else if ($fmt === 0 || $fmt === 1) {
+            return $s;
+        } else if ($fmt === 5
+                   && ($h = CleanHtml::basic_clean(substr($s, 3))) !== null) {
+            return "<5>{$h}";
+        }
+        return null;
+    }
+
     static function stashmessages(Contact $user, Qrequest $qreq) {
         if (isset($qreq->smsg)
             && (strlen($qreq->smsg) < 10 || strlen($qreq->smsg) > 64 || !ctype_alnum($qreq->smsg))) {
@@ -204,15 +232,16 @@ class Session_API {
                 $ml[] = new MessageItem($status);
                 continue;
             }
-            // If nonempty, only formats <0>, <1>, and clean <5> allowed
-            $fmt = Ftext::format($message);
-            if ($fmt === null) {
-                $ml[] = new MessageItem($status, null, "<0>{$message}");
-            } else if ($fmt === 0
-                       || $fmt === 1
-                       || ($fmt === 5 && CleanHtml::basic_clean(substr($message, 3)))) {
-                $ml[] = new MessageItem($status, null, $message);
+            $message = self::clean_ftext($message);
+            if ($message === null) {
+                continue;
             }
+            $mi = new MessageItem($status, null, $message);
+            // Only string landmarks are relevant
+            if (isset($mx->landmark) && is_string($mx->landmark)) {
+                $mi->landmark = $mx->landmark;
+            }
+            $ml[] = $mi;
         }
         if (empty($ml)) {
             return JsonResult::make_ok()->set("smsg", false);

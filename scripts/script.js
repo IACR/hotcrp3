@@ -1,5 +1,5 @@
 // script.js -- HotCRP JavaScript library
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 "use strict";
 var siteinfo, hotcrp;
@@ -10,34 +10,17 @@ function $$(id) {
     return document.getElementById(id);
 }
 
-if (!window.JSON || !window.JSON.parse) {
-    window.JSON = {parse: $.parseJSON};
+function $$list(ids) {
+    const l = [];
+    if (ids) {
+        for (const id of ids.split(/\s+/)) {
+            const e = id === "" ? null : $$(id);
+            e && l.push(e);
+        }
+    }
+    return l;
 }
 
-if (typeof Object.assign !== "function") {
-    Object.defineProperty(Object, "assign", {
-        value: function assign(target /* , ... */) {
-            var d = Object(target), i, s, k, hop = Object.prototype.hasOwnProperty;
-            for (i = 1; i < arguments.length; ++i) {
-                s = arguments[i];
-                if (s !== null && s !== undefined) {
-                    for (k in s)
-                        if (hop.call(s, k))
-                            d[k] = s[k];
-                }
-            }
-            return d;
-        }, writable: true, configurable: true
-    });
-}
-if (typeof Object.setPrototypeOf !== "function") {
-    Object.defineProperty(Object, "setPrototypeOf", {
-        value: function setPrototypeOf(obj, proto) {
-            obj && typeof obj === "object" && (obj.__proto__ = proto);
-            return obj;
-        }, writable: true, configurable: true
-    });
-}
 if (!String.prototype.trimStart) {
     Object.defineProperty(String.prototype, "trimStart", {
         value: function () {
@@ -52,48 +35,9 @@ if (!String.prototype.trimEnd) {
         }, writable: true, configurable: true
     });
 }
-if (!String.prototype.startsWith) {
-    Object.defineProperty(String.prototype, "startsWith", {
-        value: function startsWith(search, pos) {
-            pos = pos > 0 ? pos|0 : 0;
-            return this.length >= pos + search.length
-                && this.substring(pos, pos + search.length) === search;
-        }, writable: true, configurable: true
-    });
-}
-if (!String.prototype.endsWith) {
-    Object.defineProperty(String.prototype, "endsWith", {
-        value: function endsWith(search, this_len) {
-            if (this_len === undefined || this_len > this.length) {
-                this_len = this.length;
-            }
-            return this_len >= search.length
-                && this.substring(this_len - search.length, this_len) === search;
-        }, writable: true, configurable: true
-    });
-}
-if (!String.prototype.repeat) {
-    Object.defineProperty(String.prototype, "repeat", {
-        value: function repeat(count) {
-            var str = "" + this;
-            count = count > 0 ? count|0 : 0;
-            if (str.length === 0 || count === 0) {
-                return "";
-            }
-            var len = str.length * count;
-            count = Math.floor(Math.log(count) / Math.log(2));
-            while (count) {
-                str += str;
-                --count;
-            }
-            return str + str.substring(0, len - str.length);
-        }, writable: true, configurable: true
-    });
-}
 
 var hasClass, addClass, removeClass, toggleClass, classList;
-if ("classList" in document.createElement("span")
-    && !document.documentMode) {
+if ("classList" in document.createElement("span")) {
     hasClass = function (e, k) {
         var l = e.classList;
         return l && l.contains(k);
@@ -135,25 +79,10 @@ hotcrp.classes = {
     toggle: toggleClass
 };
 
-if (!Element.prototype.closest) {
-    Element.prototype.closest = function (s) {
-        return $(this).closest(s)[0];
-    };
-}
-if (!Document.prototype.querySelector) {
-    Document.prototype.querySelector = function (s) {
-        return $(s)[0] || null;
-    };
-}
-if (!Element.prototype.querySelector) {
-    Element.prototype.querySelector = function (s) {
-        return $(this).find(s)[0] || null;
-    };
-}
 if (!Element.prototype.append) {
     Element.prototype.append = function () {
-        for (var i = 0; i !== arguments.length; ++i) {
-            var e = arguments[i];
+        for (let i = 0; i !== arguments.length; ++i) {
+            let e = arguments[i];
             if (typeof e === "string")
                 e = document.createTextNode(e);
             this.appendChild(e);
@@ -162,8 +91,8 @@ if (!Element.prototype.append) {
 }
 if (!Element.prototype.prepend) {
     Element.prototype.prepend = function () {
-        for (var i = arguments.length; i !== 0; --i) {
-            var e = arguments[i - 1];
+        for (let i = arguments.length; i !== 0; --i) {
+            let e = arguments[i - 1];
             if (typeof e === "string")
                 e = document.createTextNode(e);
             this.insertBefore(e, this.firstChild);
@@ -172,20 +101,19 @@ if (!Element.prototype.prepend) {
 }
 if (!Element.prototype.replaceChildren) {
     Element.prototype.replaceChildren = function () {
-        var i;
         while (this.lastChild) {
             this.removeChild(this.lastChild);
         }
-        for (i = 0; i !== arguments.length; ++i) {
+        for (let i = 0; i !== arguments.length; ++i) {
             this.append(arguments[i]);
         }
     };
 }
 if (!Element.prototype.after) {
     Element.prototype.after = function () {
-        var p = this.parentNode, n = this.nextSibling;
-        for (var i = 0; i !== arguments.length; ++i) {
-            var e = arguments[i];
+        const p = this.parentNode, n = this.nextSibling;
+        for (let i = 0; i !== arguments.length; ++i) {
+            let e = arguments[i];
             if (typeof e === "string")
                 e = document.createTextNode(e);
             p.insertBefore(e, n);
@@ -194,9 +122,9 @@ if (!Element.prototype.after) {
 }
 if (!Element.prototype.before) {
     Element.prototype.before = function () {
-        var p = this.parentNode;
-        for (var i = 0; i !== arguments.length; ++i) {
-            var e = arguments[i];
+        const p = this.parentNode;
+        for (let i = 0; i !== arguments.length; ++i) {
+            let e = arguments[i];
             if (typeof e === "string")
                 e = document.createTextNode(e);
             p.insertBefore(e, this);
@@ -235,10 +163,13 @@ if (!window.queueMicrotask) {
         setTimeout(f, 0);
     };
 }
+if (!window.customElements) {
+    window.customElements = { define: function () {} };
+}
 
 
 function lower_bound_index(a, v) {
-    var l = 0, r = a.length;
+    let l = 0, r = a.length;
     while (l < r) {
         var m = (l + r) >> 1;
         if (a[m] < v) {
@@ -707,9 +638,12 @@ function pluralize(s) {
             return "have";
         } else if (s === "is") {
             return "are";
-        } else {
-            return s + "es";
+        } else if (s === "does") {
+            return "do";
+        } else if (s === "was") {
+            return "were";
         }
+        return s + "es";
     } else if (last === 104 /*h*/
                && len > 1
                && ((ch = s.charCodeAt(len - 2)) === 115 /*s*/ || ch === 99 /*c*/)) {
@@ -723,15 +657,17 @@ function pluralize(s) {
             return "those";
         } else if (s === "it") {
             return "them";
-        } else {
-            return s + "s";
+        }
+        // fall through
+    } else if (last === 111 /*o*/) {
+        if (s === "do") {
+            return "does";
         }
     } else if (last === 41 /*)*/
                && (m = s.match(/^(.*?)(\s*\([^)]*\))$/))) {
         return pluralize(m[1]) + m[2];
-    } else {
-        return s + "s";
     }
+    return s + "s";
 }
 
 function plural_word(n, singular, plural) {
@@ -740,14 +676,14 @@ function plural_word(n, singular, plural) {
         return singular;
     } else if (plural != null) {
         return plural;
-    } else {
-        return pluralize(singular);
     }
+    return pluralize(singular);
 }
 
 function plural(n, singular) {
-    if ($.isArray(n))
+    if ($.isArray(n)) {
         n = n.length;
+    }
     return n + " " + plural_word(n, singular);
 }
 
@@ -774,14 +710,21 @@ function commajoin(a, joinword) {
 
 /* exported common_prefix */
 function common_prefix(a, b) {
-    var i = 0;
-    while (i != a.length && i != b.length && a.charAt(i) == b.charAt(i))
+    let i = 0;
+    while (i !== a.length && i !== b.length && a.charCodeAt(i) === b.charCodeAt(i)) {
         ++i;
+    }
     return a.substring(0, i);
 }
 
 function count_words(text) {
-    return ((text || "").match(/[^-\s.,;:<>!?*_~`#|]\S*/g) || []).length;
+    const re = /[^-\s.,;:<>!?*_~`#|]\S*/g;
+    let n = 0;
+    text = text || "";
+    while (re.exec(text) !== null) {
+        ++n;
+    }
+    return n;
 }
 
 function count_words_split(text, wlimit) {
@@ -1090,59 +1033,25 @@ Object.assign(hotcrp.text, {
 
 // events
 var event_key = (function () {
-const key_map = {
-        "Spacebar": " ", "Esc": "Escape", "Left": "ArrowLeft",
-        "Right": "ArrowRight", "Up": "ArrowUp", "Down": "ArrowDown"
-    },
-    charCode_map = {"9": "Tab", "13": "Enter", "27": "Escape"},
-    keyCode_map = {
-        "9": "Tab", "13": "Enter", "16": "ShiftLeft", "17": "ControlLeft",
-        "18": "AltLeft", "20": "CapsLock", "27": "Escape", "33": "PageUp",
-        "34": "PageDown", "37": "ArrowLeft", "38": "ArrowUp", "39": "ArrowRight",
-        "40": "ArrowDown", "91": "OSLeft", "92": "OSRight", "93": "OSRight",
-        "224": "OSLeft", "225": "AltRight"
-    },
-    nonprintable_map = {
-        "Alt": 2,
-        "AltLeft": 2,
-        "AltRight": 2,
-        "CapsLock": 2,
-        "Control": 2,
-        "ControlLeft": 2,
-        "ControlRight": 2,
-        "Meta": 2,
-        "OSLeft": 2,
-        "OSRight": 2,
-        "Shift": 2,
-        "ShiftLeft": 2,
-        "ShiftRight": 2,
-        "ArrowLeft": 1,
-        "ArrowRight": 1,
-        "ArrowUp": 1,
-        "ArrowDown": 1,
-        "Backspace": 1,
-        "Enter": 1,
-        "Escape": 1,
-        "PageUp": 1,
-        "PageDown": 1,
-        "Tab": 1
-    };
+const nonprintable_map = {
+    "Alt": 2,
+    "CapsLock": 2,
+    "Control": 2,
+    "Meta": 2,
+    "Shift": 2,
+    "ArrowLeft": 1,
+    "ArrowRight": 1,
+    "ArrowUp": 1,
+    "ArrowDown": 1,
+    "Backspace": 1,
+    "Enter": 1,
+    "Escape": 1,
+    "PageUp": 1,
+    "PageDown": 1,
+    "Tab": 1
+};
 function event_key(evt) {
-    var x;
-    if (typeof evt === "string") {
-        return evt;
-    } else if ((x = evt.key) != null) {
-        return key_map[x] || x;
-    } else if ((x = evt.charCode)) {
-        return charCode_map[x] || String.fromCharCode(x);
-    } else if ((x = evt.keyCode)) {
-        if (keyCode_map[x]) {
-            return keyCode_map[x];
-        } else if ((x >= 48 && x <= 57) || (x >= 65 && x <= 90)) {
-            return String.fromCharCode(x);
-        }
-    }
-    return "";
+    return typeof evt === "string" ? evt : evt.key ?? "";
 }
 event_key.printable = function (evt) {
     return !nonprintable_map[event_key(evt)]
@@ -1257,7 +1166,7 @@ function realws(is_session, key, value) {
     }
 }
 try {
-    if (window.localStorage && window.JSON) {
+    if (window.localStorage) {
         ws = realws;
     }
 } catch (err) {
@@ -1582,26 +1491,7 @@ function make_URL(url, loc) {
 }
 
 function url_absolute(url, loc) {
-    loc = loc || window.location.href;
-    if (window.URL) {
-        return make_URL(url, loc).href;
-    }
-    var x = "", m;
-    if (!/^\w+:\/\//.test(url)
-        && (m = loc.match(/^(\w+:)/)))
-        x = m[1];
-    if (x && !/^\/\//.test(url)
-        && (m = loc.match(/^\w+:(\/\/[^/]+)/)))
-        x += m[1];
-    if (x && !/^\//.test(url)
-        && (m = loc.match(/^\w+:\/\/[^/]+(\/[^?#]*)/))) {
-        x = (x + m[1]).replace(/\/[^/]+$/, "/");
-        while (url.substring(0, 3) === "../") {
-            x = x.replace(/\/[^/]*\/$/, "/");
-            url = url.substring(3);
-        }
-    }
-    return x + url;
+    return make_URL(url, loc || window.location.href).href;
 }
 
 function hoturl_absolute_base() {
@@ -1640,7 +1530,7 @@ function redirect_with_messages(url, message_list) {
     $.post(hoturl("=api/stashmessages"),
         {message_list: JSON.stringify(message_list)},
         function (data) {
-            const smsg = data ? data.smsg || data._smsg /* XXX */ : false;
+            const smsg = data ? data.smsg : false;
             if (typeof smsg === "string"
                 && /^[a-zA-Z0-9_]*$/.test(smsg)) {
                 document.cookie = "hotcrp-smsg-".concat(smsg, "=", now_msec(), "; Max-Age=20", hoturl_cookie_params());
@@ -1682,7 +1572,9 @@ function render_with(context, renderer, text, ...rest) {
     var renderf = renderer.render;
     if (renderer.render_inline
         && (hasClass(context, "format-inline")
-            || window.getComputedStyle(context).display.startsWith("inline"))) {
+            || (context.isConnected
+                ? window.getComputedStyle(context).display.startsWith("inline")
+                : context.tagName === "SPAN"))) {
         renderf = renderer.render_inline;
     }
     var html = renderf.call(context, text, ...rest);
@@ -1791,11 +1683,11 @@ function message_list_status(ml, field) {
     return status;
 }
 
-function render_list(ml) {
+function render_list(ml, options) {
     const ul = document.createElement("ul");
     ul.className = "feedback-list";
     for (const mi of ml || []) {
-        append_item(ul, mi);
+        append_item(ul, mi, options);
     }
     return ul;
 }
@@ -1805,7 +1697,7 @@ function maybe_render_list(ml) {
     return ul.firstChild ? ul : null;
 }
 
-function render_alert_onto(elt, ml) {
+function render_alert_onto(elt, ml, options) {
     addClass(elt, "msg");
     elt.className = elt.className.replace(/(?:^| )msg-(?:success|error|warning|info)(?= |$)/, "");
     const status = message_list_status(ml);
@@ -1818,12 +1710,12 @@ function render_alert_onto(elt, ml) {
     } else {
         addClass(elt, "msg-info");
     }
-    elt.replaceChildren(render_list(ml));
+    elt.replaceChildren(render_list(ml, options));
     return elt;
 }
 
-function render_alert(ml) {
-    return render_alert_onto(document.createElement("div"), ml);
+function render_alert(ml, options) {
+    return render_alert_onto(document.createElement("div"), ml, options);
 }
 
 function redundant_item(mi, ul) {
@@ -1834,7 +1726,37 @@ function redundant_item(mi, ul) {
             && ul.getAttribute("data-last-mi") === mi.status + " " + mi.message);
 }
 
-function append_item(ul, mi) {
+function landmark_context_marker(mi) {
+    if ((mi.message == null || mi.message === "")
+        && mi.context
+        && typeof mi.landmark === "string") {
+        return /^(→)\s+(\S.*?)\s*$/.exec(mi.landmark);
+    }
+    return null;
+}
+
+function prepend_landmark(ul, div, mi) {
+    const lm = mi.landmark;
+    if (typeof lm !== "string"
+        || lm === ""
+        || (mi.status === -5 /*MessageSet::INFORM*/
+            && lm === ul.getAttribute("data-last-landmark"))) {
+        return;
+    }
+    const mk = landmark_context_marker(mi), e = $e("span", "lineno");
+    if (mk) {
+        e.append(mk[1], " ", $e("em", null, mk[2]));
+    } else {
+        e.append(lm + ":");
+    }
+    div.prepend(e, " ");
+    if (mi.status !== -5) {
+        ul.setAttribute("data-last-landmark", lm);
+    }
+}
+
+function append_item(ul, mi, options) {
+    const want_landmark = options && options.landmarks;
     let li, div;
     if (!redundant_item(mi, ul)) {
         let sklass = "";
@@ -1850,7 +1772,10 @@ function append_item(ul, mi) {
             div.className = "msg-inform format-inline";
         }
         li.appendChild(div);
-        render_text.ftext_onto(div, mi.message, 5);
+        render_text.ftext_onto(div, mi.message);
+        if (want_landmark && mi.landmark) {
+            prepend_landmark(ul, div, mi);
+        }
         if (!mi.landmark) {
             ul.setAttribute("data-last-mi", mi.status + " " + mi.message);
         } else {
@@ -1865,12 +1790,16 @@ function append_item(ul, mi) {
         if (mi.status > 0)
             sklass += mi.status > 1 ? " is-error" : " is-warning";
         ul.lastChild || ul.appendChild(document.createElement("li"));
-        ul.lastChild.appendChild($e("div", "msg-context",
-            s.substring(0, p1), $e("span", sklass, s.substring(p1, p2)), s.substring(p2)));
+        const ctxe = $e("div", "msg-context",
+            s.substring(0, p1), $e("span", sklass, s.substring(p1, p2)), s.substring(p2));
+        if (want_landmark && mi.landmark && (mi.message == null || mi.message === "")) {
+            prepend_landmark(ul, ctxe, mi);
+        }
+        ul.lastChild.appendChild(ctxe);
     }
 }
 
-function append_item_near(elt, mi) {
+function append_item_near(elt, mi, options) {
     if (elt instanceof RadioNodeList) {
         elt = elt.item(0);
     }
@@ -1899,7 +1828,7 @@ function append_item_near(elt, mi) {
         owner.insertBefore(nfl, fl);
         fl = nfl;
     }
-    append_item(fl, mi);
+    append_item(fl, mi, options);
     return true;
 }
 
@@ -1924,7 +1853,7 @@ function render_list_within(container, ml, options) {
     const gmlist = [], nmap = name_map(container), summary = options && options.summary;
     for (const mi of ml || []) {
         const e = mi.field && nmap[mi.field];
-        if ((e && feedback.append_item_near(e, mi))
+        if ((e && feedback.append_item_near(e, mi, options))
             || summary === false
             || summary === "none"
             || (summary === "fieldless" && mi.field)) {
@@ -1937,7 +1866,8 @@ function render_list_within(container, ml, options) {
         while (context && context.nodeName !== "H2" && context.nodeName !== "H3") {
             context = context.nextElementSibling;
         }
-        container.insertBefore(feedback.render_alert(gmlist), context);
+        const alerte = feedback.render_alert(gmlist, options);
+        context ? context.after(alerte) : container.append(alerte);
     }
 }
 
@@ -2217,7 +2147,7 @@ hotcrp.add_diff_check = function (form) {
 
 $(function () {
     $("form.need-unload-protection").each(function () {
-        var form = this;
+        const form = this;
         removeClass(form, "need-unload-protection");
         $(form).on("submit", function () { addClass(this, "submitting"); });
         $(window).on("beforeunload", function () {
@@ -2238,22 +2168,23 @@ handle_ui.on("js-reload", function () {
 });
 
 var focus_at = (function () {
-var ever_focused;
+let ever_focused;
 return function (felt) {
-    if (felt.jquery)
+    if (felt.jquery) {
         felt = felt[0];
+    }
     felt.focus();
-    if (!ever_focused && window.WeakMap)
-        ever_focused = new WeakMap;
-    if (ever_focused && !ever_focused.has(felt)) {
-        ever_focused.set(felt, true);
-        if (felt.select && hasClass(felt, "want-select"))
-            felt.select();
-        else if (felt.setSelectionRange) {
-            try {
-                felt.setSelectionRange(felt.value.length, felt.value.length);
-            } catch (e) { // ignore errors
-            }
+    ever_focused = ever_focused || new WeakMap;
+    if (ever_focused.has(felt)) {
+        return;
+    }
+    ever_focused.set(felt, true);
+    if (felt.select && hasClass(felt, "want-select"))
+        felt.select();
+    else if (felt.setSelectionRange) {
+        try {
+            felt.setSelectionRange(felt.value.length, felt.value.length);
+        } catch (e) { // ignore errors
         }
     }
 };
@@ -2963,13 +2894,59 @@ return make_bubble;
 })();
 
 
+// clipboard
+
+// Put `text` on the clipboard; returns a Promise resolving to true on success.
+// The async clipboard API requires a secure context, which a site served over
+// plain HTTP is not, so fall back to a selection-based copy when it is absent.
+function copy_text(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).then(function () {
+            return true;
+        }, function () {
+            return false;
+        });
+    }
+    // offscreen rather than hidden: `select()` does nothing on an element
+    // that is not rendered
+    const active = document.activeElement,
+        ta = $e("textarea", {"aria-hidden": "true", tabindex: "-1",
+            style: "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0"});
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    active && active.focus && active.focus();
+    return Promise.resolve(ok);
+}
+
+// Copy the text of the element matched by `data-copy-from` to the clipboard,
+// and report the result in a bubble. Mark the control `class="ui js-copy"`.
+handle_ui.on("js-copy", function () {
+    const self = this, src = document.querySelector(self.getAttribute("data-copy-from"));
+    if (!src) {
+        return;
+    }
+    copy_text(src.textContent).then(function (ok) {
+        hotcrp.tooltip.close();
+        const bub = make_bubble({
+            content: ok ? "Copied" : "Could not copy to the clipboard",
+            class: ok ? "tooltip" : "errorbubble",
+            anchor: "v"
+        }).near(self);
+        setTimeout(function () { bub.remove(); }, ok ? 1000 : 2500);
+    });
+});
+
+
 hotcrp.tooltip = (function ($) {
 const builders = {};
 let global_tooltip = null;
 const tooltip_map = new WeakMap;
 
 function prepare_info(elt, info) {
-    var xinfo = elt.getAttribute("data-tooltip-info");
+    let xinfo = elt.getAttribute("data-tooltip-info");
     if (xinfo) {
         if (typeof xinfo === "string" && xinfo.charAt(0) === "{") {
             xinfo = JSON.parse(xinfo);
@@ -2988,21 +2965,21 @@ function prepare_info(elt, info) {
         info.type = elt.getAttribute("data-tooltip-type");
     }
     if (info.className == null || elt.hasAttribute("data-tooltip-class")) {
-        info.className = elt.getAttribute("data-tooltip-class") || "dark";
+        info.className = elt.getAttribute("data-tooltip-class") || "";
     }
+    let es;
     if (elt.hasAttribute("data-tooltip")) {
         info.content = elt.getAttribute("data-tooltip");
     } else if (info.content != null) {
         // leave alone
     } else if (elt.hasAttribute("aria-describedby")
-               && elt.ariaDescribedByElements
-               && elt.ariaDescribedByElements.length === 1
-               && hasClass(elt.ariaDescribedByElements[0], "bubble")) {
-        info.contentElement = elt.ariaDescribedByElements[0];
+               && (es = $$list(elt.getAttribute("aria-describedby"))).length === 1
+               && hasClass(es[0], "bubble")) {
+        info.contentElement = es[0];
     } else if (elt.hasAttribute("aria-label")) {
-        info.content = elt.getAttribute("aria-label");
+        info.content = escape_html(elt.getAttribute("aria-label"));
     } else if (elt.hasAttribute("title")) {
-        info.content = elt.getAttribute("title");
+        info.content = escape_html(elt.getAttribute("title"));
     }
     return info;
 }
@@ -3078,7 +3055,8 @@ function show_tooltip(info) {
             tx = null;
         }
 
-        const bubinfo = {class: `tooltip ${info.className}`, anchor: info.anchor};
+        const className = info.className ? `tooltip ${info.className}` : "tooltip",
+            bubinfo = {class: className, anchor: info.anchor};
         if (info.type === "focus") {
             bubinfo.class += " position-absolute";
         }
@@ -3129,14 +3107,14 @@ function tooltip() {
 function tooltip_within(elt) {
     const info = prepare_info(elt, {});
     function enter(evt) {
-        const wte = evt.target.closest(".want-tooltip");
+        const wte = evt.target.closest(".need-tooltip-within");
         if (wte) {
             const tt = tooltip_map.get(wte) || show_tooltip.call(wte, info);
             tt && tt.enter();
         }
     }
     function leave(evt) {
-        const wte = evt.target.closest(".want-tooltip");
+        const wte = evt.target.closest(".need-tooltip-within");
         wte && ttleave.call(wte);
     }
     elt.addEventListener("mouseover", enter);
@@ -3235,7 +3213,12 @@ function $popup(options) {
     options = options || {};
     const near = options.near || options.anchor || window,
         forme = $e("form", {enctype: "multipart/form-data", "accept-charset": "UTF-8", class: options.form_class || null}),
-        modale = $e("div", {class: "modal hidden", role: "dialog"},
+        modale = $e("div", {
+                class: "modal", role: "dialog", hidden: true,
+                "aria-modal": "true",
+                "aria-label": options["aria-label"] || null,
+                "aria-labelledby": options["aria-labelledby"] || null
+            },
             $e("div", {class: "modal-dialog".concat(near === window ? " modal-dialog-centered" : "", options.className ? " " + options.className : ""), role: "document"},
                 $e("div", "modal-content", forme)));
     if (options.action) {
@@ -3261,9 +3244,27 @@ function $popup(options) {
     document.body.addEventListener("keydown", dialog_keydown);
     let prior_focus, actionse;
 
+    // The `inert` property is the modern way to disable focus/clicking.
+    function set_inert(yes) {
+        if (!yes) {
+            // Check for another dialog
+            for (const e of document.querySelectorAll(".modal")) {
+                if (e !== modale && !e.hidden)
+                    return;
+            }
+        }
+        for (const id of ["p-banner", "p-page", "p-footer"]) {
+            const e = document.getElementById(id);
+            if (e) {
+                e.inert = yes;
+            }
+        }
+    }
+
     function close() {
         removeClass(document.body, "modal-open");
         document.body.removeEventListener("keydown", dialog_keydown);
+        set_inert(false);
         if (document.activeElement
             && modale.contains(document.activeElement)) {
             document.activeElement.blur();
@@ -3276,6 +3277,7 @@ function $popup(options) {
             prior_focus.focus({preventScroll: true});
         }
     }
+
     function dialog_click(evt) {
         if (evt.button === 0
             && ((evt.target === modale && !form_differs(forme))
@@ -3283,27 +3285,19 @@ function $popup(options) {
             close();
         }
     }
+
     function dialog_keydown(evt) {
         if (event_key(evt) === "Escape"
             && event_key.modcode(evt) === 0
-            && !hasClass(modale, "hidden")
+            && !modale.hidden
             && !form_differs(forme)) {
             close();
             evt.preventDefault();
         }
     }
+
     const self = {
-        show: function () {
-            const e = document.activeElement;
-            $(modale).awaken();
-            popup_near(modale, near);
-            if (e && document.activeElement !== e) {
-                prior_focus = e;
-            }
-            hotcrp.tooltip.close();
-            // XXX also close down suggestions
-            return self;
-        },
+        show: open,
         append: function (...es) {
             for (const e of es) {
                 if (e != null) {
@@ -3350,42 +3344,68 @@ function $popup(options) {
         },
         close: close
     };
-    return self;
-}
 
-function popup_near(elt, near) {
-    hotcrp.tooltip.close();
-    if (elt.jquery)
-        elt = elt[0];
-    while (!hasClass(elt, "modal-dialog"))
-        elt = elt.childNodes[0];
-    var bgelt = elt.parentNode;
-    removeClass(bgelt, "hidden");
-    addClass(document.body, "modal-open");
-    if (!hasClass(elt, "modal-dialog-centered")) {
-        var anchorPos = $(near).geometry(),
-            wg = $(window).geometry(),
-            po = $(bgelt).offset(),
-            y = (anchorPos.top + anchorPos.bottom - elt.offsetHeight) / 2;
-        y = Math.max(wg.top + 5, Math.min(wg.bottom - 5 - elt.offsetHeight, y)) - po.top;
-        elt.style.top = y + "px";
-        var x = (anchorPos.right + anchorPos.left - elt.offsetWidth) / 2;
-        x = Math.max(wg.left + 5, Math.min(wg.right - 5 - elt.offsetWidth, x)) - po.left;
-        elt.style.left = x + "px";
-    }
-    var efocus;
-    $(elt).find("input, button, textarea, select").filter(":visible").each(function () {
-        if (hasClass(this, "want-focus")) {
-            efocus = this;
-            return false;
-        } else if (!efocus
-                   && !hasClass(this, "btn-danger")
-                   && !hasClass(this, "no-focus")) {
-            efocus = this;
+    function open() {
+        if (!modale.isConnected) {
+            throw new Error("trying to show previously-closed $popup");
+        } else if (!modale.hidden) {
+            return self;
         }
-    });
-    efocus && focus_at(efocus);
-    $(elt).awaken();
+        const activee = document.activeElement;
+
+        // Prepare for open: awaken, assign label, close current tooltips
+        $(modale).awaken();
+        if (!modale.hasAttribute("aria-label")
+            && !modale.hasAttribute("aria-labelledby")) {
+            const le = forme.querySelector("h1, h2");
+            if (le) {
+                le.id = le.id || HtmlCollector.next_input_id();
+                modale.setAttribute("aria-labelledby", le.id);
+            }
+        }
+        hotcrp.tooltip.close();
+        // XXX should also close suggestions
+
+        // Position the modal
+        modale.hidden = false;
+        addClass(document.body, "modal-open");
+        const elt = modale.firstElementChild;
+        if (!hasClass(elt, "modal-dialog-centered")) {
+            let anchorPos = $(near).geometry(),
+                wg = $(window).geometry(),
+                po = $(modale).offset(),
+                y = (anchorPos.top + anchorPos.bottom - elt.offsetHeight) / 2;
+            y = Math.max(wg.top + 5, Math.min(wg.bottom - 5 - elt.offsetHeight, y)) - po.top;
+            elt.style.top = y + "px";
+            let x = (anchorPos.right + anchorPos.left - elt.offsetWidth) / 2;
+            x = Math.max(wg.left + 5, Math.min(wg.right - 5 - elt.offsetWidth, x)) - po.left;
+            elt.style.left = x + "px";
+        }
+
+        // Adjust focus
+        let efocus;
+        $(elt).find("input, button, textarea, select").filter(":visible").each(function () {
+            if (hasClass(this, "want-focus")) {
+                efocus = this;
+                return false;
+            } else if (!efocus
+                       && !hasClass(this, "btn-danger")
+                       && !hasClass(this, "no-focus")) {
+                efocus = this;
+            }
+        });
+        if (efocus) {
+            focus_at(efocus);
+        }
+        set_inert(true);
+        if (activee && !modale.contains(activee)) {
+            prior_focus = activee;
+        }
+
+        return self;
+    }
+
+    return self;
 }
 
 function override_deadlines(callback) {
@@ -3429,10 +3449,11 @@ function override_deadlines(callback) {
         }
         $pu.close();
     });
+    const label = this.getAttribute("data-override-label") || "Confirm override";
     if (typeof callback === "object" && "sidebarTarget" in callback) {
-        $pu = $popup({near: callback.sidebarTarget});
+        $pu = $popup({near: callback.sidebarTarget, "aria-label": label});
     } else {
-        $pu = $popup({near: this});
+        $pu = $popup({near: this, "aria-label": label});
     }
     $pu.append(p).append_actions(bu, "Cancel").show();
 }
@@ -3440,7 +3461,7 @@ handle_ui.on("js-override-deadlines", override_deadlines);
 
 handle_ui.on("js-confirm-override-conflict", function () {
     const self = this;
-    $popup({near: this})
+    $popup({near: this, "aria-label": "Confirm conflict override"})
         .append($e("p", null, "Are you sure you want to override your conflict?"))
         .append_actions($e("button", {type: "button", name: "bsubmit", class: "btn-primary"}, "Override conflict"), "Cancel")
         .show().on("click", "button", function () {
@@ -3469,11 +3490,21 @@ handle_ui.on("js-mark-submit", function () {
 
 // banner
 hotcrp.banner = (function () {
+function ensure_container() {
+    let b = $$("p-banner");
+    if (!b) {
+        b = document.createElement("div");
+        b.id = "p-banner";
+        document.body.prepend(b);
+    }
+    return b;
+}
 function resize(b) {
     const offs = document.querySelectorAll(".need-banner-offset"),
         pbody = document.getElementById("p-page");
     if (b) {
-        const h = b.offsetHeight;
+        const dpr = window.devicePixelRatio || 1,
+            h = Math.floor(b.offsetHeight * dpr - 0.5) / dpr;
         for (const e of offs) {
             let bo;
             if (e.hasAttribute("data-banner-offset")) {
@@ -3505,32 +3536,68 @@ function resize(b) {
     }
 }
 return {
-    add: function (id) {
-        let e = $$(id);
-        if (!e) {
-            let b = $$("p-banner");
-            if (!b) {
-                b = document.createElement("div");
-                b.id = "p-banner";
-                document.body.prepend(b);
-            }
-            e = document.createElement("div");
-            e.id = id;
-            b.append(e);
+    add: function (id, rest) {
+        let be = $$(id);
+        if (!be) {
+            be = $e("div", rest);
+            be.id = id;
+            ensure_container().append(be);
         }
-        return e;
+        return be;
     },
     remove: function (id) {
-        const e = $$(id);
-        if (e) {
-            hotcrp.tooltip.close_under(e);
-            const b = e.parentElement;
-            e.remove();
-            if (!b.firstChild) {
-                b.remove();
+        const be = $$(id);
+        if (be) {
+            hotcrp.tooltip.close_under(be);
+            const bc = be.parentElement;
+            be.remove();
+            if (!bc.firstChild) {
+                bc.remove();
                 resize(null);
             } else {
-                resize(b);
+                resize(bc);
+            }
+        }
+    },
+    replace_custom: function (banners) {
+        let bc = ensure_container(), be = bc.firstChild, changed = false;
+        for (const j of banners) {
+            const id = `p-cbanner-${j.id}`;
+            while (be && be.id !== id) {
+                const next = be.nextSibling;
+                if (hasClass(be, "cbanner")) {
+                    be.remove();
+                    changed = true;
+                }
+                be = next;
+            }
+            if (!be) {
+                be = $e("div", {class: "cbanner", id: id});
+                bc.append(be);
+            }
+            if (be.innerHTML !== j.html) {
+                be.innerHTML = j.html;
+                changed = true;
+            }
+            be = be.nextSibling;
+        }
+        while (be) {
+            const next = be.nextSibling;
+            if (hasClass(be, "cbanner")) {
+                be.remove();
+                changed = true;
+            }
+            be = next;
+        }
+        if (!bc.firstChild) {
+            bc.remove();
+            bc = null;
+        }
+        if (changed) {
+            if (document.readyState === "loading") {
+                $(hotcrp.banner.resize);
+            } else {
+                resize(bc);
             }
         }
     },
@@ -3556,7 +3623,7 @@ handle_ui.on("js-dismiss-alert", function (evt) {
 
 // initialization and tracker
 (function ($) {
-var dl, dlname, dltime, redisplay_timeout,
+let dl, dlname, dltime, redisplay_timeout, dlloading = 0,
     reload_outstanding = 0, reload_nerrors = 0, reload_count = 0,
     reload_token_max = 250, reload_token_rate = 500,
     reload_tokens = reload_token_max, reload_refill_at = 0, reload_refill_timeout = null,
@@ -3589,8 +3656,6 @@ function display_main(is_initial) {
     if (dl.sub && dl.sub.open) {
         if (checkdl(now, +dl.sub.reg, dl.sub.reg_ingrace))
             dlname = "Registration";
-        else if (checkdl(now, +dl.sub.update, dl.sub.update_ingrace))
-            dlname = "Update";
         else if (checkdl(now, +dl.sub.sub, dl.sub.sub_ingrace))
             dlname = "Submission";
     }
@@ -4305,6 +4370,7 @@ function trevent_comet(prev_eventid, start_at) {
 
 // deadline loading
 function load(dlx, prev_eventid, is_initial) {
+    ++dlloading;
     siteinfo.snouns = siteinfo.snouns || ["submission", "submissions", "Submission", "Submissions"];
     if (dl && dl.tracker_recent && dlx)
         dlx.tracker_recent = dl.tracker_recent;
@@ -4328,12 +4394,14 @@ function load(dlx, prev_eventid, is_initial) {
     }
     if (dl.tracker_recent && (!is_initial || !dl.tracker_here))
         display_tracker();
+    if (dl.banners)
+        hotcrp.banner.replace_custom(dl.banners);
     if (!dl.tracker_here !== !tracker_refresher)
         tracker_refresh();
     if (tracker_configured)
         tracker_configure_success();
     if (reload_outstanding === 0) {
-        var t;
+        let t;
         if (is_initial && ($$("p-clock-drift") || dl.tracker_recent))
             t = 0.01;
         else if (dl.tracker_recent) {
@@ -4355,12 +4423,13 @@ function load(dlx, prev_eventid, is_initial) {
         trevent_store(dl.tracker_eventid || 0, prev_eventid, dl.load + t,
                       is_initial ? "initial" : "load");
     }
+    --dlloading;
 }
 
 function streload_track(trackparam, trackdata) {
     ++reload_outstanding;
     ++reload_count;
-    var prev_eventid = trevent().eventid;
+    const prev_eventid = trevent().eventid;
     function success(data) {
         --reload_outstanding;
         if (data && data.ok) {
@@ -4376,15 +4445,20 @@ function streload_track(trackparam, trackdata) {
             method: "POST", data: trackdata, success: success
         });
     } else {
-        $.ajax(hoturl("api/status", siteinfo.paperid ? {p: siteinfo.paperid} : {}), {
+        const arg = siteinfo.paperid ? {p: siteinfo.paperid} : {};
+        if (dl && dl.banners) {
+            arg.bannertoken = dl.bannertoken ?? "0";
+        }
+        $.ajax(hoturl("api/status", arg), {
             method: "GET", timeout: 30000, success: success
         });
     }
 }
 
 function streload() {
-    if (reload_outstanding > 0)
+    if (reload_outstanding > 0) {
         return;
+    }
     // token bucket rate limiter: at most one call to back end every 500ms on average
     clearTimeout(reload_refill_timeout);
     reload_refill_timeout = null;
@@ -4409,6 +4483,12 @@ hotcrp.init_deadlines = function (dl) {
 };
 
 hotcrp.tracker_show_elapsed = tracker_show_elapsed;
+
+hotcrp.update_banners = function () {
+    if (dl && dl.banners && dlloading === 0) {
+        streload();
+    }
+};
 
 })(jQuery);
 
@@ -4552,11 +4632,25 @@ function foldup(evt, opts) {
     } else if (!opts) {
         opts = {};
     }
-    if (this.tagName === "DIV"
-        && evt
-        && evt.target.closest("a")
-        && !opts.required) {
-        return;
+    let preventDefault = false;
+    if (evt
+        && typeof evt === "object"
+        && evt.type === "click") {
+        preventDefault = !hasClass(evt.target, "uic");
+    }
+    if (evt
+        && !opts.required
+        && this.tagName === "DIV") {
+        let l;
+        if (evt.target.closest("a")) {
+            return;
+        } else if ((l = evt.target.closest("label"))) {
+            opts.open = true;
+            preventDefault = false;
+            if (l.control && l.control.checkVisibility()) {
+                return;
+            }
+        }
     }
     let acting;
     if (this.tagName === "DIV"
@@ -4569,19 +4663,32 @@ function foldup(evt, opts) {
     // determine targets
     // XXX only partial support for ARIA method
     let foldname, m;
-    if (acting.ariaControlsElements && acting.ariaControlsElements.length > 0) {
+    const controls = acting.getAttribute("aria-controls"),
+        controlsElements = $$list(controls);
+    if (controlsElements.length > 0) {
         if (!("open" in opts)) {
             opts.open = acting.ariaExpanded !== "true";
         }
-        for (const e of acting.ariaControlsElements) {
-            if (e.hidden !== !opts.open && !hasClass(e, "no-fold")) {
-                e.hidden = !opts.open;
-                e.dispatchEvent(new CustomEvent("foldtoggle", {bubbles: true, detail: opts}));
+        let any = false;
+        for (const e of controlsElements) {
+            if (hasClass(e, "no-fold")) {
+                any = true;
+                continue;
+            } else if (e.hidden === !opts.open
+                       || (!e.hidden
+                           && hasClass(e, "expanded-if-differs")
+                           && hasClass(e, "differs"))) {
+                continue;
             }
+            any = true;
+            e.hidden = !opts.open;
+            e.dispatchEvent(new CustomEvent("foldtoggle", {bubbles: true, detail: opts}));
+        }
+        if (!any) {
+            return;
         }
         const p = acting.closest(".expanded, .collapsed");
         if (p) {
-            const controls = acting.getAttribute("aria-controls");
             for (const e of p.querySelectorAll("button[aria-expanded]")) {
                 if (e.getAttribute("aria-controls") === controls) {
                     e.ariaExpanded = opts.open ? "true" : "false";
@@ -4661,10 +4768,7 @@ function foldup(evt, opts) {
             this.ariaExpanded = wantopen ? "true" : "false";
         }
     }
-    if (evt
-        && typeof evt === "object"
-        && evt.type === "click"
-        && !hasClass(evt.target, "uic")) {
+    if (preventDefault) {
         handle_ui.stopPropagation(evt);
         evt.preventDefault(); // needed for expanders despite handle_ui!
     }
@@ -4672,9 +4776,10 @@ function foldup(evt, opts) {
 
 handle_ui.on("js-foldup", foldup);
 handle_ui.on("foldtoggle.js-fold-focus", function (evt) {
-    if (evt.detail.nofocus)
+    if (evt.detail.nofocus) {
         return;
-    var ns = evt.detail.n || "";
+    }
+    const ns = evt.detail.n || "";
     if (!hasClass(this, `fold${ns}c`)
         && !hasClass(this, `fold${ns}o`)) {
         return;
@@ -4724,9 +4829,13 @@ function $svg(tag, attr) {
     return e;
 }
 
-function $svg_use_licon(name) {
-    return $svg("svg", {class: "licon", width: "1em", height: "1em", viewBox: "0 0 64 64", preserveAspectRatio: "none"},
-        $svg("use", {href: "#i-def-" + name}));
+function $svg_use_licon(name, size, rest) {
+    rest = Object.assign({}, rest || {});
+    rest.class = "licon licon-" + (size || "l") + (rest.class ? ` ${rest.class}` : "");
+    rest.viewBox = "0 0 64 64";
+    rest.preserveAspectRatio = "none";
+    rest["aria-hidden"] = "true";
+    return $svg("svg", rest, $svg("use", {href: "#i-def-" + name}));
 }
 
 function $e(tag, attr) {
@@ -4766,7 +4875,7 @@ function $frag() {
 
 function make_expander_element(foldnum) {
     function mksvgp(d) {
-        return $svg("svg", {class: "licon", width: "0.75em", height: "0.75em", viewBox: "0 0 16 16", preserveAspectRatio: "none"}, $svg("path", {d: d}));
+        return $svg("svg", {class: "licon licon-s", viewBox: "0 0 16 16", preserveAspectRatio: "none"}, $svg("path", {d: d}));
     }
     let fx = foldnum == null ? "ifx" : "fx" + foldnum,
         fn = foldnum == null ? "ifnx" : "fn" + foldnum;
@@ -4774,6 +4883,20 @@ function make_expander_element(foldnum) {
         $e("span", fx, mksvgp("M1 1L8 15L15 1z")),
         $e("span", fn, mksvgp("M1 1L15 8L1 15z")));
 }
+
+
+// theme selection
+handle_ui.on("js-retheme", function () {
+    const v = this.value || this.getAttribute("data-theme"),
+        th = $$("p-theme");
+    if (v === "auto") {
+        th.textContent = "";
+    } else if (v === "light") {
+        th.textContent = "@layer dark-mode, theme;";
+    } else if (v === "dark") {
+        th.textContent = "@supports (color: light-dark(red, blue)) { @layer theme, dark-mode; }";
+    }
+});
 
 
 // special-case folding for author table
@@ -4816,25 +4939,20 @@ handle_ui.on("js-click-child", function (evt) {
 
 // history
 
-var push_history_state;
-if ("pushState" in window.history) {
-    push_history_state = function (href) {
-        var state;
-        if (!history.state || !href) {
-            state = {href: location.href};
-            $(document).trigger("collectState", [state]);
-            history.replaceState(state, "", state.href);
-        }
-        if (href) {
-            state = {href: href};
-            $(document).trigger("collectState", [state]);
-            history.pushState(state, "", state.href);
-        }
-        push_history_state.ever = true;
-        return true;
-    };
-} else {
-    push_history_state = function () { return false; };
+function push_history_state(href) {
+    var state;
+    if (!history.state || !href) {
+        state = {href: location.href};
+        $(document).trigger("collectState", [state]);
+        history.replaceState(state, "", state.href);
+    }
+    if (href) {
+        state = {href: href};
+        $(document).trigger("collectState", [state]);
+        history.pushState(state, "", state.href);
+    }
+    push_history_state.ever = true;
+    return true;
 }
 push_history_state.ever = false;
 
@@ -4918,7 +5036,7 @@ function hashjump_destination(e, p) {
         return false;
     }
     $(".hashtarget").removeClass("hashtarget");
-    const border = wh > 300 && !hasClass(p, "revcard") ? 20 : 0;
+    const border = wh > 300 && !hasClass(p, "s-review") ? 20 : 0;
     window.scroll(0, pg.top - Math.max(border, (wh - pg.height) * 0.25));
     focus_at(e);
     return true;
@@ -4962,7 +5080,7 @@ handle_ui.on("hashjump.js-hash", function (hashc, focus) {
     }
 
     // highlight destination
-    if ((p = e.closest(".pfe, .rfe, .f-i, .form-g, .form-section, .entryi, .checki"))
+    if ((p = e.closest(".s-sf, .s-rf, .f-i, .form-g, .form-section, .entryi, .checki"))
         && hashjump_destination(e, p)) {
         $(p).find("label, .field-title, .label").first().addClass("hashtarget");
         return true;
@@ -4977,12 +5095,12 @@ handle_ui.on("hashjump.js-hash", function (hashc, focus) {
     if (hash.startsWith("cx")
         && hasClass(e, "cmtt")
         && (p = e.closest("article"))
-        && hasClass(p, "cmtcard")
+        && hasClass(p, "s-comment")
         && p.id) {
         hash = p.id;
         location.hash = "#" + hash;
     }
-    if ((hasClass(e, "cmtcard") || hasClass(e, "revcard"))
+    if ((hasClass(e, "s-comment") || hasClass(e, "s-review"))
         && hashjump_destination(e, e)
         && hash !== "cnew") {
         addClass(e, "hashtarget");
@@ -5431,7 +5549,7 @@ handle_ui.on("js-bulkassign-action", function () {
     foldup.call(this, null, {open: this.value === "review"});
     foldup.call(this, null, {open: /^(?:primary|secondary|(?:optional|meta)?review)$/.test(this.value), n:2});
     let selopt = this.selectedOptions[0] || this.options[0];
-    $("#k-bulkassign-entry").attr("placeholder", selopt.getAttribute("data-csv-header"));
+    $$("k-bulkassign-entry").setAttribute("placeholder", selopt.getAttribute("data-csv-header"));
 });
 
 (function () {
@@ -5634,7 +5752,11 @@ hotcrp.monitor_job = function (jobid, statuselt) {
     return new Promise(function (resolve, reject) {
         let tries = 0;
         function success(data) {
-            const dead = !data.ok || (data.update_at && data.update_at < now_sec() - 40);
+            const dead = !data.ok
+                || (data.update_at && data.update_at < now_sec() - 40);
+            if (dead && !data.message_list) {
+                data.message_list = [{message: "<0>Job stopped responding", status: 2}];
+            }
             if (data.message_list) {
                 let ex = statuselt.firstElementChild;
                 while (ex && ex.nodeName === "H3") {
@@ -5681,6 +5803,11 @@ hotcrp.monitor_job = function (jobid, statuselt) {
             if (data.status === "done") {
                 resolve(data);
             } else if (dead) {
+                let ex = statuselt.firstElementChild;
+                while (ex && ex.nodeName !== "PROGRESS") {
+                    ex = ex.nextElementSibling;
+                }
+                ex && ex.remove();
                 reject(data);
             } else if (tries < 20) {
                 setTimeout(retry, 250);
@@ -5706,7 +5833,7 @@ handle_ui.on("change.js-mail-recipients", function () {
         toelt = f.elements.to,
         subjelt = f.elements.subject,
         bodyelt = f.elements.body,
-        recip = toelt ? toelt.options[toelt.selectedIndex] : null;
+        recip = toelt && toelt.options && toelt.options[toelt.selectedIndex];
     foldup.call(this, null, {open: !plimit || plimit.checked, n: 8});
     if (!recip) {
         return;
@@ -6119,22 +6246,15 @@ $(function () {
 
 function minifeedback(e, rv) {
     const ul = document.createElement("ul");
-    let status = 0;
+    let status = rv && !rv.ok ? 2 : 0;
     ul.className = "feedback-list";
     if (rv && rv.message_list) {
         for (let mx of rv.message_list) {
             feedback.append_item(ul, mx);
             status = Math.max(status, mx.status);
         }
-    } else if (rv && rv.error) {
-        log_jserror("rv has error: " + JSON.stringify(rv));
-        feedback.append_item(ul, {status: 2, message: "<5>" + rv.error});
-        status = 2;
     }
-    if (!ul.firstChild && (!rv || !rv.ok)) {
-        if (rv && (rv.error || rv.warning)) {
-            log_jserror("rv has error/warning: " + JSON.stringify(rv));
-        }
+    if (!ul.firstChild && (!rv || (!rv.ok && !rv.message_list))) {
         feedback.append_item(ul, {status: 2, message: "Error"});
         status = 2;
     }
@@ -6147,17 +6267,16 @@ function minifeedback(e, rv) {
         make_bubble({content: ul, class: status > 1 ? "errorbubble" : "warningbubble"}).near(e).removeOn(e, "input change click hide" + (status > 1 ? "" : " focus blur"));
     }
 
-    let ctr, prev = null;
+    let ctr = null, prev = null;
     if (hasClass(e, "mf-label")
-        || (status === 0 && hasClass(e, "mf-label-success"))
-        || ["checkbox", "radio", "select-one", "select-multiple", "button"].includes(e.type)) {
+        || (!(ctr = e.closest(".mf"))
+            && ["checkbox", "radio", "select-one", "select-multiple", "button"].includes(e.type))) {
         ctr = e.closest("label");
         if (!ctr && e.id) {
             ctr = document.querySelector(`label[for='${e.id}']`);
         }
     }
-    if (!ctr
-        && !(ctr = e.closest(".mf"))) {
+    if (!ctr) {
         prev = e;
         ctr = e.parentElement;
         if (hasClass(ctr, "select") || hasClass(ctr, "btnbox")) {
@@ -6232,14 +6351,12 @@ function observer_fn(entries) {
     }
 }
 function initialize() {
-    observer = linkmap = null;
+    observer = null;
     if (window.IntersectionObserver) {
         observer = new IntersectionObserver(observer_fn, {rootMargin: "-32px 0px"});
     }
-    if (window.WeakMap) {
-        linkmap = new WeakMap;
-    }
-    pslcard = $(".pslcard")[0];
+    linkmap = new WeakMap;
+    pslcard = document.querySelector(".s-psl");
 }
 function fe(idelt) {
     return typeof idelt === "string" ? $$(idelt) : idelt;
@@ -6487,7 +6604,7 @@ function render_review_body_in(rrow, bodye) {
         }
 
         const fe = document.createElement("div");
-        fe.className = "rf rfd" + display;
+        fe.className = "rfd" + display;
         fe.setAttribute("data-rf", f.uid);
         bodye.appendChild(fe);
 
@@ -6501,7 +6618,7 @@ function render_review_body_in(rrow, bodye) {
             fte.setAttribute("aria-describedby", ttid);
         }
         const h3 = document.createElement("h3");
-        h3.className = "rfehead";
+        h3.className = "s-rf-title";
         h3.appendChild(fte);
         let vis = f.visibility || "re";
         if (vis === "audec" && hotcrp.status && hotcrp.status.myperm
@@ -6579,7 +6696,7 @@ function rating_counts(ratings) {
 }
 
 function closest_rating_url(e) {
-    const card = e.closest(".revcard");
+    const card = e.closest(".s-review");
     return hoturl("=api", {p: card.getAttribute("data-pid"), r: card.getAttribute("data-rid"), fn: "reviewrating"});
 }
 
@@ -6640,6 +6757,7 @@ handle_ui.on("js-revrating-clearall", function (evt) {
         go();
     } else {
         this.setAttribute("data-override-text", "Are you sure you want to reset all ratings for this review?");
+        this.setAttribute("data-override-label", "Confirm ratings reset");
         override_deadlines.call(this, go);
     }
 });
@@ -6844,7 +6962,7 @@ hotcrp.add_review = function (rrow) {
 
     const earticle = document.createElement("article");
     earticle.id = "r" + rid;
-    earticle.className = "pcard revcard " + (rrow.subreview || rrow.draft ? "" : "revsubmitted ") + "need-anchor-unfold";
+    earticle.className = "pcard s-review " + (rrow.subreview || rrow.draft ? "" : "s-review-submitted ") + "need-anchor-unfold";
     earticle.setAttribute("data-pid", rrow.pid);
     earticle.setAttribute("data-rid", rrow.rid);
     if (rrow.ordinal) {
@@ -6885,7 +7003,9 @@ hotcrp.add_review = function (rrow) {
 
     // complete render
     earticle.append(eheader, ebody);
-    document.querySelector(".pcontainer").append(earticle);
+    const particle = document.getElementById("p" + rrow.pid)
+        || document.querySelector(".s-paper");
+    particle.append(earticle);
     $(earticle).awaken();
     navsidebar.set("r" + rid, rdesc);
 };
@@ -7209,6 +7329,113 @@ hotcrp.set_review_form = function (rfj) {
 })($);
 
 
+// word limits
+function make_update_words() {
+    const ta = this;
+    if (ta.nodeName !== "TEXTAREA"
+        || !ta.hasAttribute("data-wordlimit")
+        || !hasClass(ta, "need-wordlimit")) {
+        return;
+    }
+    removeClass(ta, "need-wordlimit");
+    const wlimit = +ta.getAttribute("data-wordlimit");
+    let wce;
+    if (ta.hasAttribute("data-wordlimit-details")) {
+        wce = document.getElementById(ta.getAttribute("data-wordlimit-details"));
+    } else {
+        let fd = ta.previousElementSibling;
+        if (!fd || !hasClass(fd, "formatdescription")) {
+            ta.before((fd = $e("div", "formatdescription")));
+        }
+        wce = fd.querySelector(".words");
+        if (!wce) {
+            fd.firstChild && fd.append(" ", $e("span", "barsep", "·"), " ");
+            fd.append((wce = $e("span", "words")));
+        }
+    }
+    if (!wce || wlimit <= 0) {
+        return;
+    }
+    let scheduled = false, swc = null;
+    function setwc() {
+        scheduled = false;
+        const wc = count_words(ta.value);
+        if (wc === swc) {
+            return;
+        }
+        swc = wc;
+        wce.className = "words" + (wlimit < wc ? " wordsover" :
+                                   (wlimit * 0.9 < wc ? " wordsclose" : ""));
+        if (wlimit < wc) {
+            wce.textContent = plural(wc - wlimit, "word") + " over";
+        } else {
+            wce.textContent = plural(wlimit - wc, "word") + " left";
+        }
+        toggleClass(ta, "has-wordlimit-error", wlimit < wc);
+    }
+    function schedule() {
+        if (!scheduled) {
+            scheduled = true;
+            requestAnimationFrame(setwc);
+        }
+    }
+    ta.addEventListener("input", schedule);
+    setwc();
+}
+
+function overlong_truncation_site(e) {
+    let t = e;
+    while (t.nodeType === 1) {
+        let ch = t.lastChild;
+        while (ch && ch.nodeType === 3 && ch.data.trimEnd() === "") {
+            ch = ch.previousSibling;
+        }
+        const nn = ch ? ch.nodeName : null;
+        if (nn === "P"
+            || (nn === "LI" && ch.lastChild.nodeType === 3)) {
+            return ch;
+        } else if (nn === "DIV" || nn === "BLOCKQUOTE" || nn === "UL" || nn === "OL") {
+            t = ch;
+        } else {
+            break;
+        }
+    }
+    return e;
+}
+
+function render_with_overlong(onto, text, args, render_context) {
+    args = args || {};
+    const format = args.format || 0, wl = args.wl || 0, hwl = args.hwl || 0;
+    let aftertexte, wc = 0;
+    if (wl > 0) {
+        wc = count_words(text);
+        if (hwl > 0 && wc > hwl) {
+            const wcx = count_words_split(text, hwl);
+            text = wcx[0].trimEnd() + "… ";
+            aftertexte = $e("span", {class: "overlong-truncation", title: "Truncated for length"}, "✖");
+        }
+        if (wc > wl && ((hwl || 0) <= 0 || wl < hwl)) {
+            const wcx = count_words_split(text, wl),
+                allowede = $e("div", "overlong-allowed"),
+                dividere = $e("div", "overlong-divider",
+                    allowede,
+                    $e("div", "overlong-mark",
+                        $e("div", "overlong-expander",
+                            $e("button", {type: "button", class: "ui js-overlong-expand", "aria-expanded": "false"}, "Show more")))),
+                contente = $e("div", "overlong-content");
+            addClass(onto, "has-overlong");
+            addClass(onto, "overlong-collapsed");
+            onto.prepend(dividere, contente);
+            onto = contente;
+            render_text.onto(allowede, format, wcx[0], render_context);
+        }
+    }
+    render_text.onto(onto, format, text, render_context);
+    aftertexte && overlong_truncation_site(onto).append(aftertexte);
+    return wc;
+}
+
+
 // comments
 (function ($) {
 const vismap = {
@@ -7219,9 +7446,7 @@ const vismap = {
     emojiregex = /^(?:(?:\ud83c[\udde6-\uddff]\ud83c[\udde6-\uddff]|(?:(?:[\u231a\u231b\u23e9-\u23ec\u23f0\u23f3\u25fd\u25fe\u2614\u2615\u2648-\u2653\u267f\u2693\u26a1\u26aa\u26ab\u26bd\u26be\u26c4\u26c5\u26ce\u26d4\u26ea\u26f2\u26f3\u26f5\u26fa\u26fd\u2705\u270a\u270b\u2728\u274c\u274e\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b\u2b1c\u2b50\u2b55]|\ud83c[\udc04\udccf\udd8e\udd91-\udd9a\udde6-\uddff\ude01\ude1a\ude2f\ude32-\ude36\ude38-\ude3a\ude50\ude51\udf00-\udf20\udf2d-\udf35\udf37-\udf7c\udf7e-\udf93\udfa0-\udfca\udfcf-\udfd3\udfe0-\udff0\udff4\udff8-\udfff]|\ud83d[\udc00-\udc3e\udc40\udc42-\udcfc\udcff-\udd3d\udd4b-\udd4e\udd50-\udd67\udd7a\udd95\udd96\udda4\uddfb-\ude4f\ude80-\udec5\udecc\uded0-\uded2\uded5-\uded7\udedc-\udedf\udeeb\udeec\udef4-\udefc\udfe0-\udfeb\udff0]|\ud83e[\udd0c-\udd3a\udd3c-\udd45\udd47-\uddff\ude70-\ude7c\ude80-\ude89\ude8f-\udec6\udece-\udedc\udedf-\udee9\udef0-\udef8])\ufe0f?|(?:[\u0023\u002a\u0030-\u0039\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u2199\u21a9\u21aa\u2328\u23cf\u23ed-\u23ef\u23f1\u23f2\u23f8-\u23fa\u24c2\u25aa\u25ab\u25b6\u25c0\u25fb\u25fc\u2600-\u2604\u260e\u2611\u2618\u261d\u2620\u2622\u2623\u2626\u262a\u262e\u262f\u2638-\u263a\u2640\u2642\u265f\u2660\u2663\u2665\u2666\u2668\u267b\u267e\u2692\u2694-\u2697\u2699\u269b\u269c\u26a0\u26a7\u26b0\u26b1\u26c8\u26cf\u26d1\u26d3\u26e9\u26f0\u26f1\u26f4\u26f7-\u26f9\u2702\u2708\u2709\u270c\u270d\u270f\u2712\u2714\u2716\u271d\u2721\u2733\u2734\u2744\u2747\u2763\u2764\u27a1\u2934\u2935\u2b05-\u2b07\u3030\u303d\u3297\u3299]|\ud83c[\udd70\udd71\udd7e\udd7f\ude02\ude37\udf21\udf24-\udf2c\udf36\udf7d\udf96\udf97\udf99-\udf9b\udf9e\udf9f\udfcb-\udfce\udfd4-\udfdf\udff3\udff5\udff7]|\ud83d[\udc3f\udc41\udcfd\udd49\udd4a\udd6f\udd70\udd73-\udd79\udd87\udd8a-\udd8d\udd90\udda5\udda8\uddb1\uddb2\uddbc\uddc2-\uddc4\uddd1-\uddd3\udddc-\uddde\udde1\udde3\udde8\uddef\uddf3\uddfa\udecb\udecd-\udecf\udee0-\udee5\udee9\udef0\udef3])\ufe0f)\u20e3?(?:\ud83c[\udffb-\udfff]|(?:\udb40[\udc20-\udc7e])+\udb40\udc7f)?(?:\u200d(?:(?:[\u231a\u231b\u23e9-\u23ec\u23f0\u23f3\u25fd\u25fe\u2614\u2615\u2648-\u2653\u267f\u2693\u26a1\u26aa\u26ab\u26bd\u26be\u26c4\u26c5\u26ce\u26d4\u26ea\u26f2\u26f3\u26f5\u26fa\u26fd\u2705\u270a\u270b\u2728\u274c\u274e\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b\u2b1c\u2b50\u2b55]|\ud83c[\udc04\udccf\udd8e\udd91-\udd9a\udde6-\uddff\ude01\ude1a\ude2f\ude32-\ude36\ude38-\ude3a\ude50\ude51\udf00-\udf20\udf2d-\udf35\udf37-\udf7c\udf7e-\udf93\udfa0-\udfca\udfcf-\udfd3\udfe0-\udff0\udff4\udff8-\udfff]|\ud83d[\udc00-\udc3e\udc40\udc42-\udcfc\udcff-\udd3d\udd4b-\udd4e\udd50-\udd67\udd7a\udd95\udd96\udda4\uddfb-\ude4f\ude80-\udec5\udecc\uded0-\uded2\uded5-\uded7\udedc-\udedf\udeeb\udeec\udef4-\udefc\udfe0-\udfeb\udff0]|\ud83e[\udd0c-\udd3a\udd3c-\udd45\udd47-\uddff\ude70-\ude7c\ude80-\ude89\ude8f-\udec6\udece-\udedc\udedf-\udee9\udef0-\udef8])\ufe0f?|(?:[\u0023\u002a\u0030-\u0039\u00a9\u00ae\u203c\u2049\u2122\u2139\u2194-\u2199\u21a9\u21aa\u2328\u23cf\u23ed-\u23ef\u23f1\u23f2\u23f8-\u23fa\u24c2\u25aa\u25ab\u25b6\u25c0\u25fb\u25fc\u2600-\u2604\u260e\u2611\u2618\u261d\u2620\u2622\u2623\u2626\u262a\u262e\u262f\u2638-\u263a\u2640\u2642\u265f\u2660\u2663\u2665\u2666\u2668\u267b\u267e\u2692\u2694-\u2697\u2699\u269b\u269c\u26a0\u26a7\u26b0\u26b1\u26c8\u26cf\u26d1\u26d3\u26e9\u26f0\u26f1\u26f4\u26f7-\u26f9\u2702\u2708\u2709\u270c\u270d\u270f\u2712\u2714\u2716\u271d\u2721\u2733\u2734\u2744\u2747\u2763\u2764\u27a1\u2934\u2935\u2b05-\u2b07\u3030\u303d\u3297\u3299]|\ud83c[\udd70\udd71\udd7e\udd7f\ude02\ude37\udf21\udf24-\udf2c\udf36\udf7d\udf96\udf97\udf99-\udf9b\udf9e\udf9f\udfcb-\udfce\udfd4-\udfdf\udff3\udff5\udff7]|\ud83d[\udc3f\udc41\udcfd\udd49\udd4a\udd6f\udd70\udd73-\udd79\udd87\udd8a-\udd8d\udd90\udda5\udda8\uddb1\uddb2\uddbc\uddc2-\uddc4\uddd1-\uddd3\udddc-\uddde\udde1\udde3\udde8\uddef\uddf3\uddfa\udecb\udecd-\udecf\udee0-\udee5\udee9\udef0\udef3])\ufe0f)\u20e3?(?:\ud83c[\udffb-\udfff]|(?:\udb40[\udc20-\udc7e])+\udb40\udc7f)?)*)*[ \t]*){1,3}$/,
     cmts = {}, resp_rounds = {},
     twiddle_start = siteinfo.user && siteinfo.user.uid ? siteinfo.user.uid + "~" : "###";
-let has_unload = false, last_visibility = null,
-    last_topic = null, last_topic_viewer = false, last_topic_viewer_time = now_sec() - 14 * 86400,
-    editor_observer, editing_list;
+let has_unload = false, editor_observer, editing_list;
 
 function unparse_tag(tag, strip_value) {
     let pos;
@@ -7237,29 +7462,25 @@ function unparse_tag(tag, strip_value) {
 }
 
 function cj_find(elt) {
-    return cmts[elt.closest(".cmtid").id];
+    return cmts[elt.closest(".s-comment").id];
 }
 
 function cj_cid(cj) {
-    if (cj.response)
+    if (cj.response) {
         return (cj.response == 1 ? "" : cj.response) + "response";
-    else if (cj.is_new)
-        return "cnew";
-    else
-        return "c" + (cj.ordinal || "x" + cj.cid);
+    }
+    return cj.is_new ? "cnew" : "c" + (cj.ordinal || "x" + cj.cid);
 }
 
 function cj_name(cj) {
-    if (cj.response) {
-        var draft = cj.draft ? "Draft " : "";
-        if (cj.response != "1") {
-            return draft.concat(cj.response, " Response");
-        } else {
-            return draft + "Response";
-        }
-    } else {
+    if (!cj.response) {
         return "Comment";
     }
+    const draft = cj.draft ? "Draft " : "";
+    if (cj.response != "1") {
+        return draft + cj.response + " Response";
+    }
+    return draft + "Response";
 }
 
 function cmt_header_dotsep(hdre) {
@@ -7362,27 +7583,28 @@ function cmt_is_editable(cj, override) {
 function cmt_render_form(cj) {
     const cid = cj_cid(cj),
         btnbox = $e("div", "btnbox"),
-        eform = $e("form", "cmtform");
+        eform = $e("form", "s-comment-form");
     cj.review_token && eform.append(hidden_input("review_token", cj.review_token));
-    cj.by_author && eform.append(hidden_input("by_author", 1));
     cj.response && eform.append(hidden_input("response", cj.response));
 
-    const fmt = render_text.format(cj.format);
+    const fmt = render_text.format(cj.format),
+        etext = $e("textarea", {
+            name: "text", class: "w-text cmttext suggest-emoji mentions need-suggest c",
+            rows: 5, cols: 60, placeholder: "Leave a comment", spellcheck: "true"
+        });
     let efmtdesc = null;
     if (fmt.description || fmt.has_preview) {
         efmtdesc = $e("div", "formatdescription");
         if (fmt.description) {
             efmtdesc.innerHTML = fmt.description;
-            fmt.has_preview && efmtdesc.append(" ", $e("span", "barsep", "·"), " ");
         }
         if (fmt.has_preview) {
-            efmtdesc.append($e("button", {type: "button", class: "link ui js-togglepreview", "data-format": fmt.format || 0}, "Preview"));
+            efmtdesc.firstChild && efmtdesc.append(" ", $e("span", "barsep", "·"), " ");
+            efmtdesc.append($e("button", {type: "button", class: "link ui js-togglepreview"}, "Preview"));
+            etext.setAttribute("data-format", fmt.format || 0);
         }
     }
-    eform.append($e("div", "f-i", efmtdesc, $e("textarea", {
-        name: "text", class: "w-text cmttext suggest-emoji mentions need-suggest c",
-        rows: 5, cols: 60, placeholder: "Leave a comment"
-    })));
+    eform.append($e("div", "f-i", efmtdesc, etext));
 
     // attachments, visibility, tags, readiness
     eform.append(cmt_render_form_prop(cj, cid, btnbox));
@@ -7391,7 +7613,7 @@ function cmt_render_form(cj) {
     const eaa = $e("div", "w-text aabig aab mt-3");
     btnbox.firstChild && eaa.append($e("div", "aabut", btnbox));
     if (cj.response && resp_rounds[cj.response].wl > 0) {
-        eaa.append($e("div", "aabut", $e("div", "words")));
+        eaa.append($e("div", "aabut", $e("div", {class: "words", id: cid + "-wordlimit"})));
     }
     const btext = cj.response ? "Submit" : "Save",
         bnote = cmt_is_editable(cj) ? null : $e("div", "hint", "(admin only)");
@@ -7403,66 +7625,76 @@ function cmt_render_form(cj) {
     return eform;
 }
 
+/** @param {string} name
+ * @param {string} id
+ * @param {Array} options - [value, text] pairs
+ * @return {HTMLElement} */
+function cmt_inline_select(name, id, options, label) {
+    const esel = $e("select", {id: id, name: name, "aria-label": label});
+    for (const opt of options) {
+        esel.append($e("option", {value: opt[0]}, opt[1]));
+    }
+    return $e("span", "select-inline", $e("span", "select-sizer"), esel);
+}
+
+// Match a select's width to its selected option. The sizer is the only
+// child in flow, so setting its text sets the control's width.
+function cmt_size_inline_select(sel) {
+    const sizer = sel.parentElement.firstChild;
+    sizer.textContent = sel.options[sel.selectedIndex].text;
+}
+
 function cmt_render_form_prop(cj, cid, btnbox) {
-    const einfo = $e("div", "cmteditinfo fold3c fold4c");
+    const einfo = $e("div", "cmteditinfo");
 
     // attachments
-    einfo.append($e("div", {id: cid + "-attachments", class: "entryi has-editable-attachments hidden", "data-dt": -2, "data-document-prefix": "attachment"}, $e("span", "label", "Attachments")));
+    einfo.append($e("div", {class: "cmtprop w-text has-editable-attachments", hidden: true, role: "group", "aria-label": "Attachments"},
+        $e("span", {class: "need-tooltip", "data-tooltip": "Attachments"}, $svg_use_licon("attachment")),
+        $e("div", {id: cid + "-attachments", class: "entry", "data-dt": -2, "data-document-prefix": "attachment"})));
     btnbox.append($e("button", {type: "button", name: "attach", class: "btn-licon need-tooltip ui js-add-attachment", "aria-label": "Attach file", "data-editable-attachments": cid + "-attachments"}, $svg_use_licon("attachment")));
 
-    // tags
-    if (!cj.response && !cj.by_author) {
-        einfo.append($e("div", "entryi fx3",
-            $e("label", {for: cid + "-tags"}, "Tags"),
-            $e("input", {id: cid + "-tags", name: "tags", type: "text", size: 50, placeholder: "Comment tags"})));
-        btnbox.append($e("button", {type: "button", name: "showtags", class: "btn-licon need-tooltip", "aria-label": "Tags"}, $svg_use_licon("tag")));
-    }
-
-    // visibility
-    if (!cj.response && (!cj.by_author || cj.by_author_visibility)) {
-        const evsel = $e("select", {id: cid + "-visibility", name: "visibility"});
-        if (cj.by_author) {
-            evsel.append($e("option", {value: "au"}, "Reviewers and PC"));
-        } else {
-            evsel.append($e("option", {value: "au"}, "Authors and reviewers"),
-                $e("option", {value: "rev"}, "Reviewers"),
-                $e("option", {value: "pc"}, "PC only"));
-        }
-        evsel.append($e("option", {value: "admin"}, "Administrators only"));
-
-        const evis = $e("div", "entry",
-            $e("span", "select", evsel),
-            $e("p", "f-d text-break-line hidden"));
-        if (!cj.by_author && hotcrp.status.rev.blind && hotcrp.status.rev.blind !== true) {
-            evis.append($e("div", "checki",
-                $e("label", null,
-                    $e("span", "checkc", $e("input", {type: "checkbox", name: "blind", value: 1})),
-                    "Anonymous to authors")));
-        }
-        einfo.append($e("div", "entryi",
-            $e("label", {for: cid + "-visibility"}, "Visibility"),
-            evis));
-    }
-
-    // topic/thread
+    // visibility and thread, stated as an editable sentence
     if (!cj.response) {
-        const etsel = $e("select", {id: cid + "-thread", name: "topic"}),
-            tlist = hotcrp.status.myperm.comment_topics || ["paper", "rev"];
+        const evis = $e("div");
+        let eblind = null;
+        if (!cj.by_author || cj.by_author_visibility) {
+            const vopt = cj.by_author
+                ? [["au", "reviewers and PC"]]
+                : [["au", "authors and reviewers"], ["rev", "reviewers"], ["pc", "PC members"]];
+            vopt.push(["admin", "administrators only"]);
+            evis.append("Visible to ", cmt_inline_select("visibility", cid + "-visibility", vopt, "Visible to"), " on the ");
+            if (!cj.by_author && hotcrp.status.rev.blind && hotcrp.status.rev.blind !== true) {
+                eblind = $e("div", "checki",
+                    $e("label", null,
+                        $e("span", "checkc", $e("input", {type: "checkbox", name: "blind", value: 1})),
+                        "Anonymous to authors"));
+            }
+        } else {
+            evis.append("On the ");
+        }
+
+        const topt = [], tlist = hotcrp.status.myperm.comment_topics || ["paper", "rev"];
         if (tlist.indexOf("paper") >= 0) {
-            etsel.append($e("option", {value: "paper"}, siteinfo.snouns[2] + " (not reviews)"));
+            topt.push(["paper", siteinfo.snouns[0] + " thread"]);
         }
         if (tlist.indexOf("rev") >= 0) {
-            etsel.append($e("option", {value: "rev", selected: true}, "Reviews"));
+            topt.push(["rev", "review thread"]);
         }
         /*if (tlist.indexOf("dec") >= 0) {
-            etsel.append($e("option", {value: "dec"}, "Decision"));
+            topt.push(["dec", "decision thread"]);
         }*/
-        einfo.append($e("div", "entryi fx4",
-            $e("label", {for: cid + "-thread"}, "Thread"),
-            $e("div", "entry",
-                $e("span", "select", etsel),
-                $e("p", "f-d text-break-line"))));
-        btnbox.append($e("button", {type: "button", name: "showthread", class: "btn-licon need-tooltip", "aria-label": "Thread", "data-editable-attachments": cid + "-attachments"}, $svg_use_licon("thread")));
+        evis.append(cmt_inline_select("topic", cid + "-thread", topt, "Thread"));
+        einfo.append($e("div", "cmtprop w-text",
+            $e("span", {class: "need-tooltip", "data-tooltip": "Visibility"}, $svg_use_licon("eye")),
+            $e("div", "entry", evis, eblind, $e("div", {class: "cmtvis-hints", "aria-live": "polite"}))));
+    }
+
+    // tags (appended below the sentence)
+    if (!cj.response && !cj.by_author) {
+        einfo.append($e("div", {class: "cmtprop w-text", hidden: true},
+            $e("label", {for: cid + "-tags", class: "need-tooltip", "data-tooltip": "Tags"}, $svg_use_licon("tag")),
+            $e("input", {id: cid + "-tags", class: "pled", name: "tags", type: "text", size: 50, placeholder: "Comment tags", "aria-label": "Tags"})));
+        btnbox.append($e("button", {type: "button", name: "showtags", class: "btn-licon need-tooltip", "aria-label": "Tags"}, $svg_use_licon("tag")));
     }
 
     // delete
@@ -7489,45 +7721,46 @@ function cmt_render_form_prop(cj, cid, btnbox) {
     return einfo;
 }
 
+/** @param {string} text
+ * @param {boolean} warning
+ * @return {HTMLElement} */
+function cmt_hint(text, warning) {
+    if (warning) {
+        text = $e("span", "is-diagnostic is-warning", text);
+    }
+    return $e("p", "f-d mt-0", text);
+}
+
 function cmt_visibility_change() {
     const form = this.closest("form"),
+        cj = cj_find(this),
         vis = form.elements.visibility,
         topic = form.elements.topic,
-        is_paper = topic && topic.value === "paper" && (!vis || vis.value !== "admin");
-    if (vis && vis.type === "select-one" && !form.elements.by_author) {
-        const vishint = vis.closest(".entryi").querySelector(".f-d"),
-            would_auvis = is_paper
-                || hotcrp.status.myperm[topic && topic.value === "dec" ? "some_author_can_view_decision" : "some_author_can_view_review"],
-            m = [];
+        is_paper = topic && topic.value === "paper" && (!vis || vis.value !== "admin"),
+        would_auvis = is_paper
+            || hotcrp.status.myperm[topic && topic.value === "dec" ? "some_author_can_view_decision" : "some_author_can_view_review"],
+        m = [];
+    let aunotify = false;
+
+    if (vis && vis.type === "select-one" && !cj.by_author) {
+        vis.firstChild.textContent = would_auvis
+            ? "authors and reviewers" : "authors (eventually) and reviewers";
         if (vis.value === "au") {
-            if (would_auvis) {
-                m.length && m.push("\n");
-                m.push($e("span", "is-diagnostic is-warning", "Authors will be notified immediately."));
-            } else if (topic.value === "dec") {
-                m.length && m.push("\n");
-                m.push("Authors cannot currently view the decision or comments about the decision.");
-            } else {
-                m.length && m.push("\n");
-                m.push("Authors cannot currently view reviews or comments about reviews.");
-            }
             if (hotcrp.status.rev.blind === true) {
-                m.length && m.push("\n");
-                m.push(would_auvis ? "The comment will be anonymous to authors." : "When visible, the comment will be anonymous to authors.");
+                m.push(cmt_hint(would_auvis ? "The comment will be anonymous to authors." : "When visible, the comment will be anonymous to authors."));
+            }
+            if (would_auvis) {
+                aunotify = true;
+            } else if (topic.value === "dec") {
+                m.push(cmt_hint("Authors cannot currently view the decision or comments about the decision."));
+            } else {
+                m.push(cmt_hint("Authors cannot currently view reviews or comments about reviews."));
             }
         } else if (vis.value === "pc") {
-            m.length && m.push("\n");
-            m.push("The comment will be hidden from authors and external reviewers.");
+            m.push(cmt_hint("The comment will be hidden from authors and external reviewers."));
         } else if (vis.value === "rev"
                    && hotcrp.status.myperm.some_external_reviewer_can_view_comment === false) {
-            m.length && m.push("\n");
-            m.push($e("span", "is-diagnostic is-warning", "External reviewers cannot view comments at this time."));
-        }
-        vishint.replaceChildren(...m);
-        toggleClass(vishint, "hidden", m.length === 0);
-        if (would_auvis) {
-            vis.firstChild.textContent = "Authors and reviewers";
-        } else {
-            vis.firstChild.textContent = "Authors (eventually) and reviewers";
+            m.push(cmt_hint("External reviewers cannot view comments at this time.", true));
         }
         if (vis.value === "au" && would_auvis) {
             form.elements.bsubmit.textContent = "Save and notify authors";
@@ -7536,42 +7769,37 @@ function cmt_visibility_change() {
         } else {
             form.elements.bsubmit.textContent = "Save";
         }
+        toggleClass(form.elements.bsubmit, "btn-highlight", vis.value === "au" && !!would_auvis);
+        toggleClass(form.elements.bsubmit, "btn-primary", vis.value !== "au" || !would_auvis);
         if (form.elements.blind) {
             toggleClass(form.elements.blind.closest(".checki"), "hidden", vis.value !== "au");
         }
     }
+
     if (topic) {
-        const topichint = topic.closest(".entryi").querySelector(".f-d");
         if (is_paper) {
-            topichint.replaceChildren("The comment will appear even when reviews are hidden.");
+            m.push(cmt_hint("The comment will appear even when reviews are hidden."));
         } else if (topic.value === "dec") {
-            topichint.replaceChildren("The comment will appear when the decision is visible.");
-        } else {
-            topichint.replaceChildren("The comment will appear when reviews are visible.");
-            if (!document.querySelector("article.revsubmitted")) {
-                topichint.append("\n", $e("span", "is-diagnostic is-warning", "Reviews are not visible now."));
-            }
+            m.push(cmt_hint("The comment will appear when the decision is visible."));
+        } else if (topic.value === "rev"
+                   && !document.querySelector("article.s-review-submitted")) {
+            m.push(cmt_hint("The comment will appear when reviews are visible (they are not visible now).", true));
         }
     }
+
+    if (aunotify) {
+        m.push(cmt_hint("Authors will be notified immediately.", true));
+    }
+
+    vis && cmt_size_inline_select(vis);
+    topic && cmt_size_inline_select(topic);
+
+    const hints = form.querySelector(".cmtvis-hints");
+    hints && hints.replaceChildren(...m);
 }
 
 function cmt_ready_change() {
     this.form.elements.bsubmit.textContent = this.checked ? "Submit" : "Save draft";
-}
-
-function make_update_words(celt, wlimit) {
-    var wce = celt.querySelector(".words");
-    function setwc() {
-        var wc = count_words(this.value);
-        wce.className = "words" + (wlimit < wc ? " wordsover" :
-                                   (wlimit * 0.9 < wc ? " wordsclose" : ""));
-        if (wlimit < wc)
-            wce.textContent = plural(wc - wlimit, "word") + " over";
-        else
-            wce.textContent = plural(wlimit - wc, "word") + " left";
-    }
-    if (wce)
-        $(celt).find("textarea").on("input", setwc).each(setwc);
 }
 
 function cmt_edit_messages(cj, form) {
@@ -7615,51 +7843,83 @@ function cmt_edit_messages(cj, form) {
     }
 }
 
+function cmt_annotate_new(celt, cj) {
+    // Choose new comment’s topic and visibility.
+    // - Submission thread if there is no review.
+    if (!document.querySelector("article.s-review-submitted")) {
+        cj.topic = "paper";
+    } else {
+        cj.topic = "rev";
+    }
+
+    // - Author-visible if previous comment is by an author and not a
+    //   response; or this comment is by author.
+    let prevcelt = celt.closest("article").previousElementSibling;
+    while (prevcelt && prevcelt.tagName !== "ARTICLE") {
+        prevcelt = prevcelt.previousElementSibling;
+    }
+    const prevcj = prevcelt && hasClass(prevcelt, "s-comment") && cj_find(prevcelt);
+    if (cj.by_author
+        || (prevcj && prevcj.by_author && !prevcj.response)) {
+        cj.visibility = "au";
+    } else if (hotcrp.status.myperm.some_external_reviewer_can_view_comment === false) {
+        cj.visibility = "pc";
+    } else {
+        cj.visibility = "rev";
+    }
+}
+
 function cmt_start_edit(celt, cj) {
-    var i, elt, tags = [], form = celt.querySelector("form");
+    if (cj.is_new && !cj.visibility) {
+        cmt_annotate_new(celt, cj);
+    }
+    let i, elt;
+    const form = celt.querySelector("form");
     cmt_edit_messages(cj, form);
 
-    $(form.elements.text).text(cj.text || "")
+    const ta = form.elements.text;
+    $(ta).text(cj.text || "")
         .on("keydown", cmt_keydown)
-        .on("hotcrprenderpreview", cmt_render_preview)
         .autogrow();
+    if (cj.response && resp_rounds[cj.response].wl > 0) {
+        ta.setAttribute("data-wordlimit", resp_rounds[cj.response].wl);
+        if (resp_rounds[cj.response].hwl > 0) {
+            ta.setAttribute("data-hard-wordlimit", resp_rounds[cj.response].hwl);
+        }
+        ta.setAttribute("data-wordlimit-details", cj_cid(cj) + "-wordlimit");
+        addClass(ta, "need-wordlimit");
+        make_update_words.call(ta);
+    }
 
-    const vis = cj.visibility
-        || last_visibility
-        || (cj.by_author && "au")
-        || (hotcrp.status.myperm.some_external_reviewer_can_view_comment === false && "pc")
-        || "rev";
-    $(form.elements.visibility).val(vis)
-        .attr("data-default-value", vis)
+    $(form.elements.visibility).val(cj.visibility || "rev")
+        .attr("data-default-value", cj.visibility || "rev")
         .on("change", cmt_visibility_change);
 
-    const any_rev = !!document.querySelector("article.revsubmitted"),
-        new_topic = any_rev ? last_topic || "rev" : "paper",
-        topic = cj.is_new ? new_topic : cj.topic || "rev";
-    if (topic !== "rev" || new_topic !== "rev") {
-        fold(celt.querySelector(".cmteditinfo"), false, 4);
-    }
-    $(form.elements.topic).val(topic)
-        .attr("data-default-value", topic)
+    $(form.elements.topic).val(cj.topic || "rev")
+        .attr("data-default-value", cj.topic || "rev")
         .on("change", cmt_visibility_change);
 
     if ((elt = form.elements.visibility || form.elements.topic)) {
         cmt_visibility_change.call(elt);
     }
 
-    for (i in cj.tags || []) {
-        tags.push(unparse_tag(cj.tags[i]));
+    if ((elt = form.elements.tags)) {
+        const tags = [];
+        for (i in cj.tags || []) {
+            tags.push(unparse_tag(cj.tags[i]));
+        }
+        if (tags.length) {
+            elt.closest(".cmtprop").hidden = false;
+        }
+        elt.value = tags.join(" ");
     }
-    if (tags.length) {
-        fold(celt.querySelector(".cmteditinfo"), false, 3);
-    }
-    $(form.elements.tags).val(tags.join(" ")).autogrow();
 
     if (cj.docs && cj.docs.length) {
-        const entry = $e("div", "entry");
-        $(celt).find(".has-editable-attachments").removeClass("hidden").append(entry);
-        for (i in cj.docs || [])
+        const entry = celt.querySelector(".has-editable-attachments > .entry");
+        entry.parentElement.hidden = false;
+        for (i in cj.docs || []) {
             entry.append(cmt_render_attachment_input(+i + 1, cj.docs[i]));
+        }
     }
 
     if (!cj.visibility || cj.blind) {
@@ -7667,9 +7927,6 @@ function cmt_start_edit(celt, cj) {
     }
 
     if (cj.response) {
-        if (resp_rounds[cj.response].wl > 0) {
-            make_update_words(celt, resp_rounds[cj.response].wl);
-        }
         var $ready = $(form.elements.ready).on("click", cmt_ready_change);
         cmt_ready_change.call($ready[0]);
     }
@@ -7707,7 +7964,7 @@ function cmt_render_attachment(doc) {
 }
 
 function cmt_beforeunload() {
-    var i, $cs = $(".cmtform"), text;
+    var i, $cs = $(".s-comment-form"), text;
     if (has_unload) {
         for (i = 0; i !== $cs.length; ++i) {
             text = $cs[i].elements.text.value.trimEnd();
@@ -7743,7 +8000,7 @@ function cmt_edit_observer(entries) {
             e.target.removeAttribute("data-intersecting");
         }
     }
-    const focus = document.activeElement && document.activeElement.closest(".cmtcard");
+    const focus = document.activeElement && document.activeElement.closest(".s-comment");
     for (i = 0; i !== editing_list.length; ++i) {
         e = editing_list[i];
         want = have = hasClass(e, "popout");
@@ -7802,8 +8059,11 @@ function cmt_toggle_editing(celt, editing) {
 function cmt_save_callback(cj) {
     var cid = cj_cid(cj), celt = $$(cid), form = celt.querySelector("form");
     return function (data) {
-        if (!data.ok) {
-            if (data.signedout || data.loggedout) {
+        // `dry_run` means the server declined to save because of warnings;
+        // like an error, leave the editor open, but let the next attempt
+        // through (the user has now seen the warnings).
+        if (!data.ok || data.dry_run) {
+            if (!data.ok && (data.signedout || data.loggedout)) {
                 has_unload = false;
                 form.method = "post";
                 var arg = {editcomment: 1, p: siteinfo.paperid};
@@ -7811,7 +8071,19 @@ function cmt_save_callback(cj) {
                 form.action = hoturl("=paper", arg);
                 form.submit();
             }
-            $(celt).find(".cmtmsg").html(feedback.render_alert(data.message_list));
+            let ml = data.message_list || [];
+            if (data.dry_run) {
+                form.setAttribute("data-no-dry-run", "");
+                const bsub = form.elements.bsubmit;
+                ml.push({
+                    message: "<0>To continue anyway, click “" + (bsub ? bsub.textContent : "Save") + "” again.",
+                    status: -4 /*MessageSet::MARKED_NOTE*/
+                });
+            }
+            if (form.elements.topic) {
+                toggleClass(form.elements.topic.parentElement, "is-warning", feedback.list_status(ml, "topic") > 0);
+            }
+            $(celt).find(".cmtmsg").html(feedback.render_alert(ml));
             $(celt).find("button, input[type=file]").prop("disabled", false);
             $(form.elements.draft).remove();
             return;
@@ -7837,12 +8109,9 @@ function cmt_save_callback(cj) {
             if (new_cid) {
                 celt.id = new_cid;
                 navsidebar.redisplay(celt);
-                last_visibility = data.comment.visibility;
-                last_topic = data.comment.topic || "rev";
             } else {
                 celt.removeAttribute("id");
                 celt.replaceChildren($e("div", "cmtmsg"));
-                removeClass(celt, "cmtid");
                 navsidebar.remove(celt);
             }
         }
@@ -7869,6 +8138,7 @@ function cmt_save(elt, action, really) {
                    && !cj.draft
                    && (action === "delete" || !form.elements.ready.checked)) {
             elt.setAttribute("data-override-text", "The response is currently visible to reviewers. Are you sure you want to " + (action === "submit" ? "unsubmit" : "delete") + " it?");
+            elt.setAttribute("data-override-label", "Confirm response action");
             override_deadlines.call(elt, function () {
                 cmt_save(elt, action, true);
             });
@@ -7885,20 +8155,21 @@ function cmt_save(elt, action, really) {
         if (this.files.length === 0)
             this.disabled = true;
     });
-    var arg = {p: siteinfo.paperid, c: cj.cid || "new"};
+    var arg = {p: siteinfo.paperid, c: cj.cid || "new", word_limit: "hard"};
     really && (arg.override = 1);
     siteinfo.want_override_conflict && (arg.forceShow = 1);
     action === "delete" && (arg.delete = 1);
+    // On a new comment, let the server refuse the first save if it has
+    // warnings; `data-no-dry-run` is set once those warnings have been shown.
+    if (cj.is_new && action !== "delete" && !form.hasAttribute("data-no-dry-run")) {
+        arg.dry_run = "if_warning";
+    }
     const url = hoturl("=api/comment", arg),
         callback = cmt_save_callback(cj);
-    if (window.FormData) {
-        $.ajax(url, {
-            method: "POST", data: new FormData(form), success: callback,
-            processData: false, contentType: false, timeout: 120000
-        });
-    } else {
-        $.post(url, $(form).serialize(), callback);
-    }
+    $.ajax(url, {
+        method: "POST", data: new FormData(form), success: callback,
+        processData: false, contentType: false, timeout: 120000
+    });
 }
 
 function cmt_keydown(evt) {
@@ -7918,18 +8189,15 @@ function cmt_button_click(evt) {
         evt.preventDefault();
         cmt_save(this, "submit");
     } else if (this.name === "cancel") {
-        cj.collapsed && fold(this.closest(".cmtcard"), true, 20);
+        cj.collapsed && fold(this.closest(".s-comment"), true, 20);
         cmt_render(cj, false);
     } else if (this.name === "delete") {
         override_deadlines.call(this, function () {
             cmt_save(self, self.name, true);
         });
     } else if (this.name === "showtags") {
-        fold(this.form.querySelector(".cmteditinfo"), false, 3);
+        this.form.elements.tags.closest(".cmtprop").hidden = false;
         this.form.elements.tags.focus();
-    } else if (this.name === "showthread") {
-        fold(this.form.querySelector(".cmteditinfo"), false, 4);
-        this.form.elements.topic.focus();
     }
 }
 
@@ -7950,7 +8218,7 @@ function cmt_render(cj, editing) {
 
     if (cj.is_new && !editing) {
         cmt_toggle_editing(article, false);
-        var ide = article.closest(".cmtid");
+        var ide = article.closest(".s-comment");
         navsidebar.remove(ide);
         $("#k-comment-actions a[href='#" + ide.id + "']").closest(".aabut").removeClass("hidden");
         $(ide).remove();
@@ -7976,7 +8244,9 @@ function cmt_render(cj, editing) {
 
     // header
     const hdre = $e("header", cj.editable ? "cmtt ui js-click-child" : "cmtt");
-    cj.is_new || (hdre.id = "cx" + cj.cid);
+    if (!cj.is_new && (cj.response || cj.ordinal)) {
+        hdre.id = "cx" + cj.cid;
+    }
     if (cj.response && cj.text !== false) {
         const h2 = $e("h2");
         let cnc = h2;
@@ -8047,69 +8317,17 @@ function cmt_render(cj, editing) {
     return $(article);
 }
 
-function overlong_truncation_site(e) {
-    let t = e;
-    while (t.nodeType === 1) {
-        let ch = t.lastChild;
-        while (ch && ch.nodeType === 3 && ch.data.trimEnd() === "") {
-            ch = ch.previousSibling;
-        }
-        const nn = ch ? ch.nodeName : null;
-        if (nn === "P"
-            || (nn === "LI" && ch.lastChild.nodeType === 3)) {
-            return ch;
-        } else if (nn === "DIV" || nn === "BLOCKQUOTE" || nn === "UL" || nn === "OL") {
-            t = ch;
-        } else {
-            break;
-        }
-    }
-    return e;
-}
-
 function cmt_render_text(texte, cj, article) {
-    const rrd = cj.response && resp_rounds[cj.response];
-    let text = cj.text || "", aftertexte = null;
-    if (rrd && rrd.wl > 0) {
-        const wc = count_words(text);
-        if (wc > 0 && article) {
-            let cth = article.querySelector("header");
-            cmt_header_dotsep(cth);
-            cth.append($e("div", "cmtwords words" + (wc > rrd.wl ? " wordsover" : ""), plural(wc, "word")));
-        }
-        if ((rrd.hwl || 0) > 0
-            && wc > rrd.hwl) {
-            const wcx = count_words_split(text, rrd.hwl);
-            text = wcx[0].trimEnd() + "… ";
-            aftertexte = $e("span", {class: "overlong-truncation", title: "Truncated for length"}, "✖");
-        }
-        if (wc > rrd.wl
-            && ((rrd.hwl || 0) <= 0
-                || rrd.wl < rrd.hwl)) {
-            const wcx = count_words_split(text, rrd.wl),
-                allowede = $e("div", "overlong-allowed"),
-                dividere = $e("div", "overlong-divider",
-                    allowede,
-                    $e("div", "overlong-mark",
-                        $e("div", "overlong-expander",
-                            $e("button", {type: "button", class: "ui js-overlong-expand", "aria-expanded": "false"}, "Show more")))),
-                contente = $e("div", "overlong-content");
-            addClass(texte, "has-overlong");
-            addClass(texte, "overlong-collapsed");
-            texte.prepend(dividere, contente);
-            texte = contente;
-            render_text.onto(allowede, cj.format, wcx[0], cj);
-        }
+    const rrd = cj.response && resp_rounds[cj.response],
+        wc = render_with_overlong(texte, cj.text || "", {
+            format: cj.format, wl: rrd && rrd.wl, hwl: rrd && rrd.hwl
+        }, cj);
+    if (wc && wc > 0 && article) {
+        let cth = article.querySelector("header");
+        cmt_header_dotsep(cth);
+        cth.append($e("div", "cmtwords words" + (wc > rrd.wl ? " wordsover" : ""), plural(wc, "word")));
     }
-    render_text.onto(texte, cj.format, text, cj);
-    aftertexte && overlong_truncation_site(texte).append(aftertexte);
-    toggleClass(texte, "emoji-only", emojiregex.test(text));
-}
-
-function cmt_render_preview(evt, format, text, dest) {
-    const cj = cj_find(evt.target) || {};
-    cmt_render_text(dest, {object: "comment", format: format, text: text, response: cj.response}, null);
-    return false;
+    toggleClass(texte, "emoji-only", emojiregex.test(cj.text || ""));
 }
 
 function add_comment(cj, editing) {
@@ -8147,8 +8365,8 @@ function add_new_comment_button(cj, cid) {
     }
     let eactions = $$("k-comment-actions");
     if (!eactions) {
-        eactions = $e("div", {id: "k-comment-actions", class: "pcard cmtcard"}, $e("div", "aab aabig"));
-        $(".pcontainer").append(eactions);
+        eactions = $e("div", {id: "k-comment-actions", class: "pcard s-comment"}, $e("div", "aab aabig"));
+        $(".s-paper").append(eactions);
     }
     const rname = cj.response && (cj.response == "1" ? "response" : cj.response + " response"),
         ebutton = $e("div", "aabut",
@@ -8167,23 +8385,11 @@ function add_new_comment_button(cj, cid) {
 }
 
 function add_new_comment(cj, cid) {
-    document.querySelector(".pcontainer").insertBefore($e("article", {
-        id: cid, class: "pcard cmtcard cmtid comment view need-anchor-unfold has-fold ".concat(cj.collapsed ? "fold20c" : "fold20o", cj.editable ? " editable" : "")
+    const particle = (cj.pid && document.getElementById("p" + cj.pid))
+        || document.querySelector(".s-paper");
+    particle.insertBefore($e("article", {
+        id: cid, class: "pcard s-comment comment view need-anchor-unfold has-fold ".concat(cj.collapsed ? "fold20c" : "fold20o", cj.editable ? " editable" : "")
     }), $$("k-comment-actions"));
-    if (!cj.is_new && !cj.response) {
-        if (cj.viewer_owned && cj.modified_at > last_topic_viewer_time) {
-            last_topic = cj.topic || "rev";
-            last_topic_viewer = true;
-            last_topic_viewer_time = cj.modified_at;
-        } else if (!last_topic_viewer) {
-            last_topic = cj.topic || "rev";
-        }
-        if (cj.viewer_owned) {
-            last_visibility = cj.visibility;
-        } else if (cj.visibility !== "au") {
-            last_visibility = cj.visibility === "admin" ? "rev" : cj.visibility;
-        }
-    }
 }
 
 function cmt_sidebar_content(item) {
@@ -8261,39 +8467,42 @@ hotcrp.set_response_round = function (rname, rinfo) {
 })(jQuery);
 
 handle_ui.on("js-overlong-expand", function () {
-    var e = this.closest(".has-overlong");
+    const e = this.closest(".has-overlong");
     addClass(e, "overlong-expanded");
     removeClass(e, "overlong-collapsed");
+    const col = e.closest(".force-expanded");
+    col && $(col).trigger("foldtoggle");
 });
 
 
 // previewing
 (function ($) {
 function switch_preview(evt) {
-    var $j = $(this).parent(), $ta;
-    while ($j.length && ($ta = $j.find("textarea")).length == 0)
-        $j = $j.parent();
-    if ($ta.length) {
-        $ta = $ta.first();
-        if ($ta.is(":visible")) {
-            var format = +this.getAttribute("data-format");
-            $ta.addClass("hidden");
-            $ta.after('<div class="preview"><div class="preview-border" style="margin-bottom:6px"></div><div></div><div class="preview-border" style="margin-top:6px"></div></div>');
-            $ta.trigger("hotcrprenderpreview", [format, $ta[0].value, $ta[0].nextSibling.firstChild.nextSibling]);
-            this.innerHTML = "Edit";
+    let pe = this.parentElement, ta;
+    while (pe && !(ta = pe.querySelector("textarea"))) {
+        pe = pe.parentElement;
+    }
+    if (ta) {
+        if ($(ta).is(":visible")) {
+            const format = +this.getAttribute("data-format");
+            ta.hidden = true;
+            ta.after($e("div", "preview", $e("div", "preview-content")));
+            render_with_overlong(ta.nextSibling.firstChild, ta.value, {
+                format: ta.hasAttribute("data-format") && ta.getAttribute("data-format"),
+                wl: ta.hasAttribute("data-wordlimit") && +ta.getAttribute("data-wordlimit"),
+                hwl: ta.hasAttribute("data-hard-wordlimit") && +ta.getAttribute("data-hard-wordlimit")
+            });
+            this.textContent = "Edit";
         } else {
-            $ta.next().remove();
-            $ta.removeClass("hidden");
-            $ta[0].focus();
-            this.innerHTML = "Preview";
+            ta.nextSibling.remove();
+            ta.hidden = false;
+            ta.focus();
+            this.textContent = "Preview";
         }
     }
     evt.preventDefault();
     handle_ui.stopPropagation(evt);
 }
-$(document).on("hotcrprenderpreview", function (evt, format, value, dest) {
-    render_text.onto(dest, format, value);
-});
 handle_ui.on("js-togglepreview", switch_preview);
 })($);
 
@@ -8332,11 +8541,11 @@ function nextprev_shortcut(evt) {
         jqdir = key === "n" ? "first" : "last";
     if (hash
         && (ctr = document.getElementById(hash))
-        && (hasClass(ctr, "cmtcard") || hasClass(ctr, "revcard"))) {
+        && (hasClass(ctr, "s-comment") || hasClass(ctr, "s-review"))) {
         for (walk = ctr[siblingdir]; walk && !walk.hasAttribute("id"); walk = walk[siblingdir]) {
         }
     } else {
-        walk = $(".revcard[id], .cmtid")[jqdir]()[0];
+        walk = $(".s-review[id], .s-comment[id]")[jqdir]()[0];
     }
     if (walk && walk.hasAttribute("id"))
         location.hash = "#" + walk.getAttribute("id");
@@ -8349,8 +8558,8 @@ function make_selector_shortcut(type) {
             || $(e).find("input[type=text]")[0];
     }
     function end(evt) {
-        var e = $$("fold" + type);
-        e.className = e.className.replace(/ psfocus\b/g, "");
+        var e = $$("fold" + type) || $$("s-" + type);
+        removeClass(e, "s-ps-focus");
         e = find(e);
         e.removeEventListener("blur", end, false);
         e.removeEventListener("change", end, false);
@@ -8358,9 +8567,9 @@ function make_selector_shortcut(type) {
             this.blur();
     }
     return function (evt) {
-        var e = $$("fold" + type);
+        var e = $$("fold" + type) || $$("s-" + type);
         if (e) {
-            e.className += " psfocus";
+            addClass(e, "s-ps-focus");
             foldup.call(e, null, {open: true});
             $(e).scrollIntoView();
             if ((e = find(e))) {
@@ -8574,9 +8783,45 @@ demand_load.mail_templates = demand_load.make(function (resolve) {
 
 demand_load.mentions = demand_load.make(function (resolve) {
     $.get(hoturl("api/mentioncompletion", {p: siteinfo.paperid}), null, function (v) {
-        var tlist = ((v && v.mentioncompletion) || []).map(completion_item);
-        tlist.sort(function (a, b) { return strnatcasecmp(a.s, b.s); });
-        resolve(tlist);
+        // The `mentioncompletion` list may contain different priorities and
+        // duplicate names. First we look for duplicates
+        let tlist = ((v && v.mentioncompletion) || []).map(completion_item);
+        let need_filter = false, need_prisort = false;
+        tlist.sort(function (a, b) {
+            const apri = a.pri || 0, bpri = b.pri || 0;
+            if (apri !== bpri) {
+                need_prisort = true;
+            }
+            const scmp = strnatcasecmp(a.s, b.s);
+            if (scmp !== 0) {
+                return scmp;
+            }
+            need_filter = true;
+            return apri < bpri ? 1 : (apri > bpri ? -1 : 0);
+        });
+        if (!need_filter && !need_prisort) {
+            resolve(tlist);
+            return;
+        }
+        // Filter duplicates if necessary and sort by priority
+        let nlist;
+        if (need_filter) {
+            nlist = [];
+            let last = null;
+            for (const it of tlist) {
+                if (last && last.s === it.s) {
+                    continue;
+                }
+                nlist.push((last = it));
+            }
+        } else {
+            nlist = tlist;
+        }
+        nlist.sort(function (a, b) { // rely on stable sort
+            const apri = a.pri || 0, bpri = b.pri || 0;
+            return apri < bpri ? 1 : (apri > bpri ? -1 : 0);
+        });
+        resolve(nlist);
     });
 });
 
@@ -8765,6 +9010,7 @@ function CompletionSpan(value, indexPos) {
     this.limitReplacement = false; // After completion, replace only the edit
                                 // region and any subsequent characters that
                                 // match the chosen replacement
+    this.visiblePriority = false;  // Dim items with priority <= 0
 }
 
 CompletionSpan.at = function (elt) {
@@ -8839,6 +9085,7 @@ CompletionSpan.prototype.filter = function (tlist) {
     // * `item.r`: Replacement text (defaults to `item.s`).
     // * `item.ml`: Integer. Ignore this item if it doesn’t match
     //   the first `item.ml` characters of the match region.
+    // * `item.pri`: Integer priority; higher is more important.
     // Shorthand:
     // * A string `item` sets `item.s`.
     // * A two-element array `item` sets `item.s` and `item.d`, respectively.
@@ -8877,32 +9124,31 @@ CompletionSpan.prototype.filter = function (tlist) {
         const text = titem.s,
             ltext = caseSensitive ? text : text.toLowerCase(),
             rl = titem.ml || 0;
-
-        if ((filter === null || ltext.startsWith(filter))
-            && (rl <= rlbound
-                || (lregion.length >= rl
-                    && lregion.startsWith(ltext.substr(0, rl))))
-            && (last_text === null || last_text !== text)) {
-            if (can_highlight
-                && ltext.startsWith(lregion)
-                && (best === null
-                    || (titem.pri || 0) > (res[best].pri || 0)
-                    || ltext.length === lregion.length)) {
-                best = res.length;
-                if (titem.hl_length
-                    && lregion.length < titem.hl_length
-                    && titem.shorter_hl) {
-                    best = 0;
-                    while (best < res.length && res[best].s !== titem.shorter_hl) {
-                        ++best;
-                    }
+        if ((last_text !== null && last_text === text)
+            || (filter !== null && !ltext.startsWith(filter))
+            || (rl > rlbound && lregion.length < rl)
+            || (rl > rlbound && !lregion.startsWith(ltext.substr(0, rl)))) {
+            continue;
+        }
+        if (can_highlight
+            && ltext.startsWith(lregion)
+            && (best === null
+                || (titem.pri || 0) > (res[best].pri || 0)
+                || ltext.length === lregion.length)) {
+            best = res.length;
+            if (titem.hl_length
+                && lregion.length < titem.hl_length
+                && titem.shorter_hl) {
+                best = 0;
+                while (best < res.length && res[best].s !== titem.shorter_hl) {
+                    ++best;
                 }
             }
-            res.push(titem);
-            last_text = text;
-            if (res.length === this.maxItems) {
-                break;
-            }
+        }
+        res.push(titem);
+        last_text = text;
+        if (res.length === this.maxItems) {
+            break;
         }
     }
     if (res.length === 0) {
@@ -8967,9 +9213,12 @@ function suggest() {
         }
     }
 
-    function render_item(titem, prepend) {
+    function render_item(titem, prepend, visiblePriority) {
         const node = document.createElement("div");
         node.className = titem.no_space ? "suggestion s9nsp" : "suggestion";
+        if (visiblePriority && (titem.pri || 0) <= 0) {
+            node.className += " s9lopri";
+        }
         if (titem.r) {
             node.setAttribute("data-replacement", titem.r);
         }
@@ -9075,7 +9324,7 @@ function suggest() {
             div = document.createElement("div");
             div.className = "suggesttable suggesttable" + (i + 1);
             for (const cliste of clist) {
-                div.appendChild(render_item(cliste, cspan.prefix));
+                div.appendChild(render_item(cliste, cspan.prefix, cspan.visiblePriority));
             }
             hintdiv.html(div);
         } else {
@@ -9480,7 +9729,7 @@ hotcrp.suggest.add_builder("mentions", function (elt, hintinfo) {
     cs.matchRight(/(?:[\p{L}\p{M}\p{N}]|[-.](?=\p{L}))*/uy);
     cs.prefix = "@";
     cs.minLength = Math.min(2, cs.indexPos - cs.startPos);
-    cs.smartPunctuation = cs.limitReplacement = true;
+    cs.smartPunctuation = cs.limitReplacement = cs.visiblePriority = true;
     let prom = demand_load.mentions();
     const vise = elt.form.elements.visibility;
     if (vise && vise.value === "admin") {
@@ -9735,7 +9984,7 @@ Hotlist.prototype.resolve = function () {
     }
     return this;
 };
-Hotlist.prototype.cookie_at = function (pid) {
+Hotlist.prototype.cookie_at = function () {
     this.resolve();
     let digest;
     if (this.str.length <= 1500
@@ -9747,14 +9996,6 @@ Hotlist.prototype.cookie_at = function (pid) {
     const x = Object.assign({digest: "listdigest" + digest}, this.obj);
     delete x.ids;
     delete x.sorted_ids;
-    let ids, pos;
-    if (pid
-        && (ids = this.ids())
-        && (pos = $.inArray(pid, ids)) >= 0) {
-        x.curid = pid;
-        x.previd = pos > 0 ? ids[pos - 1] : false;
-        x.nextid = pos < ids.length - 1 ? ids[pos + 1] : false;
-    }
     return JSON.stringify(x);
 };
 Hotlist.prototype.reorder = function (tbody) {
@@ -9802,22 +10043,22 @@ Hotlist.prototype.id_search = function () {
     this.obj.sorted_ids = encode_session_list_ids(ids);
     return "pidcode:" + this.obj.sorted_ids;
 };
-function set_cookie(info, pid) {
+function set_cookie(info) {
     const p = hoturl_cookie_params();
     if (cookie_set_at) {
         document.cookie = "hotlist-info-".concat(cookie_set_at, "=; Max-Age=0", p);
     }
     cookie_set_at = now_msec();
-    document.cookie = "hotlist-info-".concat(cookie_set_at, "=", encodeURIComponent(info.cookie_at(pid)), "; Max-Age=20", p);
+    document.cookie = "hotlist-info-".concat(cookie_set_at, "=", encodeURIComponent(info.cookie_at()), "; Max-Age=20", p);
 }
 function is_listable(sitehref) {
     return /^(?:paper|review|assign|profile)(?:|\.php)\//.test(sitehref);
 }
 function handle_list(e, href) {
-    let sitehref, hl, info;
+    let hl, info;
     if (href
         && href.substring(0, siteinfo.site_relative.length) === siteinfo.site_relative
-        && is_listable((sitehref = href.substring(siteinfo.site_relative.length)))
+        && is_listable(href.substring(siteinfo.site_relative.length))
         && (hl = e.closest(".has-hotlist"))
         && (info = Hotlist.at(hl)).str) {
         if (hl.tagName === "TABLE"
@@ -9826,8 +10067,7 @@ function handle_list(e, href) {
             && document.getElementById("p-footer"))
             // Existence of `#p-footer` checks that the table is fully loaded
             info.reorder(hl.tBodies[0]);
-        let m = /^[^/]*\/(\d+)(?:$|[a-zA-Z]*\/|\?)/.exec(sitehref);
-        set_cookie(info, m ? +m[1] : null);
+        set_cookie(info);
     }
 }
 function unload_list() {
@@ -9907,9 +10147,7 @@ function default_click(evt) {
 }
 
 $(document).on("click", "a", function (evt) {
-    if (hasClass(this, "fn5")) {
-        foldup.call(this, evt, {n: 5, open: true});
-    } else if (!hasClass(this, "ui")) {
+    if (!hasClass(this, "ui")) {
         if (!event_key.is_default_a(evt)
             || this.target
             || !default_click.call(this, evt))
@@ -9927,57 +10165,44 @@ $(document).on("submit", "form", function (evt) {
 
 $(window).on("beforeunload", unload_list);
 
-$(function () {
+hotcrp.add_quicklinks = function () {
     // resolve list digests
     if (document.body.hasAttribute("data-hotlist")) {
         document.body.setAttribute("data-hotlist", Hotlist.at(document.body).resolve().str);
     }
     // having resolved digests, insert quicklinks
-    if (siteinfo.paperid
-        && !$$("n-prev")
-        && !$$("n-next")) {
-        $(".quicklinks").each(function () {
-            var info = Hotlist.at(this.closest(".has-hotlist")), ids, pos, page, mode;
-            try {
-                mode = JSON.parse(this.getAttribute("data-link-params") || "{}");
-            } catch (e) {
-                mode = {};
-            }
-            page = mode.page || "paper";
-            delete mode.page;
-            if ((ids = info.ids())
-                && (pos = $.inArray(siteinfo.paperid, ids)) >= 0) {
-                if (pos > 0) {
-                    mode.p = ids[pos - 1];
-                    this.prepend($e("a", {id: "n-prev", class: "ulh", href: hoturl(page, mode)}, "< #" + ids[pos - 1]), " ");
-                }
-                if (pos < ids.length - 1) {
-                    mode.p = ids[pos + 1];
-                    this.append(" ", $e("a", {id: "n-next", class: "ulh", href: hoturl(page, mode)}, "#" + ids[pos + 1] + " >"));
-                }
-            }
-        });
+    const ql = $$("n-quicklinks");
+    if (!ql || $$("n-prev") || $$("n-next")) {
+        return;
     }
-});
+    let info = Hotlist.at(ql.closest(".has-hotlist")), mode, k;
+    try {
+        mode = JSON.parse(ql.getAttribute("data-link-params") || "{}");
+    } catch (e) {
+        mode = {};
+    }
+    const page = mode.page || "paper";
+    if (page === "profile") {
+        k = "u";
+    } else {
+        k = "p";
+    }
+    const id = +ql.getAttribute("data-qlid");
+    if (!id) {
+        return;
+    }
+    delete mode.page;
+    const ids = info.ids(), pos = $.inArray(id, ids || []);
+    if (pos > 0) {
+        mode[k] = ids[pos - 1];
+        ql.prepend($e("a", {id: "n-prev", class: "ulh", href: hoturl(page, mode)}, k === "u" ? "<" : "< #" + ids[pos - 1]), " ");
+    }
+    if (pos >= 0 && pos < ids.length - 1) {
+        mode[k] = ids[pos + 1];
+        ql.append(" ", $e("a", {id: "n-next", class: "ulh", href: hoturl(page, mode)}, k === "u" ? ">" : "#" + ids[pos + 1] + " >"));
+    }
+};
 })($);
-
-function hotlist_search_params(x, ids) {
-    x = x instanceof HTMLElement ? Hotlist.at(x) : new Hotlist(x);
-    let m;
-    if (!x || !x.obj || !x.obj.ids
-        || !(m = x.obj.listid.match(/^p\/(.*?)\/(.*?)(?:$|\/)(.*)/))) {
-        return false;
-    }
-
-    const q = {q: ids ? x.id_search() : urldecode(m[2]), t: m[1] || "s"};
-    if (m[3]) {
-        for (const arg of m[3].split(/[&;]/)) {
-            const pos = arg.indexOf("=");
-            q[arg.substr(0, pos)] = urldecode(arg.substr(pos + 1));
-        }
-    }
-    return q;
-}
 
 handle_ui.on("click.js-sq", function () {
     removeClass(this, "js-sq");
@@ -10143,18 +10368,22 @@ function row_tagvalue(row, tag) {
 
 
 function tagannorow_fill(row, anno) {
-    if (!anno.blank) {
-        if (anno.tag && anno.annoid) {
-            row.setAttribute("data-tags", anno.tag + "#" + anno.tagval);
-        } else {
-            row.removeAttribute("data-tags");
-        }
-        var legend = anno.legend === null ? "" : anno.legend,
-            $g = $(row).find(".plheading-group").attr({"data-format": anno.format || 0, "data-title": legend});
-        $g.text(legend).toggleClass("pr-2", legend !== "");
-        anno.format && render_text.into($g[0]);
-        // `plheading-count` is taken care of in `tablelist_postreorder`
+    if (anno.blank) {
+        return;
     }
+    if (anno.tag && anno.annoid) {
+        row.setAttribute("data-tags", anno.tag + "#" + anno.tagval);
+    } else {
+        row.removeAttribute("data-tags");
+    }
+    const legend = anno.legend === null ? "" : anno.legend,
+        g = row.querySelector(".plheading-group");
+    g.setAttribute("data-format", anno.format || 0);
+    g.setAttribute("data-title", legend);
+    g.replaceChildren(legend);
+    toggleClass(g, "pr-2", legend !== "");
+    anno.format && render_text.into(g);
+    // `plheading-count` is taken care of in `tablelist_postreorder`
 }
 
 function tagannorow_add(tfacet, tbody, before, anno) {
@@ -10423,7 +10652,7 @@ function tablelist_apply(tbl, data, searchp) {
 }
 
 function tablelist_load(tbl, k, v) {
-    let searchp = new URLSearchParams(tablelist_search(tbl));
+    const searchp = new URLSearchParams(tablelist_search(tbl));
     k && searchp.set(k, v != null ? v : "");
     function history_success(data) {
         const url = make_URL(window.location.href);
@@ -10573,10 +10802,11 @@ function make_gapf() {
 }
 
 function taganno_success(rv) {
-    if (!rv.ok)
+    if (!rv.ok) {
         return;
+    }
     $(".pltable").each(function () {
-        var tblsort = hoturl_search(tablelist_search(this), "sort");
+        var tblsort = hoturl_search("?" + tablelist_search(this), "sort");
         if (!tblsort || strcasecmp_id(tblsort, "#" + rv.tag) !== 0) {
             return;
         }
@@ -10655,7 +10885,7 @@ handle_ui.on("js-annotate-order", function () {
                 legend: legend
             };
             if (deleted) {
-                anno.deleted = true;
+                anno["delete"] = true;
             } else if (need_session) {
                 anno.session_title = form.elements[pfx + "session_title"].value;
                 anno.time = form.elements[pfx + "time"].value;
@@ -10735,7 +10965,7 @@ handle_ui.on("js-annotate-order", function () {
                 type: "button",
                 class: "ml-2 need-tooltip js-delete-ta",
                 "aria-label": "Delete annotation"
-            }, $svg_use_licon("trash")),
+            }, $svg_use_licon("trash", "m")),
             fieldset = $e("fieldset", "mt-3 mb-2",
                 $e("legend", null,
                     "#" + dtag + "#",
@@ -10784,17 +11014,20 @@ handle_ui.on("js-annotate-order", function () {
 
 function make_tag_save_callback(elt) {
     return function (rv) {
-        if (elt)
+        if (elt) {
             minifeedback(elt, rv);
+        }
         if (rv.ok) {
             var focus = document.activeElement;
             $(window).trigger("hotcrptags", [rv]);
             focus && focus.focus();
+        } else if (elt.type === "checkbox" || elt.type === "radio") {
+            elt.checked = elt.defaultChecked;
         }
     };
 }
 
-handle_ui.on("edittag", function (evt) {
+handle_ui.on("js-plist-tag", function (evt) {
     var key = null, m, ch, newval;
     if (evt.type === "keydown" && event_key.modcode(evt) === 0) {
         key = event_key(evt);
@@ -10804,7 +11037,12 @@ handle_ui.on("edittag", function (evt) {
         || key === "Enter") {
         m = this.name.match(/^tag:(\S+) (\d+)$/);
         if (this.type === "checkbox") {
-            ch = this.checked ? m[1] : m[1] + "#clear";
+            ch = m[1];
+            if (!this.checked) {
+                ch += "#clear";
+            } else if (this.value !== "" && this.value !== "x") {
+                ch += "#" + this.value;
+            }
         } else if ((newval = tagvalue_parse(this.value)) !== null) {
             ch = m[1].concat("#", newval !== false ? newval : "clear");
         } else {
@@ -10812,7 +11050,7 @@ handle_ui.on("edittag", function (evt) {
             return;
         }
         $.post(hoturl("=api/tags", {p: m[2], forceShow: 1}),
-            {addtags: ch, search: tablelist_search(tablelist(this))},
+            {add_tags: ch, search: tablelist_search(tablelist(this))},
             make_tag_save_callback(this));
     } else if (key === "ArrowDown" || key === "ArrowUp") {
         var tr = this.closest("tr"), td = this.closest("td"), prop, e;
@@ -10822,7 +11060,7 @@ handle_ui.on("edittag", function (evt) {
             }
             if (tr
                 && (td = tr.cells[td.cellIndex])
-                && (e = td.querySelector("input.edittag"))) {
+                && (e = td.querySelector("input.js-plist-tag"))) {
                 focus_and_scroll_into_view(e, key === "ArrowDown");
             }
         }
@@ -11100,7 +11338,7 @@ Assign_DraggableTable.prototype.commit = function () {
         doassignlist(as, this.assigninfo[newidx], srcra.id, "enter");
     }
     if (!as.empty) {
-        $.post(hoturl("=api/assign", {}),
+        $.post(hoturl("=api/assign", {format: "none"}),
             {assignments: JSON.stringify(as), search: tablelist_search(this.tablelist)},
             function (rv) {
                 if (rv.ok && rv.valid !== false) {
@@ -11203,7 +11441,7 @@ Assign_DraggableTable.prototype.commit = function () {
 
         // create dragger
         if (!dragger) {
-            dragger = make_bubble({class: "prowdrag dark", anchor: "w!*"});
+            dragger = make_bubble({class: "prowdrag", anchor: "w!*"});
             window.disable_tooltip = true;
         }
 
@@ -11217,7 +11455,7 @@ Assign_DraggableTable.prototype.commit = function () {
             y = rowanal.rs[rowanal.rs.length - 1].bottom();
         dragger.html(rowanal.content())
             .at(rowanal.rs[rowanal.srcindex].left() + 36, y)
-            .className("prowdrag dark" + (rowanal.srcindex === rowanal.dragindex ? " unchanged" : ""));
+            .className("prowdrag" + (rowanal.srcindex === rowanal.dragindex ? " unchanged" : ""));
     }
 
     function prowdrag_mousedown(evt) {
@@ -11316,11 +11554,11 @@ handle_ui.on("js-expand-archive", function (evt) {
         sp.className = "archiveexpansion fx";
         ar.appendChild(sp);
         const params = parse_docurl(ax.href);
-        params.set("consolidated", 1);
-        $.ajax(hoturl("api/archivelisting", params.toString()), {
+        params.set("summary", 1);
+        $.ajax(hoturl("api/archivecontents", params.toString()), {
             method: "GET", success: function (data) {
-                if (data.ok && data.consolidated_listing)
-                    sp.textContent = " (" + data.consolidated_listing + ")";
+                if (data.ok && data.archive_contents_summary)
+                    sp.textContent = " (" + data.archive_contents_summary + ")";
             }
         });
     }
@@ -11331,14 +11569,24 @@ handle_ui.on("js-expand-archive", function (evt) {
 function check_version(url, versionstr) {
     var x;
     function updateverifycb(json) {
-        var e;
-        if (json && json.messages && (e = $$("h-messages")))
-            e.innerHTML = json.messages + e.innerHTML;
+        let e;
+        if (!json
+            || !json.message_list
+            || json.message_list.length === 0
+            || !(e = $$("h-messages"))) {
+            return;
+        }
+        const a = feedback.render_alert(json.message_list);
+        if (hasClass(e, "want-mx-auto")) {
+            addClass(a, "mx-auto");
+        }
+        e.prepend(a);
     }
     function updatecb(json) {
         if (json && json.updates && window.JSON)
-            jQuery.get(siteinfo.site_relative + "checkupdates.php",
-                       {data: JSON.stringify(json)}, updateverifycb);
+            jQuery.post(siteinfo.site_relative + "checkupdates.php",
+                        {data: JSON.stringify(json), post: siteinfo.postvalue},
+                        updateverifycb);
         else if (json && json.status)
             hotcrp.wstorage.site(false, "hotcrp_version_check", {at: now_msec(), version: versionstr});
     }
@@ -11354,9 +11602,12 @@ function check_version(url, versionstr) {
         jsonp: false, global: false, success: updatecb
     });
     handle_ui.on("js-check-version-ignore", function () {
-        var id = $(this).data("versionId");
-        $.post(siteinfo.site_relative + "checkupdates.php", {ignore: id, post: siteinfo.postvalue});
-        $("#softwareupdate_" + id).hide();
+        $.post(siteinfo.site_relative + "checkupdates.php", {ignore: this.getAttribute("data-errid"), post: siteinfo.postvalue});
+        const fl = this.closest("ul");
+        this.closest("li").remove();
+        if (!fl.firstChild) {
+            fl.closest(".msg").remove();
+        }
     });
 }
 
@@ -11703,13 +11954,13 @@ handle_ui.on("js-plinfo-edittags", function () {
             return;
         const elt = $e("div", "d-inline-flex",
             $e("div", "mf mf-text w-text",
-                $e("textarea", {name: "tags " + rv.pid, cols: 120, rows: 1, class: "want-focus need-suggest editable-tags suggest-emoji-codes w-text", style: "vertical-align:-0.5rem", "data-tooltip-anchor": "v", "id": "tags " + rv.pid, "spellcheck": "false"})),
+                $e("textarea", {name: "tags " + rv.pid, cols: 120, rows: 1, class: "want-focus need-suggest editable-tags suggest-emoji-codes w-text", style: "vertical-align:-0.5rem", "data-tooltip-anchor": "v", "id": "tags " + rv.pid, spellcheck: "false"}, rv.tags_edit_text)),
             $e("button", {type: "button", name: "tagsave " + rv.pid, class: "btn-primary ml-2"}, "Save"),
             $e("button", {type: "button", name: "tagcancel " + rv.pid, class: "ml-2"}, "Cancel"));
         set_pidfield(plistui.fields.tags, pidfe, elt);
         ta = pidfe.querySelector("textarea");
         hotcrp.suggest.call(ta);
-        $(ta).val(rv.tags_edit_text).autogrow()
+        $(ta).autogrow()
             .on("keydown", make_onkey("Enter", do_submit))
             .on("keydown", make_onkey("Escape", do_cancel));
         $(pidfe).find("button[name^=tagsave]").click(do_submit);
@@ -11717,13 +11968,16 @@ handle_ui.on("js-plinfo-edittags", function () {
         focus_within(pidfe);
     }
     function do_submit() {
-        var tbl = tablelist(pidfe);
-        $.post(hoturl("=api/tags", {p: pid, forceShow: 1}),
-            {tags: $(ta).val(), search: tbl ? tablelist_search(tbl) : null},
-            function (rv) {
-                minifeedback(ta, rv);
-                rv.ok && $(window).trigger("hotcrptags", [rv]);
-            });
+        const tbl = tablelist(pidfe);
+        $.post(hoturl("=api/tags", {p: pid, forceShow: 1}), {
+            add_tags: hotcrp.parse_tags.delta(ta.defaultValue, ta.value).join(" "),
+            search: tbl ? tablelist_search(tbl) : null
+        }, function (rv) {
+            minifeedback(ta, rv);
+            if (rv.ok) {
+                $(window).trigger("hotcrptags", [rv]);
+            }
+        });
     }
     function do_cancel() {
         var focused = document.activeElement
@@ -12032,16 +12286,19 @@ function plinfo(plistui, type, hidden, form) {
         }
     }
 
-    const pctr = plistui.pltable;
-    let ses = pctr.getAttribute("data-fold-session-prefix");
+    const tbl = plistui.pltable;
+    let ses = tbl.getAttribute("data-fold-session-prefix");
     if (need_load) {
-        const loadargs = {f: load_type, format: "html"};
+        const searchp = new URLSearchParams(tablelist_search(tbl));
+        searchp.set("f", load_type);
+        searchp.set("format", "html");
+        searchp.set("q", Hotlist.at(tbl).id_search());
+        searchp.delete("sort");
         if (ses) {
-            loadargs.session = plinfo_session(ses, type, hidden, form);
+            searchp.set("session", plinfo_session(ses, type, hidden, form));
             ses = null;
         }
-        $.get(hoturl("=api/search", $.extend(loadargs, hotlist_search_params(pctr, true))),
-              make_callback(plistui, type));
+        $.get(hoturl("=api/search", searchp), make_callback(plistui, type));
     } else if (hidden !== (!f || f.missing || f.hidden)) {
         fold_field(plistui, f, hidden);
         check_statistics(plistui);
@@ -12113,7 +12370,10 @@ function plist_hotcrptags(plistui, rv) {
 }
 
 $(window).on("hotcrptags", function (evt, rv) {
-    $(".need-plist").each(make_plist);
+    if (rv.ok) {
+        $(".need-plist").each(make_plist);
+        hotcrp.update_banners();
+    }
     if (rv.ids) {
         for (const plist of all_plists) {
             paperlist_tag_ui.try_reorder(plist.pltable, rv);
@@ -12127,11 +12387,6 @@ $(window).on("hotcrptags", function (evt, rv) {
         for (const paper of rv.papers) {
             $(window).trigger("hotcrptags", [paper]);
         }
-    } else if (rv.p) /* backward compat */ {
-        for (const i in rv.p) {
-            rv.p[i].pid = +i;
-            $(window).trigger("hotcrptags", [rv.p[i]]);
-        }
     }
 });
 
@@ -12143,10 +12398,22 @@ function change_color_classes(isconflicted) {
     };
 }
 
-function fold_override(tbl, dofold) {
+function fold_override(forcer, tbl, dofold) {
+    const formset = forcer.closest(".form-search-set");
+    for (const f of formset ? formset.querySelectorAll("form.form-search") : []) {
+        let fs = f.elements.forceShow;
+        if (fs === forcer) {
+            // do nothing
+        } else if (!dofold) {
+            fs || f.appendChild((fs = hidden_input("forceShow", "1")));
+            fs.value = "1";
+        } else if (fs) {
+            fs.id ? fs.value = "0" : fs.remove();
+        }
+    }
+    fold(tbl, dofold, 5);
+    tbl.closest("form").elements.forceShow.value = dofold ? "0" : "1";
     $(function () {
-        fold(tbl, dofold, 5);
-        $("#forceShow").val(dofold ? 0 : 1);
         // remove local hoverrides
         if (hasClass(tbl, "has-local-override")) {
             removeClass(tbl, "has-local-override");
@@ -12196,7 +12463,7 @@ handle_ui.on("change.js-plinfo", function (evt) {
         throw new Error("bad plinfo");
     }
     if (fname === "force") {
-        fold_override(plistui.pltable, hidden);
+        fold_override(this, plistui.pltable, hidden);
     } else if (fname === "rownum") {
         fold(plistui.pltable, hidden, 6);
     } else if (fname === "anonau") {
@@ -12234,7 +12501,7 @@ hotcrp.update_tag_decoration = function ($title, html) {
 
 /* pattern fill functions */
 var ensure_pattern = (function () {
-var fmap = {},
+let fmap = {},
     knownmap = {
         "tag-white": true, "tag-red": true, "tag-orange": true, "tag-yellow": true,
         "tag-green": true, "tag-blue": true, "tag-purple": true, "tag-gray": true,
@@ -12279,11 +12546,7 @@ function make_color(k, r, g, b, a) {
     } else {
         h = 240 + 60 * (rx - gx) / cx;
     }
-    if (l <= 0.00001 || l >= 0.99999) {
-        s = 0;
-    } else {
-        s = (vx - l) / Math.min(l, 1 - l);
-    }
+    s = vx <= 0.00001 ? 0 : cx / vx;
 
     return {
         k: k,
@@ -12296,22 +12559,23 @@ function make_color(k, r, g, b, a) {
         l: l,
         has_graph: false,
         gfill: null,
+        light: null,
         type: null
     };
 }
 function color_compare(a, b) {
-    if (a.s < 0.1 && b.s >= 0.1)
+    if (a.s < 0.1 && b.s >= 0.1) {
         return a.l >= 0.9 ? -1 : 1;
-    else if (b.s < 0.1 && a.s >= 0.1)
+    } else if (b.s < 0.1 && a.s >= 0.1) {
         return b.l >= 0.9 ? 1 : -1;
-    else if (a.h != b.h)
+    } else if (a.h != b.h) {
         return a.h < b.h ? -1 : 1;
-    else if (a.l != b.l)
+    } else if (a.l != b.l) {
         return a.l < b.l ? 1 : -1;
-    else
-        return a.s < b.s ? 1 : (a.s == b.s ? 0 : -1);
+    }
+    return a.s < b.s ? 1 : (a.s == b.s ? 0 : -1);
 }
-const class_analyses = {tagbg: null, dark: null, badge: null};
+const class_analyses = {tagbg: null, badge: null};
 function analyze_class(k) {
     if (k in class_analyses) {
         return class_analyses[k];
@@ -12323,14 +12587,15 @@ function analyze_class(k) {
     let m;
     if (k.startsWith("tag-rgb-")
         && (m = k.match(/^tag-rgb-([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/))) {
-        const c = make_color(k, parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1.0);
-        ensure_stylesheet().insertRule(".".concat(k, " { background-color: rgb(", c.r, ", ", c.g, ", ", c.b, "); }"), 0);
+        const c = make_color(k, parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1.0),
+            scheme = c.l < 0.3 ? " color-scheme: dark;" : "";
+        ensure_stylesheet().insertRule(`.${k} { background-color: rgb(${c.r}, ${c.g}, ${c.b});${scheme} }`, 0);
         return set("bg", c);
     }
     if (k.startsWith("tag-text-rgb-")
         && (m = k.match(/^tag-text-rgb-([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/))) {
         const c = make_color(k, parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1.0);
-        ensure_stylesheet().insertRule(".".concat(k, " { color: rgb(", c.r, ", ", c.g, ", ", c.b, "); }"), 0);
+        ensure_stylesheet().insertRule(`.${k} { color: rgb(${c.r}, ${c.g}, ${c.b}); --text: rgb(${c.r}, ${c.g}, ${c.b}); --tag-text: rgb(${c.r}, ${c.g}, ${c.b}); }`, 0);
         return set("text", c);
     }
     if (k.startsWith("tag-dot-rgb-")
@@ -12340,54 +12605,68 @@ function analyze_class(k) {
     if (k.startsWith("tag-font-")) {
         m = k.substring(9).replace(/_/g, " ");
         const ff = /^(?:serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-(?:serif|sans-serif|monospace|rounded)|math|emoji|fangsong)$/.test(m) ? "" : "\"";
-        ensure_stylesheet().insertRule(".".concat(k, ".taghh, .", k, " .taghl { font-family: ", ff, m, ff, "; }"), 0);
+        ensure_stylesheet().insertRule(`.${k}.taghh, .${k} .taghl { font-family: ${ff}${m}${ff}; }`, 0);
         return set();
     }
     if (k.startsWith("tag-weight-")) {
-        ensure_stylesheet().insertRule(".".concat(k, ".taghh, .", k, " .taghl { font-weight: ", k.substring(11), "; }"), 0);
+        ensure_stylesheet().insertRule(`.${k}.taghh, .${k} .taghl { font-weight: ${k.substring(11)}; }`, 0);
         return set();
     }
     if (k.startsWith("badge-rgb-")
         && (m = k.match(/^badge-rgb-([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/))) {
-        const c = make_color(k, parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1.0);
-        var rules = ["background-color: rgb(".concat(c.r, ", ", c.g, ", ", c.b, ");")];
-        if (c.l < 0.3)
-            rules.push("color: white;");
-        else if (c.l < 0.75)
+        const c = make_color(k, parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16), 1.0),
+            rules = [`background-color: rgb(${c.r}, ${c.g}, ${c.b});`];
+        if (c.l < 0.3) {
+            rules.push("color: white;", "color-scheme: dark;");
+        } else if (c.l < 0.75) {
             rules.push("color: #111111;");
-        else {
+        } else {
             rules.push("color: #333333;");
             if (Math.min(c.r, c.g, c.b) > 200)
                 rules.push("border: 1px solid #333333;", "padding: 1px 0.2em 2px;");
         }
         ensure_stylesheet().insertRule(".".concat(k, " { ", rules.join(" "), " }"), 0);
-        if (c.l >= 0.3)
+        if (c.l >= 0.3) {
             ensure_stylesheet().insertRule("a.".concat(k, ":hover { color: #c45500; border-color: #c45500; }"), 0);
+        }
         return set("badge", c);
     }
+    const c = probe_bg(k, "");
+    return c ? set("bg", c) : set();
+}
+function probe_bg(k, scheme) {
     if (testdiv === null) {
         testdiv = document.createElement("div");
         testdiv.style.display = "none";
         document.body.appendChild(testdiv);
     }
-    testdiv.className = k;
-    const value = window.getComputedStyle(testdiv).backgroundColor;
-    if ((m = value.match(/^rgb\(([\d.]+), ([\d.]+), ([\d.]+)\)$/))) {
-        return set("bg", make_color(k, +m[1], +m[2], +m[3], 1.0));
-    } else if ((m = value.match(/^rgba\(([\d.]+), ([\d.]+), ([\d.]+), ([\d.]+)\)$/))
-               && +m[4] > 0) {
-        return set("bg", make_color(k, +m[1], +m[2], +m[3], +m[4]));
-    } else {
-        return set();
+    testdiv.className = k.startsWith("tag-") ? k + " tagbg" : k;
+    testdiv.style.colorScheme = scheme;
+    const value = window.getComputedStyle(testdiv).backgroundColor,
+        m = value.match(/^rgba?\(([\d.]+), ([\d.]+), ([\d.]+)(?:, ([\d.]+))?\)$/);
+    if (m && (m[4] === undefined || +m[4] > 0)) {
+        return make_color(k, +m[1], +m[2], +m[3], m[4] === undefined ? 1.0 : +m[4]);
     }
+    return null;
+}
+function light_color(color) {
+    // graph fills and strokes are always light-scheme
+    if (color.light === null) {
+        const c = /-rgb-/.test(color.k) ? null : probe_bg(color.k, "light");
+        color.light = c !== null
+            && (c.r !== color.r || c.g !== color.g || c.b !== color.b || c.a !== color.a)
+            ? c : color;
+    }
+    return color.light;
 }
 function bgcolor(color) {
-    return "rgba(".concat(color.r, ", ", color.g, ", ", color.b, ", ", color.a, ")");
+    return `rgba(${color.r}, ${color.g}, ${color.b}, ${color.a})`;
 }
 function gfillcolor(color) {
-    if (color.gfill !== null)
+    if (color.gfill !== null) {
         return color.gfill;
-    var r = color.r / 255,
+    }
+    let r = color.r / 255,
         g = color.g / 255,
         b = color.b / 255,
         min = Math.min(r, g, b),
@@ -12410,7 +12689,7 @@ function gfillcolor(color) {
 }
 function fillcolor(color) {
     const gf = gfillcolor(color);
-    return "rgba(".concat(gf[0], ", ", gf[1], ", ", gf[2], ", ", gf[3], ")");
+    return `rgba(${gf[0]}, ${gf[1]}, ${gf[2]}, ${gf[3]})`;
 }
 function strokecolor(color) {
     let gf = gfillcolor(color);
@@ -12418,22 +12697,52 @@ function strokecolor(color) {
         const f = 0.75 / color.l;
         gf = [gf[0] * f, gf[1] * f, gf[2] * f, gf[3]];
     }
-    return "rgba(".concat(gf[0], ", ", gf[1], ", ", gf[2], ", 0.8)");
+    return `rgba(${gf[0]}, ${gf[1]}, ${gf[2]}, 0.8)`;
 }
 function paramcolor(param, color) {
-    return (param.type === 1 ? fillcolor : bgcolor)(color);
+    return param.type === 1 ? fillcolor(light_color(color)) : bgcolor(color);
 }
 function ensure_graph_rules(color) {
     if (!color.has_graph) {
-        var stylesheet = ensure_stylesheet(), k = color.k;
-        stylesheet.insertRule(".gcdf.".concat(k, ", .gdot.", k, ", .gbar.", k, ", .gbox.", k, " { stroke: ", strokecolor(color), "; }"), 0);
-        stylesheet.insertRule(".gdot.".concat(k, ", .gbar.", k, ", .gbox.", k, ", .glab.", k, " { fill: ", fillcolor(color), "; }"), 0);
+        const stylesheet = ensure_stylesheet(), k = color.k, lc = light_color(color);
+        stylesheet.insertRule(`.gcdf.${k}, .gdot.${k}, .gbar.${k}, .gbox.${k} { stroke: ${strokecolor(lc)}; }`, 0);
+        stylesheet.insertRule(`.gdot.${k}, .gbar.${k}, .gbox.${k}, .glab.${k} { fill: ${fillcolor(lc)}; }`, 0);
         color.has_graph = true;
     }
 }
+function compute_scheme(colors, dots) {
+    // choose color scheme by area-weighted mean luminance
+    const darea = dots.length ? (dots.length === 1 ? 8 : 16) * 0.0276 : 0;
+    let lbar = 0, mixed = false;
+    if (colors.length) {
+        for (const c of colors) {
+            lbar += c.l;
+        }
+        lbar = (1 - darea) * (lbar / colors.length);
+    } else {
+        lbar = (1 - darea) * analyze_class("bg-paper").l;
+    }
+    for (const c of dots) {
+        lbar += (darea / dots.length) * c.l;
+    }
+    const dark = lbar < 0.3;
+    let extra = ` color-scheme: ${dark ? "dark" : "light"};`;
+    for (const c of colors.concat(dots)) {
+        mixed = mixed || (dark ? c.l > 0.4 : c.l < 0.4);
+    }
+    if (mixed) {
+        // no scheme suits every stripe; halo the text so it
+        // survives the minority-luminance bands
+        const sc = dark ? "0, 0, 0" : "255, 255, 255";
+        extra += ` text-shadow: 0 0 1px rgba(${sc}, 1), 0 0 3px rgba(${sc}, 0.8);`;
+    } else {
+        extra += ` text-shadow: none;`;
+    }
+    return extra;
+}
 return function (classes, type) {
     if (!classes
-        || (type === "" && classes.endsWith(" tagbg") && knownmap[classes.substr(0, -6)]))
+        || (type === "" && classes.endsWith(" tagbg") && knownmap[classes.slice(0, -6)]))
         return null;
     // quick check on classes in input order
     const param = params[type || ""] || params[""],
@@ -12500,13 +12809,14 @@ return function (classes, type) {
             pelt.appendChild($svg("path", {d: dxs[i], fill: dxs[i + 1]}));
         }
         svgdef.appendChild(pelt);
-    } else if (window.btoa) {
-        const t = ['<svg xmlns="', svgns, '" width="', size, '" height="', size, '">'];
+    } else {
+        const t = [`<svg xmlns="${svgns}" width="${size}" height="${size}">`];
         for (let i = 0; i !== dxs.length; i += 2) {
-            t.push('<path d="', dxs[i], '" fill="', dxs[i + 1], '"></path>');
+            t.push(`<path d="${dxs[i]}" fill="${dxs[i + 1]}"></path>`);
         }
         t.push('</svg>');
-        ensure_stylesheet().insertRule(".".concat(tags.join("."), " { background-image: url(data:image/svg+xml;base64,", btoa(t.join("")), '); }'), 0);
+        const extra = param.type === 0 ? compute_scheme(colors, dots) : "";
+        ensure_stylesheet().insertRule(".".concat(tags.join("."), " { background-image: url(data:image/svg+xml;base64,", btoa(t.join("")), ");", extra, " }"), 0);
     }
     fmap[index] = fmap[cindex] = "url(#" + id + ")";
     return fmap[index];
@@ -12600,11 +12910,12 @@ handle_ui.on("js-reauth", function (evt) {
 
 // paper UI
 handle_ui.on("js-check-format", function () {
-    var $self = $(this), doce = this.closest(".has-document"),
+    const doce = this.closest(".has-document"),
         $cf = $(doce).find(".document-format");
-    if (this && "tagName" in this && this.tagName === "A")
-        $self.addClass("hidden");
-    var running = setTimeout(function () {
+    if (this && "tagName" in this && this.tagName === "A") {
+        this.hidden = true;
+    }
+    let running = setTimeout(function () {
         $cf.html(feedback.render_alert([{message: "<0>Checking format (this can take a while)...", status: -4 /*MessageSet::MARKED_NOTE*/}]));
     }, 1000);
     $.ajax(hoturl("=api/formatcheck", {p: siteinfo.paperid}), {
@@ -12666,11 +12977,17 @@ function background_format_check() {
         });
     } else if (hasClass(needed, "is-npages")
                && (pid = needed.closest("[data-pid]"))) {
-        const dt = needed.getAttribute("data-dt") || "0";
-        $.ajax(hoturl("api/formatcheck", {p: pid.getAttribute("data-pid"), dt: dt, soft: 1}), {
+        const dt = needed.getAttribute("data-dt") || "0",
+            detail = needed.getAttribute("data-npages-detail");
+        $.ajax(hoturl("api/formatcheck", {
+                p: pid.getAttribute("data-pid"),
+                dt: dt, soft: 1, detail: detail ? 1 : null
+            }), {
             success: function (data) {
-                if (data && data.ok)
-                    needed.parentNode.replaceChild(document.createTextNode(data.npages), needed);
+                if (data && data.ok) {
+                    const np = detail ? data.npages_detail[detail] : data.npages;
+                    needed.parentNode.replaceChild(document.createTextNode(np), needed);
+                }
                 next(data && data.ok);
             }
         });
@@ -12705,23 +13022,25 @@ handle_ui.on("js-add-attachment", function () {
         ++n;
         name = attache.getAttribute("data-document-prefix") + ":" + n;
     } while (f.elements[name]);
-    if (this.id === name)
+    if (this.id === name) {
         this.removeAttribute("id");
+    }
     var filee = document.createElement("input");
     filee.type = "file";
     filee.name = name + ":file";
     filee.size = 15;
     filee.className = "uich document-uploader";
-    var cancele = $e("button", "link ui js-cancel-document", "Cancel"),
+    const cancele = $e("button", "link ui js-cancel-document", "Cancel"),
         actionse = $e("div", "document-actions", cancele);
     cancele.type = "button";
-    var max_size = attache.getAttribute("data-document-max-size"),
-        doce = $e("div", "has-document document-new-instance hidden",
+    const max_size = attache.getAttribute("data-document-max-size"),
+        doce = $e("div", {class: "has-document document-new-instance", hidden: true},
             $e("div", "document-upload", filee), actionse);
     doce.setAttribute("data-dt", attache.getAttribute("data-dt"));
     doce.setAttribute("data-document-name", name);
-    if (max_size != null)
+    if (max_size != null) {
         doce.setAttribute("data-document-max-size", max_size);
+    }
     ee.appendChild(doce);
     // this hidden_input cannot be in the document-uploader: the uploader
     // might be removed later, but we need to hold the place
@@ -12736,7 +13055,7 @@ handle_ui.on("js-replace-document", function () {
         actions = doce.querySelector(".document-actions"),
         u = doce.querySelector(".document-uploader");
     if (!actions) {
-        actions = $e("div", "document-actions hidden");
+        actions = $e("div", {class: "document-actions", hidden: true});
         doce.querySelector(".document-replacer").before(actions);
     }
     if (!u) {
@@ -12748,25 +13067,25 @@ handle_ui.on("js-replace-document", function () {
         if (doce.hasAttribute("data-document-accept")) {
             u.setAttribute("accept", doce.getAttribute("data-document-accept"));
         }
-        actions.before($e("div", "document-upload hidden", u));
+        actions.before($e("div", {class: "document-upload", hidden: true}, u));
     } else {
         $(u).trigger("hotcrp-change-document");
     }
     if (!actions.querySelector(".js-cancel-document")) {
-        actions.append($e("button", {type: "button", class: "link ui js-cancel-document hidden"}, "Cancel"));
+        actions.append($e("button", {type: "button", class: "link ui js-cancel-document", hidden: true}, "Cancel"));
     }
     u.click();
 });
 
 handle_ui.on("document-uploader", function () {
     var doce = this.closest(".has-document"), $doc = $(doce);
-    if (hasClass(doce, "document-new-instance") && hasClass(doce, "hidden")) {
-        removeClass(doce, "hidden");
-        var hea = doce.closest(".has-editable-attachments");
-        hea && removeClass(hea, "hidden");
+    if (hasClass(doce, "document-new-instance") && doce.hidden) {
+        doce.hidden = false;
+        const hea = doce.closest(".has-editable-attachments");
+        hea && (hea.hidden = false);
     } else {
-        $doc.find(".document-file, .document-stamps, .js-check-format, .document-format, .js-remove-document").addClass("hidden");
-        $doc.find(".document-upload, .document-actions, .js-cancel-document").removeClass("hidden");
+        $doc.find(".document-file, .document-stamps, .js-check-format, .document-format, .js-remove-document").prop("hidden", true);
+        $doc.find(".document-upload, .document-actions, .js-cancel-document").prop("hidden", false);
         $doc.find(".document-remover").remove();
         $doc.find(".js-replace-document").text("Replace");
         $doc.find(".js-remove-document").removeClass("undelete").text("Delete");
@@ -12802,7 +13121,7 @@ handle_ui.on("document-uploader", function (event) {
     }
 
     function check(event) {
-        var form = that.form,
+        const form = that.form,
             upload_limit = find_first_attr("data-upload-limit", [doce, form, document.body], Infinity),
             max_size = find_first_attr("data-document-max-size", [doce, form, document.body], upload_limit);
         blob_limit = Math.min(find_first_attr("data-blob-limit", [form, document.body], 5 << 20), upload_limit);
@@ -12811,11 +13130,10 @@ handle_ui.on("document-uploader", function (event) {
             that.value = "";
             handle_ui.stopImmediatePropagation ? handle_ui.stopImmediatePropagation(event) : event.stopImmediatePropagation();
             return false;
-        } else {
-            return file
-                && window.FormData
-                && file.size >= Math.min(0.45 * upload_limit, 4 << 20);
         }
+        return file
+            && blob_limit > 0
+            && file.size >= Math.min(0.45 * upload_limit, 4 << 20);
     }
     if (!check(event)) {
         remove_feedback();
@@ -12827,7 +13145,7 @@ handle_ui.on("document-uploader", function (event) {
             return false;
         }
         remove_feedback();
-        removeClass(that, "hidden");
+        that.hidden = false;
         removeClass(that, "prevent-submit");
         delete that.hotcrpUploader;
         cancelled = true;
@@ -12921,26 +13239,27 @@ handle_ui.on("document-uploader", function (event) {
         }
     }
 
-    addClass(that, "hidden");
+    that.hidden = true;
     addClass(that, "prevent-submit");
     $(that).on("hotcrp-change-document", cancel);
     ajax({ok: true});
 });
 
 handle_ui.on("js-cancel-document", function () {
-    var doce = this.closest(".has-document"),
+    const doce = this.closest(".has-document"),
         $doc = $(doce), $actions = $doc.find(".document-actions"),
         f = doce.closest("form"),
         $uploader = $doc.find(".document-uploader");
     $uploader.val("").trigger("hotcrp-change-document").trigger("change");
     if (hasClass(doce, "document-new-instance")) {
-        var holder = doce.parentElement;
+        const holder = doce.parentElement;
         $doc.remove();
-        if (!holder.firstChild && hasClass(holder.parentElement, "has-editable-attachments"))
-            addClass(holder.parentElement, "hidden");
+        if (!holder.firstChild && hasClass(holder.parentElement, "has-editable-attachments")) {
+            holder.parentElement.hidden = true;
+        }
     } else {
         $doc.find(".document-upload").remove();
-        $doc.find(".document-file, .document-stamps, .js-check-format, .document-format, .js-remove-document").removeClass("hidden");
+        $doc.find(".document-file, .document-stamps, .js-check-format, .document-format, .js-remove-document").prop("hidden", false);
         $doc.find(".document-file > del > *").unwrap();
         $doc.find(".js-replace-document").text(doce.hasAttribute("data-docid") ? "Replace" : "Upload");
         $doc.find(".js-cancel-document").remove();
@@ -12956,14 +13275,14 @@ handle_ui.on("js-remove-document", function () {
     if (hasClass(this, "undelete")) {
         $doc.find(".document-remover").val("").trigger("change").remove();
         $en.find("del > *").unwrap();
-        $doc.find(".document-stamps, .document-shortformat").removeClass("hidden");
+        $doc.find(".document-stamps").prop("hidden", false);
         $(this).removeClass("undelete").html("Delete");
     } else {
         $(hidden_input(doce.getAttribute("data-document-name") + ":delete", "1", {class: "document-remover", "data-default-value": ""})).appendTo($doc.find(".document-actions")).trigger("change");
         if (!$en.find("del").length)
             $en.wrapInner("<del></del>");
         $doc.find(".document-uploader").trigger("hotcrp-change-document");
-        $doc.find(".document-stamps, .document-shortformat").addClass("hidden");
+        $doc.find(".document-stamps").prop("hidden", true);
         $(this).addClass("undelete").html("Restore");
     }
 });
@@ -13043,7 +13362,7 @@ function save_potential_conflicts(d) {
             if (wantc.description !== "<0>" + elt.lastChild.textContent) {
                 render_text.onto(elt.lastChild, "f", wantc.description);
             }
-            addClass(elt, "want-tooltip");
+            addClass(elt, "need-tooltip-within");
             elt.setAttribute("aria-describedby", `d-pcconf:${uid}`);
         } else if (isc) {
             if (hasClass(elt.lastChild, "pcconfmatch")) {
@@ -13052,7 +13371,7 @@ function save_potential_conflicts(d) {
             if (!hasClass(elt, "pcconf-conflicted")) {
                 nul.insertBefore(li, nli);
             }
-            removeClass(elt, "want-tooltip");
+            removeClass(elt, "need-tooltip-within");
             elt.removeAttribute("aria-describedby");
         }
     }
@@ -13064,20 +13383,28 @@ handle_ui.on("js-update-potential-conflicts", function () {
 })();
 
 handle_ui.on("js-withdraw", function () {
-    const f = this.form, $pu = $popup({near: this, action: f});
-    $pu.append($e("p", null, "Are you sure you want to withdraw this " + siteinfo.snouns[0] + " from consideration and/or publication?" + (this.hasAttribute("data-revivable") ? "" : " Only administrators can undo this step.")),
-        $e("textarea", {name: "reason", rows: 3, cols: 40, placeholder: "Optional explanation", spellcheck: "true", class: "w-99 need-autogrow"}));
+    const f = this.form, $pu = $popup({near: this, action: f, "aria-label": "Confirm " + siteinfo.snouns[0] + " withdrawal"});
+    $pu.append($e("p", null, "Are you sure you want to withdraw this " + siteinfo.snouns[0] + " from evaluation and/or publication?" + (this.hasAttribute("data-revivable") ? "" : " Only administrators can undo this step.")));
+    if (this.hasAttribute("data-clear-fields")) {
+        $pu.append($e("p", null, "Withdrawal will reset " + this.getAttribute("data-clear-fields") + " as a side effect."));
+    }
+    $pu.append($e("textarea", {name: "reason", rows: 3, cols: 40, placeholder: "Optional explanation", spellcheck: "true", class: "w-99 need-autogrow"}));
     if (!this.hasAttribute("data-withdrawable")) {
         $pu.append($e("label", "checki", $e("span", "checkc", $e("input", {type: "checkbox", name: "override", value: 1})), "Override deadlines"));
     }
     $pu.append_actions($e("button", {type: "submit", name: "withdraw", value: 1, class: "btn-danger"}, "Withdraw"), "Cancel");
-    $pu.show();
     transfer_form_values($pu.form(), f, ["status:notify", "status:notify_reason"]);
     $pu.on("submit", function () { addClass(f, "submitting"); });
+    if (this.hasAttribute("data-submitted")
+        || this.hasAttribute("data-clear-fields")) {
+        $pu.show();
+    } else {
+        $pu.form().elements.withdraw.click();
+    }
 });
 
 handle_ui.on("js-delete-paper", function () {
-    const f = this.form, $pu = $popup({near: this, action: f});
+    const f = this.form, $pu = $popup({near: this, action: f, "aria-label": "Confirm " + siteinfo.snouns[0] + " deletion"});
     $pu.append($e("p", null, "Be careful: This will permanently delete all information about this " + siteinfo.snouns[0] + " from the database and ", $e("strong", null, "cannot be undone"), "."));
     $pu.append_actions($e("button", {type: "submit", name: "delete", value: 1, class: "btn-danger"}, "Delete"), "Cancel");
     $pu.show();
@@ -13089,7 +13416,7 @@ handle_ui.on("js-clickthrough", function () {
     var self = this,
         $container = $(this).closest(".js-clickthrough-container");
     if (!$container.length)
-        $container = $(this).closest(".pcontainer");
+        $container = $(this).closest(".s-paper");
     $.post(hoturl("=api/clickthrough", {p: siteinfo.paperid}),
         $(this.form).serialize() + "&accept=1",
         function (data) {
@@ -13118,9 +13445,17 @@ handle_ui.on("js-follow-change", function () {
 });
 
 handle_ui.on("pspcard-fold", function (evt) {
-    if (!evt.target.closest("a")) {
-        addClass(this, "hidden");
-        $(this.parentElement).find(".pspcard-open").addClass("unhidden");
+    const opene = document.getElementById("s-pspcard-open");
+    if (evt.target.closest("a") || !opene) {
+        return;
+    }
+    const wasfocus = this.contains(document.activeElement);
+    this.hidden = true;
+    addClass(opene, "unhidden");
+    // this element is being hidden, so keyboard focus must move
+    if (wasfocus) {
+        opene.tabIndex = -1;
+        opene.focus();
     }
 });
 
@@ -13150,6 +13485,7 @@ function prepare_paper_select() {
                     ensure_pattern(data.color_classes);
                     $p.html('<span class="taghh ' + data.color_classes + '">' + $p.html() + '</span>');
                 }
+                hotcrp.update_banners();
             }
             ctl.disabled = false;
         }
@@ -13182,49 +13518,51 @@ function prepare_paper_select() {
 }
 
 function render_tag_messages(message_list) {
-    var t0 = this.querySelector(".want-tag-report"),
-        t1 = this.querySelector(".want-tag-report-warnings"), i;
+    const e = this.closest(".s-ps"),
+        t0 = e.querySelector(".want-tag-report"),
+        t1 = e.querySelector(".want-tag-report-warnings");
     t0.replaceChildren();
     t1.replaceChildren();
-    for (i = 0; i !== message_list.length; ++i) {
-        var mi = message_list[i];
+    for (const mi of message_list) {
         feedback.append_item(t0, mi);
         mi.status > 0 && feedback.append_item(t1, mi);
     }
-    toggleClass(t0, "hidden", !t0.firstChild);
-    toggleClass(t1, "hidden", !t1.firstChild);
+    t0.hidden = !t0.firstChild;
+    t1.hidden = !t1.firstChild;
 }
 
 function prepare_pstags() {
-    var self = this,
-        $f = this.tagName === "FORM" ? $(self) : $(self).find("form"),
-        $ta = $f.find("textarea");
+    var f = this.tagName === "FORM" ? this : this.querySelector("form"); // XXX backward compat
     removeClass(this, "need-tag-form");
+    if (!f) {
+        return;
+    }
+    var $f = $(f), ta = f.elements.tags, psc = f.closest(".s-ps");
     function handle_tag_report(data) {
-        data.message_list && render_tag_messages.call(self, data.message_list);
+        data.message_list && render_tag_messages.call(f, data.message_list);
     }
     $f.on("keydown", "textarea", function (evt) {
         var key = event_key(evt);
         if (key === "Enter" && event_key.is_submit_enter(evt, true)) {
-            $f[0].elements.save.click();
+            f.elements.save.click();
         } else if (key === "Escape") {
-            $f[0].elements.cancel.click();
+            f.elements.cancel.click();
         } else {
             return;
         }
         evt.preventDefault();
         handle_ui.stopImmediatePropagation(evt);
     });
-    $f.find("button[name=cancel]").on("click", function (evt) {
-        $ta.val($ta.prop("defaultValue"));
-        $ta.removeClass("has-error");
+    $(f.elements.cancel).on("click", function (evt) {
+        ta.value = ta.defaultValue;
+        removeClass(ta, "has-error");
         $f.find(".is-error").remove();
-        $f.find(".btn-highlight").removeClass("btn-highlight");
-        foldup.call($ta[0], evt, {open: false});
-        $ta[0].blur();
+        check_form_differs(f, ta);
+        foldup.call(psc, evt, {open: false});
+        ta.blur();
     });
     $f.on("submit", save_pstags);
-    $f.closest(".foldc, .foldo").on("foldtoggle", function (evt) {
+    $f.on("foldtoggle", function (evt) {
         if (!evt.detail.open)
             return;
         $f.data("everOpened", true);
@@ -13233,76 +13571,102 @@ function prepare_pstags() {
             $.get(hoturl("api/tagmessages", {p: $f.attr("data-pid")}), handle_tag_report);
         }
         $f.removeData("noTagReport");
-        $ta.autogrow();
-        focus_within($f[0]);
+        $(ta).autogrow();
+        focus_within(f);
     });
     $(window).on("hotcrptags", function (evt, data) {
-        if (!data.pid || data.pid != $f.attr("data-pid")) {
+        if (!data.pid || data.pid != f.getAttribute("data-pid")) {
             return;
         }
         var h = data.tags_view_html == "" ? "None" : data.tags_view_html,
-            $p = $(self).find(".js-tag-result").first();
-        if ($p.html() !== h)
+            $p = $(psc).find(".js-tag-result").first();
+        if ($p.html() !== h) {
             $p.html(h);
-        if ($ta.length
-            && $ta.val() !== data.tags_edit_text
-            && !$ta.is(":visible")
-            && (!$f.data("everOpened")
-                || ($.trim($ta.val()).split(/\s+/).sort().join(" ")
-                    !== data.tags_edit_text.split(/\s+/).sort().join(" ")))) {
-            $ta.val(data.tags_edit_text);
         }
+        input_set_default_value(ta, data.tags_edit_text);
+        if (ta.value !== data.tags_edit_text
+            && (f.hasAttribute("data-saving")
+                || f.hidden)
+            && (!$f.data("everOpened")
+                || hotcrp.parse_tags.delta(data.tags_edit_text, ta.value).length === 0)) {
+            ta.value = data.tags_edit_text;
+        }
+        check_form_differs(f, ta);
         handle_tag_report(data);
     });
 }
 
 function save_pstags(evt) {
-    var f = this, $f = $(f);
+    const f = this, $f = $(f), ta = f.elements.tags;
     evt.preventDefault();
     $f.find("input").prop("disabled", true);
     $.ajax(hoturl("=api/tags", {p: $f.attr("data-pid")}), {
-        method: "POST", data: $f.serialize(), timeout: 4000,
+        method: "POST", data: {
+            add_tags: hotcrp.parse_tags.delta(ta.defaultValue, ta.value).join(" ")
+        }, timeout: 4000,
         success: function (data) {
             $f.find("input").prop("disabled", false);
             if (data.ok) {
-                if (feedback.list_status(data.message_list) < 2) {
-                    foldup.call($f[0], null, {open: false});
-                    minifeedback(f.elements.tags, {ok: true});
-                }
-                $(window).trigger("hotcrptags", [data]);
                 removeClass(f.elements.tags, "has-error");
-                removeClass(f.elements.save, "btn-highlight");
+                f.setAttribute("data-saving", "");
+                $(window).trigger("hotcrptags", [data]);
+                f.removeAttribute("data-saving");
+                if (feedback.list_status(data.message_list) < 2) {
+                    foldup.call(f.closest(".s-ps"), null, {open: false});
+                    minifeedback(ta, {ok: true});
+                }
             } else {
                 addClass(f.elements.tags, "has-error");
-                addClass(f.elements.save, "btn-highlight");
                 data.message_list = data.message_list || [];
                 data.message_list.unshift({message: "Your changes were not saved. Please correct these errors and try again.", status: -2 /*MessageSet::WARNING_NOTE*/});
             }
-            if (data.message_list)
+            if (data.message_list) {
                 render_tag_messages.call($f[0], data.message_list);
+            }
         }
     });
 }
 
-handle_ui.on("is-tag-index", function () {
+handle_ui.on("js-tag-index", function (evt) {
     const self = this;
-    let m = self.id.match(/^tag:(\S+) (\d+)$/), value;
-    if (this.type === "checkbox")
+    let tag = self.getAttribute("data-tag"), pid = +self.getAttribute("data-pid");
+    if (!tag || !pid) { // XXX OBS
+        const m = self.id.match(/^tag:(\S+)[ #](\d+)$/);
+        if (m) {
+            tag = m[1];
+            pid = +m[2];
+        }
+    }
+    let value;
+    if (this.type === "checkbox") {
         value = this.checked ? this.value : "";
-    else
+        handle_ui.stopImmediatePropagation(evt);
+    } else {
         value = this.value.trim();
-    if (value === "")
+    }
+    if (value === "") {
         value = "clear";
-    if (/^(?:\d+\.?\d*|\.\d+|clear)$/.test(value))
-        $.post(hoturl("=api/tags", {p: m[2]}), {addtags: m[1] + "#" + value}, done);
-    else
-        minifeedback(this, {ok: false, message_list: [{status: 2, message: "<0>Bad tag value"}]});
+    }
+    if (/^(?:\d+\.?\d*|\.\d+|clear|unset)$/.test(value)) {
+        $.post(hoturl("=api/tags", {p: pid}), {add_tags: tag + "#" + value}, done);
+    } else {
+        done({ok: false, message_list: [{status: 2, message: "<0>Bad tag value"}]});
+    }
     function done(rv) {
-        minifeedback(self, rv);
-        if (rv.ok && (rv.message_list || []).length === 0)
-            foldup.call(self, null, {open: false});
-        if (rv.ok)
+        const pst = self.closest(".s-ps").lastChild;
+        while (pst.firstChild && hasClass(pst.firstChild, "feedback-list")) {
+            pst.removeChild(pst.firstChild);
+        }
+        if (rv.message_list && rv.message_list.length) {
+            foldup.call(self, null, {open: true});
+            pst.insertBefore(feedback.render_list(rv.message_list), pst.firstChild);
+        }
+        minifeedback(self, {ok: rv.ok, message_list: []});
+        if (rv.ok) {
             $(window).trigger("hotcrptags", [rv]);
+        } else if (self.type === "checkbox" || self.type === "radio") {
+            self.checked = self.defaultChecked;
+        }
     }
 });
 
@@ -13358,7 +13722,11 @@ edit_conditions.checkbox = function (ec, form) {
     return e && e.checked;
 };
 function fieldset(form, fsname) {
-    return form.elements[fsname] || form.querySelector(`fieldset[name="${fsname}"]`);
+    const e = form.elements[fsname];
+    if (e && e.tagName === "FIELDSET") {
+        return e;
+    }
+    return form.querySelector(`fieldset[name="${fsname}"]`);
 }
 edit_conditions.checkboxes = function (ec, form) {
     const vs = ec.values;
@@ -13469,7 +13837,7 @@ function run_edit_condition() {
         ec = JSON.parse(this.getAttribute("data-edit-condition")),
         off = !evaluate_edit_condition(ec, f),
         link = navsidebar.get(this);
-    toggleClass(this, "hidden", off);
+    this.hidden = off;
     if (link) {
         link.element.hidden = off;
     }
@@ -13523,15 +13891,15 @@ function add_pslitem_header() {
     sidee.hidden = hasClass(this.parentElement, "hidden") || this.parentElement.hidden;
 }
 
-function add_pslitem_pfe() {
-    if (hasClass(this, "pf-separator")) {
+function add_pslitem_sf() {
+    if (hasClass(this, "s-sf-separator")) {
         navsidebar.append_li($e("li", "pslitem pslitem-separator"));
     } else {
         let ch = this.firstChild;
         if (ch.tagName === "LEGEND") {
             ch = ch.firstChild;
         }
-        if (hasClass(ch, "pfehead")) {
+        if (hasClass(ch, "s-sf-title")) {
             add_pslitem_header.call(ch);
         }
     }
@@ -13545,7 +13913,7 @@ handle_ui.on("submit.js-submit-paper", function (evt) {
         && sub.type === "checkbox"
         && !sub.checked
         && this.hasAttribute("data-submitted")) {
-        if (!window.confirm("Are you sure the paper is no longer ready for review?\n\nOnly papers that are ready for review will be considered.")) {
+        if (!window.confirm("Are you sure the paper is no longer ready for review?\n\nOnly papers that are ready for review will be evaluated.")) {
             evt.preventDefault();
             return;
         }
@@ -13627,7 +13995,7 @@ function prepare_autoready_condition(f) {
         } else {
             t = "Save and submit";
         }
-        $("button.btn-savepaper").each(function () {
+        $("button.js-savepaper").each(function () {
             this.firstChild.data = t;
         });
     }
@@ -13643,14 +14011,14 @@ hotcrp.load_editable_paper = function () {
     var f = $$("f-paper");
     hotcrp.add_diff_check(f);
     prepare_autoready_condition(f);
-    $(".pfe").each(add_pslitem_pfe);
-    var h = $(".btn-savepaper").first(),
+    $(".s-sf").each(add_pslitem_sf);
+    var h = $(".js-savepaper").first(),
         k = hasClass(f, "differs") ? "" : " hidden";
-    $(".pslcard-nav").append('<div class="paper-alert mt-5'.concat(k,
-        '"><button class="ui btn-highlight btn-savepaper">', h.html(),
+    $(".s-psl-nav").append('<div class="paper-alert mt-5'.concat(k,
+        '"><button class="ui btn-highlight js-savepaper">', h.html(),
         '</button></div>'))
-        .find(".btn-savepaper").click(function () {
-            $("#f-paper .btn-savepaper").first().trigger({type: "click", sidebarTarget: this});
+        .find(".js-savepaper").click(function () {
+            $("#f-paper .js-savepaper").first().trigger({type: "click", sidebarTarget: this});
         });
     $(f).on("change", "input, select, textarea", fieldchange);
     if (f.querySelector(".has-edit-condition")) {
@@ -13670,19 +14038,19 @@ hotcrp.load_editable_paper = function () {
 };
 
 hotcrp.load_editable_review = function () {
-    const rfehead = $(".rfehead");
+    const rfehead = $(".s-rf-title");
     rfehead.each(add_pslitem_header);
     if (rfehead.length) {
-        $(".pslcard > .pslitem:last-child").addClass("mb-3");
+        $(".s-psl > .pslitem:last-child").addClass("mb-3");
     }
     hotcrp.add_diff_check("#f-review");
     const k = $("#f-review").hasClass("differs") ? "" : " hidden",
-        h = $(".btn-savereview").first();
-    $(".pslcard-nav").append('<div class="review-alert mt-5'.concat(k,
-        '"><button class="ui btn-highlight btn-savereview">', h.html(),
+        h = $(".js-savereview").first();
+    $(".s-psl-nav").append('<div class="review-alert mt-5'.concat(k,
+        '"><button class="ui btn-highlight js-savereview">', h.html(),
         '</button></div>'))
-        .find(".btn-savereview").click(function () {
-            $("#f-review .btn-savereview").first().trigger({type: "click", sidebarTarget: this});
+        .find(".js-savereview").click(function () {
+            $("#f-review .js-savereview").first().trigger({type: "click", sidebarTarget: this});
         });
 };
 
@@ -13692,9 +14060,9 @@ hotcrp.load_editable_pc_assignments = function () {
     if (f) {
         hotcrp.add_diff_check(f);
         var k = hasClass(f, "differs") ? "" : " hidden";
-        $(".pslcard-nav").append('<div class="paper-alert mt-5'.concat(k,
-            '"><button class="ui btn-highlight btn-savepaper">Save PC assignments</button></div>'))
-            .find(".btn-savepaper").click(function () {
+        $(".s-psl-nav").append('<div class="paper-alert mt-5'.concat(k,
+            '"><button class="ui btn-highlight js-savepaper">Save PC assignments</button></div>'))
+            .find(".js-savepaper").click(function () {
                 $("#f-pc-assignments .btn-primary").first().trigger({type: "click", sidebarTarget: this});
             });
     }
@@ -13709,9 +14077,9 @@ hotcrp.load_paper_sidebar = function () {
 };
 
 hotcrp.replace_editable_field = function (field, elt) {
-    var pfe = $$(field).closest(".pfe");
+    const pfe = $$(field).closest(".s-sf");
     if ((elt.tagName !== "DIV" && elt.tagName !== "FIELDSET")
-        || !hasClass(elt, "pfe")) {
+        || !hasClass(elt, "s-sf")) {
         throw new Error("bad replacement");
     }
     pfe.className = elt.className;
@@ -13719,7 +14087,7 @@ hotcrp.replace_editable_field = function (field, elt) {
     while (elt.firstChild) {
         pfe.appendChild(elt.firstChild);
     }
-    add_pslitem_pfe.call(pfe);
+    add_pslitem_sf.call(pfe);
 };
 
 hotcrp.evaluate_edit_condition = function (ec, form) {
@@ -13730,12 +14098,12 @@ hotcrp.evaluate_edit_condition = function (ec, form) {
 
 
 function tag_value(taglist, t) {
-    if (t.charCodeAt(0) === 126 /* ~ */ && t.charCodeAt(1) !== 126)
+    if (t.charCodeAt(0) === 126 /* ~ */ && t.charCodeAt(1) !== 126) {
         t = siteinfo.user.uid + t;
+    }
     t = t.toLowerCase();
-    var tlen = t.length;
-    for (var i = 0; i !== taglist.length; ++i) {
-        var s = taglist[i];
+    const tlen = t.length;
+    for (const s of taglist) {
         if (s.length > tlen + 1
             && s.charCodeAt(tlen) === 35 /* # */
             && s.substring(0, tlen).toLowerCase() === t)
@@ -13743,6 +14111,149 @@ function tag_value(taglist, t) {
     }
     return null;
 }
+
+hotcrp.parse_tags = (function () {
+
+function space_charcode(c) {
+    // * C whitespace: HT U+0009, NL U+000A, VT U+000B, FF U+000C,
+    //   CR U+000D, SP U+0020
+    // * Unicode space category: SP U+0020, NBSP U+00A0 (*C2 A0),
+    //   U+1680 (*E1 9A 80), U+2000-200A (*E2 80 80-E2 80 8A),
+    //   U+202F (*E2 80 AF), U+205F (*E2 81 9F), U+3000 (*E3 80 80),
+    //   U+2028 LINE SEPARATOR (*E2 80 A8),
+    //   U+2029 PARAGRAPH SEPARATOR (*E2 80 A9)
+    if (c < 0x2000) {
+        return (c >= 0x9 && c <= 0xD) || c === 0x20 || c === 0xA0;
+    }
+    return c === 0x1680 || (c >= 0x2000 && c <= 0x200A) || c === 0x2028
+        || c === 0x2029 || c === 0x202F || c === 0x205F || c === 0x3000;
+}
+
+function span_balanced_parens(str, pos, endchars) {
+    pos = pos ?? 0;
+    let pstack = "", plast = "", quote = false, startpos = pos, pcleared;
+    const len = str.length,
+        endsp = endchars === null || endchars.indexOf(" ") >= 0;
+    while (pos < len) {
+        let c = str.charCodeAt(pos), ch = str.charAt(pos);
+        // stop when done
+        if (plast === ""
+            && !quote
+            && ((endsp && space_charcode(c))
+                || (endchars !== null && endchars.indexOf(ch) >= 0))) {
+            break;
+        }
+        // translate “” -> "
+        if (c === 0x201C || c === 0x201D) {
+            c = 0x22 /* " */;
+        }
+        if (quote) {
+            if (c === 0x5C /* \ */ && pos + 1 < len) {
+                ++pos;
+            } else if (c === 0x22 /* " */) {
+                quote = false;
+            }
+        } else if (c === 0x28 /* ( */) {
+            pstack += plast;
+            plast = ")";
+        } else if (c === 0x5B /* [ */) {
+            pstack += plast;
+            plast = "]";
+        } else if (c === 0x7B /* { */) {
+            pstack += plast;
+            plast = "}";
+        } else if (c === 0x29 || c === 0x5D || c === 0x7D) {
+            if (pos === startpos) {
+                ++startpos;
+            } else {
+                do {
+                    pcleared = plast;
+                    plast = pstack.slice(-1);
+                    pstack = pstack.slice(0, -1);
+                } while (ch !== pcleared && pcleared !== "");
+                if (pcleared === "") {
+                    break;
+                }
+            }
+        } else if (c === 0x22 /* " */) {
+            quote = true;
+        }
+        ++pos;
+    }
+    return pos;
+}
+
+function split_tag_list(str) {
+    // [split, {str: word, ltag: ltag, value: value}, ...]
+    const len = str.length, a = [];
+    let pos = 0;
+    while (true) {
+        const pos1 = pos;
+        while (pos !== len) {
+            const c = str.charCodeAt(pos);
+            if (!space_charcode(c) && c !== 0x2C /* , */ && c !== 0x3B /* ; */) {
+                break;
+            }
+            ++pos;
+        }
+        a.push(str.substring(pos1, pos));
+
+        if (pos === len) {
+            return a;
+        }
+
+        const pos2 = pos;
+        pos = span_balanced_parens(str, pos2, " ,;");
+        const word = str.substring(pos2, pos);
+        let m = word.match(/^([-+]?)#*([^#=([{]*)(?:[#=]?)(.*)$/);
+        if (m && (m[1] === "" || m[3] === "")) {
+            let ltag = m[2].toLowerCase();
+            if (ltag.charCodeAt(0) === 126 && ltag.charCodeAt(1) !== 126) {
+                ltag = siteinfo.user.uid + ltag;
+            }
+            const value = m[1] === "-" ? "clear" : (m[3] === "" ? "0" : m[2]);
+            a.push({str: word, ltag: ltag, value: value});
+        } else {
+            a.push({str: word});
+        }
+    }
+}
+
+function find_tag_list_index(tl, ltag) {
+    for (let i = 1; i < tl.length; i += 2) {
+        if (tl[i].ltag === ltag)
+            return i;
+    }
+    return -1;
+}
+
+function find_tag_list_value(tl, ltag) {
+    const i = find_tag_list_index(tl, ltag);
+    return i < 0 ? null : tl[i].value;
+}
+
+return {
+    delta: function (oldstr, str) {
+        const atl = split_tag_list(oldstr), btl = split_tag_list(str), ch = [];
+        for (let i = 1; i < btl.length; i += 2) {
+            const x = btl[i];
+            if (!x.ltag
+                || x.ltag.indexOf("~") > 0
+                || find_tag_list_value(atl, x.ltag) !== x.value) {
+                ch.push(x.str);
+            }
+        }
+        for (let i = 1; i < atl.length; i += 2) {
+            const x = atl[i];
+            if (x.ltag && find_tag_list_index(btl, x.ltag) < 0) {
+                ch.push(x.ltag + "#clear");
+            }
+        }
+        return ch;
+    }
+};
+
+})();
 
 function set_tag_index(e, taglist) {
     const val = tag_value(taglist, e.getAttribute("data-tag"));
@@ -13761,8 +14272,7 @@ function set_tag_index(e, taglist) {
 
     // one index: set text, maybe hide
     if (!hasClass(e, "is-tag-votish")) {
-        e.textContent = e.getAttribute("data-prefix") + vtext;
-        toggleClass(e, "hidden", vtext === "");
+        e.textContent = vtext === "" ? "" : e.getAttribute("data-prefix") + vtext;
         return;
     }
 
@@ -13777,7 +14287,6 @@ function set_tag_index(e, taglist) {
     // no base value: set text, maybe hide
     if (bval === null) {
         e.textContent = vtext === "" ? "" : ": " + vtext;
-        toggleClass(e, "hidden", vtext === "");
         return;
     }
 
@@ -13798,7 +14307,6 @@ function set_tag_index(e, taglist) {
         }
     }
     a.textContent = bval + (vtype === "rank" ? " overall" : " total");
-    removeClass(e, "hidden");
 }
 
 if (siteinfo.paperid) {
@@ -13807,13 +14315,13 @@ if (siteinfo.paperid) {
             return;
         }
         data.color_classes && ensure_pattern(data.color_classes, "", true);
-        $(".has-tag-classes").each(function () {
+        $(".js-tag-classes").each(function () {
             var t = $.trim(this.className.replace(/(?: |^)(?:tagbg|dark|tag-\S+)(?= |$)/g, " "));
             if (data.color_classes)
                 t += " " + data.color_classes;
             this.className = t;
         });
-        $(".is-tag-index").each(function () {
+        $(".js-tag-index").each(function () {
             set_tag_index(this, data.tags);
         });
         hotcrp.update_tag_decoration($("h1.paptitle"), data.tag_decoration_html);
@@ -13833,16 +14341,18 @@ handle_ui.on("js-delete-user", function () {
         }
         return $e("a", {href: hoturl("paper", {q: pids.join(" ")}), target: "_blank", rel: "noopener"}, pids.length === 1 ? siteinfo.snouns[0] + " #" + pids[0] : pids.length + " " + siteinfo.snouns[1]);
     }
-    const f = this.form, $pu = $popup({near: this, action: f});
     if (this.hasAttribute("data-sole-contact")) {
         const pids = this.getAttribute("data-sole-contact").split(/\s+/);
-        $pu.append($e("p", null, $e("strong", null, "This account cannot be deleted"),
-            " because it is the sole contact for ",
-            plinks(pids), ". To delete the account, first delete ".concat(plural_word(pids, "that " + siteinfo.snouns[0], "those " + siteinfo.snouns[1]), " from the database or give ", plural_word(pids, "it"), " more contacts.")))
+        $popup({near: this, "aria-label": "Account deletion error"})
+            .append($e("p", null,
+                $e("strong", null, "This account cannot be deleted"),
+                " because it is the sole contact for ", plinks(pids),
+                ". To delete the account, first delete ".concat(plural_word(pids, "that " + siteinfo.snouns[0], "those " + siteinfo.snouns[1]), " from the database or give ", plural_word(pids, "it"), " more contacts.")))
             .append_actions("Cancel").show();
         return;
     }
-    const ul = $e("ul");
+    const f = this.form, ul = $e("ul"),
+        $pu = $popup({near: this, action: f, "aria-label": "Confirm account deletion"});
     if (this.hasAttribute("data-contact")) {
         const pids = this.getAttribute("data-contact").split(/\s+/);
         ul.append($e("li", null, "Contact authorship on ", plinks(pids)));
@@ -13881,7 +14391,7 @@ handle_ui.on("js-disable-user", function () {
                     removeClass(self, "btn-success");
                     addClass(self, "btn-danger");
                 }
-                const h2 = document.querySelector("h2.leftmenu");
+                const h2 = document.querySelector("h2#h-subtitle");
                 if (h2) {
                     if (h2.lastChild.nodeType === 1
                         && h2.lastChild.className === "n dim user-disabled-marker") {
@@ -13952,7 +14462,7 @@ handle_ui.on("js-acceptish-review", function (evt) {
 });
 
 handle_ui.on("js-deny-review-request", function () {
-    const f = this.form, $pu = $popup({near: this, action: f})
+    const f = this.form, $pu = $popup({near: this, action: f, "aria-label": "Confirm request denial"})
         .append($e("p", null, "Select “Deny request” to deny this review request."),
             $e("textarea", {name: "reason", rows: 3, cols: 60, placeholder: "Optional explanation", spellcheck: "true", class: "w-99 need-autogrow"}))
         .append_actions($e("button", {type: "submit", name: "denyreview", value: 1, class: "btn-danger"}, "Deny request"), "Cancel")
@@ -13961,7 +14471,7 @@ handle_ui.on("js-deny-review-request", function () {
 });
 
 handle_ui.on("js-delete-review", function () {
-    $popup({near: this, action: this.form})
+    $popup({near: this, action: this.form, "aria-label": "Confirm review deletion"})
         .append($e("p", null, "Be careful: This will permanently delete all information about this review assignment from the database and ", $e("strong", null, "cannot be undone"), "."))
         .append_actions($e("button", {type: "submit", name: "deletereview", value: 1, class: "btn-danger"}, "Delete review"), "Cancel")
         .show();
@@ -13969,27 +14479,28 @@ handle_ui.on("js-delete-review", function () {
 
 handle_ui.on("js-approve-review", function (evt) {
     const self = this, grid = $e("div", "grid-btn-explanation");
-    let subreviewClass = "";
+    let subreviewClass = null;
     if (hasClass(self, "can-adopt")) {
-        grid.append($e("button", {type: "button", name: "adoptsubmit", class: "btn-primary big"}, "Adopt and submit"),
+        grid.append($e("button", {type: "button", name: "adoptsubmit", class: "btn-primary"}, "Adopt and submit"),
             $e("p", null, "Submit a copy of this review under your own name. You can make changes afterwards."),
-            $e("button", {type: "button", name: "adoptdraft", class: "bug"}, "Adopt as draft"),
+            $e("button", {type: "button", name: "adoptdraft"}, "Adopt as draft"),
             $e("p", null, "Save a copy of this review as a draft review under your name."));
     } else if (hasClass(self, "can-adopt-replace")) {
-        grid.append($e("button", {type: "button", name: "adoptsubmit", class: "btn-primary big"}, "Adopt and submit"),
+        grid.append($e("button", {type: "button", name: "adoptsubmit", class: "btn-primary"}, "Adopt and submit"),
             $e("p", null, "Replace your draft review with a copy of this review and submit it. You can make changes afterwards."),
-            $e("button", {type: "button", name: "adoptdraft", class: "big"}, "Adopt as draft"),
+            $e("button", {type: "button", name: "adoptdraft"}, "Adopt as draft"),
             $e("p", null, "Replace your draft review with a copy of this review."));
     } else {
-        subreviewClass = " btn-primary";
+        subreviewClass = "btn-primary";
     }
-    grid.append($e("button", {type: "button", name: "approvesubreview", class: "big" + subreviewClass}, "Approve subreview"),
+    grid.append($e("button", {type: "button", name: "approvesubreview", class: subreviewClass}, "Approve subreview"),
         $e("p", null, "Approve this review as a subreview. It will not be shown to authors and its scores will not be counted in statistics."));
     if (hasClass(self, "can-approve-submit")) {
-        grid.append($e("button", {type: "button", name: "approvesubmit", class: "big"}, "Submit as full review"),
+        grid.append($e("button", {type: "button", name: "approvesubmit"}, "Submit as full review"),
             $e("p", null, "Submit this review as an independent review. It will be shown to authors and its scores will be counted in statistics."));
     }
-    const $pu = $popup({near: evt.sidebarTarget || self}).append(grid)
+    const $pu = $popup({near: evt.sidebarTarget || self, "aria-label": "Approve review"})
+        .append(grid)
         .append_actions("Cancel")
         .show().on("click", "button", function (evt) {
             const b = evt.target.name;
@@ -14003,6 +14514,96 @@ handle_ui.on("js-approve-review", function (evt) {
         });
 });
 
+handle_ui.on("js-offline-review", function () {
+    const self = this, pid = self.form.getAttribute("data-pid"),
+        rid = self.form.getAttribute("data-rid"),
+        args1 = {p: pid},
+        filee = $e("input", {type: "file", name: "file", accept: "text/plain", hidden: true}),
+        uploade = $e("button", {type: "submit", name: "upload", value: 1, class: "btn-primary"}, "Upload form");
+    let $pu, dry_run = true;
+    (rid != "") && (args1.r = rid);
+    self.hasAttribute("data-force") && (args1.forceShow = 1);
+
+    /** @return {boolean} */
+    function has_file() {
+        return (filee.files || []).length !== 0;
+    }
+
+    // choosing a form is the reviewer's confirmation: upload it right away. A
+    // new file has not had its errors shown yet, so it gets the careful attempt
+    function change_file() {
+        dry_run = true;
+        uploade.replaceChildren("Upload form");
+        has_file() && upload();
+    }
+
+    function done(data) {
+        // `dry_run` means the server declined to save because of errors; like a
+        // failure, keep the dialog open, but let the next attempt through
+        if (data.ok && !data.dry_run) {
+            // an upload that went through often has something to say (a warning
+            // about a draft, say); carry it over the reload
+            addClass(self.form, "submitting");
+            redirect_with_messages(".reload", data.message_list);
+            return;
+        }
+        $pu.find("button").prop("disabled", false);
+        $pu.show_errors(data, {landmarks: true});
+        if (data.dry_run) {
+            // the upload was withheld pending these errors; a second try saves
+            // what it can, as the review form itself would
+            dry_run = false;
+            uploade.replaceChildren("Upload form anyway");
+            addClass(uploade, "btn-highlight");
+            filee.hidden = false;
+        } else {
+            // nothing was uploaded, so start over with a new file
+            filee.value = "";
+            filee.hidden = true;
+        }
+    }
+
+    function upload() {
+        const arg = Object.assign({}, args1);
+        dry_run ? (arg.dry_run = "if_error") : (arg.override = 1);
+        arg.link_fields = 1;
+        $pu.find("button").prop("disabled", true);
+        $.ajax(hoturl("=api/review", arg), {
+            method: "POST", data: new FormData($pu.form()), success: done,
+            processData: false, contentType: false, timeout: 120000
+        });
+    }
+
+    // with no form chosen yet, the upload button opens the file picker; the
+    // choice itself then starts the upload
+    function upload_click(evt) {
+        if (!has_file()) {
+            evt.preventDefault();
+            filee.click();
+        }
+    }
+
+    function submit(evt) {
+        evt.preventDefault();
+        has_file() && upload();
+    }
+
+    $pu = $popup({near: self, className: "modal-dialog-w40", "aria-label": "Offline reviewing"})
+        .append($e("h2", null, "Offline reviewing"),
+            $e("p", "w-text",
+                $e("a", {href: hoturl("api/review", Object.assign({}, args1, {format: "form"})), class: "js-download-review-form"}, "Download this review form as text"),
+                ", fill it out offline, then upload it here. ",
+                $e("a", {href: hoturl("offline")}, "Offline reviewing"),
+                " handles many forms at once."),
+            filee)
+        .append_actions("Cancel", uploade)
+        .on("submit", submit)
+        .on("change", "input[type=file]", change_file)
+        .on("click", "button[name=upload]", upload_click)
+        .on("click", "a.js-download-review-form", function () { $pu.close(); })
+        .show();
+});
+
 
 // search/paperlist UI
 handle_ui.on("js-edit-formulas", function () {
@@ -14013,7 +14614,7 @@ handle_ui.on("js-edit-formulas", function () {
         if (f.editable) {
             nei.className = "mb-1";
             nei.append($e("input", {type: "text", id: "k-formula/" + count + "/name", class: "editformulas-name need-autogrow", name: "formula/" + count + "/name", size: 30, value: f.name, placeholder: "Formula name"}),
-                $e("button", {type: "button", class: "ml-2 delete-link need-tooltip btn-licon-s", "aria-label": "Delete formula"}, $svg_use_licon("trash")));
+                $e("button", {type: "button", class: "ml-2 delete-link need-tooltip btn-licon-s", "aria-label": "Delete formula"}, $svg_use_licon("trash", "m")));
             xei.append($e("textarea", {class: "editformulas-expression need-autogrow w-99", id: "k-formula/" + count + "/expression", name: "formula/" + count + "/expression", rows: 1, cols: 64, placeholder: "Formula definition"}, f.expression));
         } else {
             nei.append(f.name);
@@ -14300,7 +14901,7 @@ handle_ui.on("js-named-search", function (evt) {
                 return create1(i, data);
             }
         }
-        $pu = $popup({near: evt.target});
+        $pu = $popup({near: evt.target, "aria-label": "Named search error"});
         $pu.append($e("p", null, "That search has been deleted."))
             .append_actions($e("button", {type: "button", class: "btn-primary"}, "OK"))
             .on("click", "button", $pu.close)
@@ -14394,7 +14995,8 @@ function handle_list_submit_bulkwarn(table, chkval, bgform, evt) {
         return true;
     }
     const ctr = $e("div", "container"),
-        $pu = $popup({near: evt.target}).append(ctr)
+        $pu = $popup({near: evt.target, "aria-label": "Bulk download warning"})
+            .append(ctr)
             .append_actions($e("button", {type: "button", name: "bsubmit", class: "btn-primary"}, "Download"), "Cancel");
     let m = table.getAttribute("data-bulkwarn-ftext");
     if (m === null || m === "") {
@@ -14465,7 +15067,7 @@ handle_ui.on("js-submit-list", function (evt) {
     // Keep track of both string versions and numeric versions
     // (numeric versions for possible session list encoding).
     const allval = [];
-    let allnumval = [], chkval = [], chknumval = [], isdefault = false;
+    let allnumval = [], chkval = [], chknumval = [];
     for (e of table.querySelectorAll("input.js-selector")) {
         const v = e.value, checked = e.checked;
         allval.push(v);
@@ -14482,7 +15084,6 @@ handle_ui.on("js-submit-list", function (evt) {
         if (fnbutton && hasClass(fnbutton, "can-submit-all")) {
             chkval = allval;
             chknumval = allnumval;
-            isdefault = true;
         } else {
             alert("Select one or more rows first.");
             return;
@@ -14531,9 +15132,6 @@ handle_ui.on("js-submit-list", function (evt) {
     // set papers
     if (chktxt) {
         bgform.appendChild(hidden_input("p", chktxt));
-    }
-    if (isdefault) {
-        bgform.appendChild(hidden_input("pdefault", "yes"));
     }
     if (form.elements.forceShow && form.elements.forceShow.value !== "") {
         bgform.appendChild(hidden_input("forceShow", form.elements.forceShow.value));
@@ -14677,9 +15275,10 @@ handle_ui.on("js-assign-potential-conflict", function () {
         }
         div.replaceChildren($e("div", "is-diagnostic is-success",
             is_none ? "Conflict ignored" : "Conflict confirmed"));
+        hotcrp.update_banners();
     }
     $ajax.condition(function () {
-        $.ajax(hoturl("=api/assign", {p: pid}), {
+        $.ajax(hoturl("=api/assign", {p: pid, format: "none"}), {
             method: "POST", data: {assignments: JSON.stringify([ass])},
             success: success, trackOutstanding: true
         });
@@ -14724,11 +15323,32 @@ handle_ui.on("js-assign-review", function (evt) {
         input_set_default_value(self, value);
         minifeedback(self, rv);
         check_form_differs(form, self);
+        hotcrp.update_banners();
     }
     $ajax.condition(function () {
-        $.ajax(hoturl("=api/assign", {p: m[1]}), {
+        $.ajax(hoturl("=api/assign", {p: m[1], format: "none"}), {
             method: "POST", data: {assignments: JSON.stringify(ass)},
             success: success, trackOutstanding: true
+        });
+    });
+});
+
+handle_ui.on("js-decide", function (evt) {
+    let form = this.form, m;
+    if (evt.type !== "change"
+        || !(m = /^decision(\d+)$/.exec(this.name))
+        || (form && form.autosave && !form.autosave.checked)) {
+        return;
+    }
+    const self = this, value = self.value;
+    function success(rv) {
+        input_set_default_value(self, value);
+        minifeedback(self, rv);
+        hotcrp.update_banners();
+    }
+    $ajax.condition(function () {
+        $.ajax(hoturl("=api/decision", {p: m[1], decision: value}), {
+            method: "POST", success: success, trackOutstanding: true
         });
     });
 });
@@ -14902,6 +15522,8 @@ function rgb_array_for(svx) {
     if (!sccolor[svx]) {
         var sp = document.createElement("span"), st, m;
         sp.className = "svb hidden " + svx;
+        // graphs use light-scheme score colors in every theme
+        sp.style.colorScheme = "light";
         document.body.appendChild(sp);
         sccolor[svx] = [0, 0, 0];
         st = window.getComputedStyle(sp).color;
@@ -15094,7 +15716,7 @@ function load_more_events() {
                 events = (events || []).concat(data.rows);
                 events_at = data.to;
                 events_more = data.more;
-                $(".has-events").each(function () { render_events(this, data.rows); });
+                $(".js-events").each(function () { render_events(this, data.rows); });
             }
         }
     });
@@ -15127,6 +15749,135 @@ handle_ui.on("js-open-activity", function (evt) {
     }
 });
 })(jQuery);
+
+
+// Return `value` if it is a valid value for CSS property `prop`, else `dflt`.
+function css_value(prop, value, dflt) {
+    if (value) {
+        const e = document.createElement("div");
+        e.style.setProperty(prop, value);
+        if ((value = e.style.getPropertyValue(prop)) !== "") {
+            return value;
+        }
+    }
+    return dflt;
+}
+
+customElements.define("hotcrp-multimeter", class extends HTMLElement {
+    static observedAttributes = ["values", "colors", "pointers", "pointer-colors", "width", "height"];
+
+    constructor() {
+        super();
+        this.attachShadow({ mode: "open" });
+        const style = document.createElement("style"),
+            ctr = document.createElement("div"),
+            flex = document.createElement("div");
+        ctr.style.position = "relative";
+        ctr.style.width = flex.style.width = "100%";
+        ctr.style.height = flex.style.height = "100%";
+        flex.style.display = "flex";
+        flex.style.overflow = "hidden";
+        ctr.append(flex);
+        this.shadowRoot.append(style, ctr);
+    }
+
+    connectedCallback() {
+        const cs = getComputedStyle(this),
+            style = this.shadowRoot.firstChild,
+            width = css_value("width", this.getAttribute("width"), "10em"),
+            height = css_value("height", this.getAttribute("height"), "2ex"),
+            flex = this.shadowRoot.lastChild.firstChild;
+        style.textContent = `:host { display: inline-block; width: ${width}; height: ${height}; }`;
+        flex.style.borderRadius = cs.borderRadius;
+        this.render();
+    }
+
+    attributeChangedCallback() {
+        this.render();
+    }
+
+    resolveColor(value) {
+        let m;
+        if ((m = value.match(/^([a-z]+\(\s*from\s*)(\.[^\s)]+)(.*)$/))) {
+            return m[1] + this.resolveColor(m[2]) + m[3];
+        } else if ((m = value.match(/^(color-mix\([^,]+,\s*)(.*)\)$/))) {
+            let t = m[1], s = m[2];
+            while ((m = s.match(/^((?:[^,()\s]|\([^()]*\))+)(\s*,?\s*)(.*)$/))) {
+                t += this.resolveColor(m[1]) + m[2];
+                s = m[3];
+            }
+            return t + s;
+        } else if (!value.startsWith(".")) {
+            return value;
+        }
+        const e = document.createElement("div");
+        e.style.display = "none";
+        e.style.position = "absolute";
+        e.className = value.substring(1).replaceAll(".", " ");
+        this.appendChild(e);
+        const style = getComputedStyle(e);
+        let color = style.backgroundColor;
+        if (color === "rgba(0, 0, 0, 0)") {
+            color = style.color;
+        }
+        e.remove();
+        return color;
+    }
+
+    render() {
+        const vstr = (this.getAttribute("values") || "").trim(),
+            cstr = (this.getAttribute("colors") || "").trim(),
+            pstr = (this.getAttribute("pointers") || "").trim(),
+            pcstr = (this.getAttribute("pointer-colors") || "").trim(),
+            vs = vstr === "" ? [] : vstr.split(/\s+/).map(Number),
+            ps = pstr === "" ? [] : pstr.split(/\s+/).map(Number).filter(x => Number.isFinite(x)),
+            cs = [], pcs = [];
+        if (vs.find(x => Number.isFinite(x) && x < 0)) {
+            vs.length = 0;
+        }
+        const vtotal = vs.reduce((a, b) => a + b, 0) || 1;
+        for (const cm of cstr.matchAll(/[a-z]+\((?:[^()]*|\([^()]*\))*\)|\S+/g)) {
+            cs.push(this.resolveColor(cm[0]));
+        }
+        for (const cm of pcstr.matchAll(/[a-z]+\((?:[^()]*|\([^()]*\))*\)|\S+/g)) {
+            pcs.push(this.resolveColor(cm[0]));
+        }
+        if (pcs.length === 0) {
+            pcs.push("#888");
+        }
+        const flex = this.shadowRoot.lastChild.firstChild;
+        flex.replaceChildren(...vs.map((v, i) => {
+            const e = document.createElement("div");
+            e.style.flex = v;
+            e.style.background = cs[i] ?? "transparent";
+            return e;
+        }));
+        let pe = flex.nextSibling;
+        for (const i in ps) {
+            const pv = ps[i];
+            if (pv < 0 || pv > vtotal) {
+                continue;
+            }
+            if (!pe) {
+                pe = document.createElement("span");
+                pe.style.position = "absolute";
+                pe.style.top = "100%";
+                pe.style.transform = "translateX(-50%)";
+                pe.style.borderLeft = "3px solid transparent";
+                pe.style.borderRight = "3px solid transparent";
+                pe.style.borderBottom = "5px solid " + pcs[Math.min(i, pcs.length - 1)];
+                this.shadowRoot.lastChild.appendChild(pe);
+            }
+            pe.style.left = `${pv / vtotal * 100}%`;
+            pe = pe.nextSibling;
+        }
+        while (pe) {
+            const next = pe.nextSibling;
+            pe.remove();
+            pe = next;
+        }
+    }
+});
 
 
 // autogrowing text areas; based on https://github.com/jaz303/jquery-grab-bag
@@ -15209,13 +15960,13 @@ function make_textarea_autogrower(e) {
                 setTimeout(autogrower_retry, timeout, f, e);
                 return;
             }
-            var css = window.getComputedStyle(e);
+            const css = window.getComputedStyle(e);
             minHeight = parseFloat(css.height);
             lineHeight = computed_line_height(css);
             borderPadding = parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth);
         }
         ++state;
-        var sh = state === 1 ? e : make_shadow(e),
+        let sh = state === 1 ? e : make_shadow(e),
             wh = Math.max(0.8 * window.innerHeight, 4 * lineHeight);
         e.style.height = Math.min(wh, Math.max(sh.scrollHeight + borderPadding, minHeight)) + "px";
     }
@@ -15296,10 +16047,12 @@ function awakenf() {
         hotcrp.suggest.call(this);
     if (hasClass(this, "need-tooltip"))
         hotcrp.tooltip.call(this);
+    if (hasClass(this, "need-wordlimit"))
+        make_update_words.call(this);
 }
 $.fn.awaken = function () {
     this.each(awakenf);
-    this.find(".need-diff-check, .need-autogrow, .need-suggest, .need-tooltip").each(awakenf);
+    this.find(".need-diff-check, .need-autogrow, .need-suggest, .need-tooltip, .need-wordlimit").each(awakenf);
     return this;
 };
 $(function () { $(document.body).awaken(); });
@@ -15328,22 +16081,14 @@ $(function () {
         err.push(locator(e.form) + ": no .js-selector-summary");
         elt.push(e.form);
     }
-    /*$(".xinfo,.xconfirm,.xwarning,.xmerror,.aa,.strong,td.textarea,a.btn[href=''],.p,.mg,.editor").each(function () {
+    $("a.fn5,a.btn[href=''],.p,.mg,.editor").each(function () {
         err.push(locator(this));
         elt.push(this);
-    });*/
-    if (document.documentMode || window.attachEvent) {
-        var msg = $('<div class="msg msg-error"></div>').appendTo("#h-messages");
-        feedback.append_item_near(msg[0], {message: "<0>This site no longer supports Internet Explorer", status: 2});
-        feedback.append_item_near(msg[0], {message: "<5>Please use <a href=\"https://browsehappy.com/\">a modern browser</a> if you can.", status: -5 /*MessageSet::INFORM*/});
-        err.push("Internet Explorer");
-    }
+    });
     if (err.length > 0) {
-        if (window.console) {
-            console.log(err.join("\n"));
-            for (var i = 0; i !== elt.length; ++i) {
-                console.log(elt[i]);
-            }
+        console.log(err.join("\n"));
+        for (var i = 0; i !== elt.length; ++i) {
+            console.log(elt[i]);
         }
         log_jserror(err.join("\n"));
     }
@@ -15360,6 +16105,7 @@ Object.assign(window.hotcrp, {
     // add_diff_check
     // add_review
     // add_preference_ajax
+    // add_quicklinks
     // banner
     check_form_differs: check_form_differs,
     check_version: check_version,
@@ -15396,6 +16142,8 @@ Object.assign(window.hotcrp, {
     // monitor_autoassignment
     // monitor_job
     // onload
+    // parse_tags
+    pidcode: encode_session_list_ids,
     // render_list
     render_text: render_text,
     render_text_page: render_text.on_page,
@@ -15409,6 +16157,7 @@ Object.assign(window.hotcrp, {
     // text
     // tooltip
     // tracker_show_elapsed
+    // update_banners
     // update_tag_decoration
     usere: usere
     // wstorage

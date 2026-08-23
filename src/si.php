@@ -102,6 +102,9 @@ class Si {
     /** @var ?bool
      * @readonly */
     public $spellcheck;
+    /** @var ?bool
+     * @readonly */
+    public $explicit_placeholder;
     /** @var 0|1|2|3
      * @readonly */
     public $json;
@@ -120,6 +123,7 @@ class Si {
     static private $key_storage = [
         "autogrow" => "is_bool",
         "description" => "is_string",
+        "explicit_placeholder" => "is_bool",
         "id_member" => "is_bool",
         "internal" => "is_bool",
         "json_values" => "Si::is_auto_or_list",
@@ -418,6 +422,20 @@ class Si {
         return empty($this->name_parts) && !$this->internal;
     }
 
+    /** @return int */
+    function name_segment_count() {
+        return empty($this->name_parts) ? 1 : count($this->name_parts);
+    }
+
+    /** @param int $i
+     * @return ?string */
+    function name_segment($i) {
+        if (empty($this->name_parts)) {
+            return $i === 0 ? $this->name : null;
+        }
+        return $this->name_parts[$i] ?? null;
+    }
+
     /** @param string ...$parts
      * @return bool */
     function name_matches(...$parts) {
@@ -578,9 +596,8 @@ class Si {
             return $this->name;
         } else if ($this->name_parts === null) {
             return $this->hashid;
-        } else {
-            return $this->_expand_pattern($this->hashid, null);
         }
+        return $this->_expand_pattern($this->hashid, null);
     }
 
     /** @return array<string,string> */
@@ -677,7 +694,9 @@ class Si {
             throw new ErrorException("Don't know how to parse_reqv {$this->name}.");
         }
         $v = trim($reqv);
-        if ($v === $this->placeholder($sv)) {
+        if ($v !== ""
+            && $this->_explicit_placeholder()
+            && $v === $this->placeholder($sv)) {
             $v = "";
         }
         return $this->_tclass->parse_reqv($v, $this, $sv);
@@ -692,6 +711,14 @@ class Si {
         return (string) $v;
     }
 
+    /** Return true if the placeholder explicitly represents the empty
+     * value, so it is exported for empty values and emptied on import.
+     * @return bool */
+    private function _explicit_placeholder() {
+        return $this->explicit_placeholder
+            ?? ($this->_tclass ? $this->_tclass->explicit_placeholder() : false);
+    }
+
     /** @param mixed $jv
      * @return ?string */
     function jsonv_reqstr($jv, SettingValues $sv) {
@@ -700,7 +727,9 @@ class Si {
         }
         if (is_string($jv)) {
             $jv = trim($jv);
-            if ($jv === $this->placeholder($sv)) {
+            if ($jv !== ""
+                && $this->_explicit_placeholder()
+                && $jv === $this->placeholder($sv)) {
                 $jv = "";
             }
         }
@@ -711,7 +740,10 @@ class Si {
      * @return mixed */
     function base_unparse_jsonv($v, SettingValues $sv) {
         if ($this->_tclass) {
-            return $this->_tclass->unparse_jsonv($v, $this, $sv);
+            $v = $this->_tclass->unparse_jsonv($v, $this, $sv);
+        }
+        if ($v === "" && $this->_explicit_placeholder()) {
+            return $this->placeholder($sv) ?? "";
         }
         return $v;
     }

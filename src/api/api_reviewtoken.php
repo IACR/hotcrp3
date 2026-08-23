@@ -1,10 +1,14 @@
 <?php
 // api_reviewtoken.php -- HotCRP review token API call
-// Copyright (c) 2008-2022 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class ReviewToken_API {
     static function run(Contact $user, Qrequest $qreq) {
-        assert(!$user->is_empty());
+        if ($user->is_empty()) {
+            return JsonResult::make_error(401, "<0>Unauthorized");
+        } else if ($user->is_bearer_authorized()) {
+            return JsonResult::make_error(403, "<0>Review tokens require an interactive session");
+        }
         $ml = [];
         if ($qreq->valid_post() && isset($qreq->token)) {
             if (str_starts_with($qreq->token, "[")) {
@@ -22,7 +26,7 @@ class ReviewToken_API {
                     break;
                 } else if (($pid = $user->conf->fetch_ivalue("select paperId from PaperReview where reviewToken=?", $token))) {
                     $tval[] = $token;
-                    $ml[] = MessageItem::success("<5>Review token ‘" . htmlspecialchars($t) . "’ lets you review <a href=\"" . $user->conf->hoturl("paper", "p={$pid}") . "\">submission #{$pid}</a>");
+                    $ml[] = MessageItem::success("<5>Review token ‘" . htmlspecialchars($t) . "’ lets you review " . $user->conf->hotlink("submission #{$pid}", "paper", ["p" => $pid]));
                 } else {
                     $ml[] = MessageItem::error("<0>Review token ‘{$t}’ not found");
                     $nfail = ($qreq->csession("rev_token_fail") ?? 0) + 1;

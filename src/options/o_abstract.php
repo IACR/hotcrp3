@@ -2,9 +2,10 @@
 // o_abstract.php -- HotCRP helper class for abstract intrinsic
 // Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
 
-class Abstract_PaperOption extends PaperOption {
+class Abstract_PaperOption extends Text_PaperOption {
     function __construct($conf, $args) {
         parent::__construct($conf, $args);
+        $this->display_space = 5;
     }
     function value_force(PaperValue $ov) {
         if (($ab = $ov->prow->abstract()) !== "") {
@@ -37,18 +38,16 @@ class Abstract_PaperOption extends PaperOption {
     function parse_json_user(PaperInfo $prow, $j, Contact $user) {
         return $this->parse_json_string($prow, $j, PaperOption::PARSE_STRING_TRIM);
     }
-    function print_web_edit(PaperTable $pt, $ov, $reqov) {
-        $this->print_web_edit_text($pt, $ov, $reqov, ["rows" => 5]);
-    }
     function render(FieldRender $fr, PaperValue $ov) {
         if ($fr->want(FieldRender::CFPAGE)) {
-            $fr->table->render_abstract($fr, $this);
+            $fr->table->render_abstract($fr, $ov);
         } else {
-            $text = $ov->prow->abstract();
+            $text = (string) $ov->data();
             if ($text !== "") {
                 $fr->value = $text;
                 $fr->value_format = $ov->prow->abstract_format();
                 $fr->value_long = true;
+                $fr->apply_wordlimit($this->wordlimit, $this->hard_wordlimit);
             } else if ($this->required && $fr->verbose()) {
                 $fr->set_text("[No abstract]");
             }

@@ -1,6 +1,6 @@
 <?php
 // papersearch.php -- HotCRP class for searching for papers
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class SearchScope {
     /** @var int */
@@ -60,7 +60,7 @@ class SearchStringContext {
             $mi->context = $context->q;
             $mi->nested_context = true;
             $mi = MessageItem::inform_at($mi->field, "");
-            $mi->landmark = "<5>→ <em>expanded from</em> ";
+            $mi->landmark = "→ expanded from";
             $mi->pos1 = $context->ppos1;
             $mi->pos2 = $context->ppos2;
             $mis[] = $mi;
@@ -94,7 +94,7 @@ class SearchQueryInfo {
 
     function __construct(PaperSearch $srch) {
         $this->srch = $srch;
-        if (!$srch->user->allow_administer_all()) {
+        if (!$srch->user->allow_admin_all()) {
             $this->add_reviewer_columns();
         }
         $this->tables["Paper"] = [];
@@ -239,7 +239,8 @@ class PaperSearch extends MessageSet {
      * @readonly */
     private $_qt;
     /** @var ?Contact
-     * @readonly */
+     * @readonly
+     * Null unless the requested reviewer differs from `$user`. */
     private $_reviewer_user;
 
     /** @var ?SearchTerm */
@@ -287,23 +288,26 @@ class PaperSearch extends MessageSet {
     /** @var ?list<SearchTerm> */
     private $_group_slice_terms;
 
-    static public $search_type_names = [
-        "a" => "Your submissions",
+    static private $search_type_descriptions = [
+        "a" => "Your {submissions}",
         "accepted" => "Accepted",
         "active" => "Active",
-        "admin" => "Submissions you administer",
+        "admin" => "{Submissions} you administer",
         "all" => "All",
-        "alladmin" => "Submissions you’re allowed to administer",
+        "alladmin" => "{Submissions} you’re allowed to administer",
+        "ar" => "Your {submissions} and reviews",
         "lead" => "Your discussion leads",
+        "none" => "None",
         "r" => "Your reviews",
-        "reviewable" => "Reviewable",
         "req" => "Your review requests",
+        "reviewable" => "Reviewable",
         "rout" => "Your incomplete reviews",
         "s" => "Submitted",
+        "sa" => "All submitted",
         "undecided" => "Undecided",
-        "viewable" => "Submissions you can view"
+        "unsub" => "Draft {submissions}",
+        "viewable" => "{Submissions} you can view"
     ];
-
 
     /** @param Qrequest $qreq
      * @return array<string,mixed> */
@@ -348,7 +352,7 @@ class PaperSearch extends MessageSet {
             } else if (is_object($reviewer) && ($reviewer instanceof Contact)) {
                 $ruser = $reviewer;
             }
-            if ($ruser && $ruser !== $this->user) {
+            if ($ruser && $ruser->contactXid !== $this->user->contactXid) {
                 assert($ruser->contactId > 0);
                 $this->_reviewer_user = $ruser;
             }
@@ -356,34 +360,18 @@ class PaperSearch extends MessageSet {
 
         // paper selection
         $toverride = friendly_boolean($options["toverride"] ?? null);
-        if (isset($options["t"]) && $options["t"] !== "") {
+        if (isset($options["t"])
+            && $options["t"] !== ""
+            && $options["t"] !== "default") {
             $lnames = Limit_SearchTerm::canonical_names($this->conf, $options["t"]);
             $limit = $lnames[0] ?? "none";
             $toverride = $toverride ?? true;
         } else {
-            // Empty limit should be the plausible limit for a default search,
-            // as in entering text into a quicksearch box.
-            if ($user->privChair
-                && ($user->is_root_user()
-                    || $this->conf->unnamed_submission_round()->time_update(true))) {
-                $limit = "all";
-            } else if ($user->isPC) {
-                if ($user->can_view_some_incomplete()
-                    && $user->conf->can_pc_view_some_incomplete()) {
-                    $limit = "active";
-                } else {
-                    $limit = "s";
-                }
-            } else if (!$user->is_reviewer()) {
-                $limit = "a";
-            } else if (!$user->is_author()) {
-                $limit = "r";
-            } else {
-                $limit = "ar";
-            }
+            $limit = "default";
         }
         $lword = SearchWord::make_simple($limit);
         $this->_limit_qe = Limit_SearchTerm::parse($limit, $lword, $this);
+        $this->_limit_qe->set_base();
         $this->_limit_override = $toverride ? 0 : -1;
     }
 
@@ -462,7 +450,7 @@ class PaperSearch extends MessageSet {
     }
     /** @return bool */
     function query_is_re_me() {
-        return $this->q === "re:me" && $this->user === $this->reviewer_user();
+        return $this->q === "re:me" && $this->_reviewer_user === null;
     }
 
 
@@ -528,18 +516,34 @@ class PaperSearch extends MessageSet {
         return $cs;
     }
     /** @return ContactSearch */
-    private function _contact_search($type, $word, $quoted, $pc_only) {
+    private function _contact_search($type, $word, $quoted) {
         $xword = $word;
         if ($quoted === null) {
             $word = SearchWord::unquote($word);
             $quoted = strlen($word) !== strlen($xword);
         }
-        $type |= ($pc_only ? ContactSearch::F_PC : 0)
-            | ($quoted ? ContactSearch::F_QUOTED : 0)
+        $type |= ($quoted ? ContactSearch::F_QUOTED : 0)
             | (!$quoted && $this->user->isPC ? ContactSearch::F_TAG : 0);
         $cs = $this->_find_contact_search($type, $word);
         if ($cs->warn_html) {
             $this->warning("<5>{$cs->warn_html}");
+        }
+        return $cs;
+    }
+    /** @param int $type
+     * @param SearchWord $sword
+     * @return ContactSearch */
+    function user_search($type, $sword) {
+        if ($sword->quoted) {
+            $type |= ContactSearch::F_QUOTED;
+        } else if ($this->user->isPC) {
+            $type |= ContactSearch::F_TAG;
+        }
+        $cs = $this->_find_contact_search($type, $sword->word);
+        if ($cs->warn_html) {
+            $this->lwarning($sword, "<5>{$cs->warn_html}");
+        } else if ($cs->is_empty() && ($type & ContactSearch::F_USER) !== 0) {
+            $this->lwarning($sword, $type & ContactSearch::F_PC ? "<0>PC member not found" : "<0>User not found");
         }
         return $cs;
     }
@@ -548,7 +552,8 @@ class PaperSearch extends MessageSet {
      * @param bool $pc_only
      * @return list<int> */
     function matching_uids($word, $quoted, $pc_only) {
-        $scm = $this->_contact_search(ContactSearch::F_USER, $word, $quoted, $pc_only);
+        $pc_type = $pc_only ? ContactSearch::F_PC : 0;
+        $scm = $this->_contact_search(ContactSearch::F_USER | $pc_type, $word, $quoted);
         return $scm->user_ids();
     }
     /** @param string $word
@@ -556,7 +561,8 @@ class PaperSearch extends MessageSet {
      * @param bool $pc_only
      * @return list<Contact> */
     function matching_contacts($word, $quoted, $pc_only) {
-        $scm = $this->_contact_search(ContactSearch::F_USER, $word, $quoted, $pc_only);
+        $pc_type = $pc_only ? ContactSearch::F_PC : 0;
+        $scm = $this->_contact_search(ContactSearch::F_USER | $pc_type, $word, $quoted);
         return $scm->users();
     }
     /** @param string $word
@@ -564,7 +570,8 @@ class PaperSearch extends MessageSet {
      * @param bool $pc_only
      * @return ?list<int> */
     function matching_special_uids($word, $quoted, $pc_only) {
-        $scm = $this->_contact_search(0, $word, $quoted, $pc_only);
+        $pc_type = $pc_only ? ContactSearch::F_PC : 0;
+        $scm = $this->_contact_search($pc_type, $word, $quoted);
         return $scm->has_error() ? null : $scm->user_ids();
     }
 
@@ -611,19 +618,6 @@ class PaperSearch extends MessageSet {
         }
         $srch->lwarning($sword, "<0>Unknown search ‘has:{$word}’");
         return new False_SearchTerm;
-    }
-
-    /** @return SearchTerm */
-    static function parse_searchcontrol($word, SearchWord $sword, PaperSearch $srch) {
-        if (strcasecmp($word, "expand_automatic") === 0) {
-            if ($srch->expand_automatic === 0) {
-                /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
-                $srch->expand_automatic = 1;
-            }
-            return new True_SearchTerm;
-        }
-        $srch->lwarning($sword, "<0>Unknown search control option ‘{$word}’");
-        return new True_SearchTerm;
     }
 
     /** @param string $body
@@ -711,9 +705,8 @@ class PaperSearch extends MessageSet {
         if ($kw !== "") {
             if (($kwdef = $this->_find_search_keyword($kw, $sword, $scope, false))) {
                 return $this->_kwdef_parse($kwdef, $sword, true);
-            } else {
-                return new False_SearchTerm;
             }
+            return new False_SearchTerm;
         }
 
         // Paper ID search term (`1-2`, `#1-#2`, `1-`, etc.)
@@ -751,9 +744,8 @@ class PaperSearch extends MessageSet {
             $sword->kwpos1 = $scope->defkw->kwpos1;
             if (($kwdef = $this->_find_search_keyword($scope->defkw->kword, $sword, $scope, true))) {
                 return $this->_kwdef_parse($kwdef, $sword, true);
-            } else {
-                return new False_SearchTerm;
             }
+            return new False_SearchTerm;
         }
 
         // Special words: unquoted `*`, `ANY`, `ALL`, `NONE`; empty string
@@ -1018,7 +1010,7 @@ class PaperSearch extends MessageSet {
             $args = [$pid];
             if ($this->_warn_missing > 1) {
                 $sm = "<5><a href=\"{url}\">{Submission} #{}</a>";
-                $args[] = new FmtArg("url", $this->conf->hoturl_raw("paper", ["p" => $pid]));
+                $args[] = new FmtArg("url", $this->conf->hoturl("paper", ["p" => $pid]));
             } else {
                 $sm = "<0>{Submission} #{}";
             }
@@ -1047,7 +1039,8 @@ class PaperSearch extends MessageSet {
         if ($this->_qe === null) {
             $this->_has_qe = true;
             if ($this->query_is_re_me()) {
-                $this->_qe = new Limit_SearchTerm($this, "r", true);
+                $this->_qe = new Limit_SearchTerm($this, "r");
+                $this->_qe->set_implicit();
             } else if (($qe = $this->_search_expression($this->q))) {
                 $this->_qe = $qe;
             } else {
@@ -1056,7 +1049,8 @@ class PaperSearch extends MessageSet {
 
             // check for limit
             if ($this->_limit_override === 0
-                && ($xlimit = $this->_qe->get_float("xlimit"))) {
+                && ($xlimit = $this->_qe->get_float("xlimit"))
+                && $xlimit->prefer_to($this->_limit_qe)) {
                 $this->_limit_override = 1;
                 $this->_limit_qe->set_limit($xlimit->named_limit);
             }
@@ -1080,6 +1074,20 @@ class PaperSearch extends MessageSet {
         return SearchTerm::combine("and", $this->_limit_qe, $this->_qe);
     }
 
+    private function _log_sensitive_search() {
+        $line = CsvGenerator::quote_join([
+            Conf::$now,
+            $this->conf->dbname,
+            $this->user->contactId,
+            $this->user->email,
+            $this->limit(),
+            $this->q
+        ]);
+        $fn = $this->conf->opt("sensitiveSearchLog");
+        $fn = SiteLoader::resolve($fn === true ? "var/sensitivesearches.csv" : $fn);
+        @file_put_contents($fn, "{$line}\n", FILE_APPEND);
+    }
+
     private function _prepare_result(SearchTerm $qe) {
         $sqi = new SearchQueryInfo($this);
         $sqi->add_column("paperId", "Paper.paperId");
@@ -1093,9 +1101,29 @@ class PaperSearch extends MessageSet {
             $sqi->add_column("blind", "Paper.blind");
         }
 
-        $filter = SearchTerm::andjoin_sqlexpr([
-            $this->_limit_qe->sqlexpr($sqi), $qe->sqlexpr($sqi)
-        ]);
+        // Timing-channel mitigation: an imprecise search returns a SQL
+        // superset whose size can depend on information the user cannot see,
+        // leaking that information through query time. Once a user has issued
+        // too many imprecise searches, fall back to filtering only in PHP.
+        // Chairs are exempt: they can view the hidden data, so their searches
+        // leak nothing.
+        $allow_imprecise = $this->user->privChair
+            || $qe->is_sqlexpr_precise()
+            || $this->user->contact_counter()->sensitive_search_account();
+        if (!$allow_imprecise
+            && $this->conf->opt("sensitiveSearchLog")) {
+            $this->_log_sensitive_search();
+        }
+        if ($allow_imprecise
+            || $this->conf->opt("sensitiveSearchAccountOnly")) {
+            $filter = SearchTerm::andjoin_sqlexpr([
+                $this->_limit_qe->sqlexpr($sqi), $qe->sqlexpr($sqi)
+            ]);
+        } else {
+            $filter = SearchTerm::andjoin_sqlexpr([
+                $this->_limit_qe->sqlexpr($sqi), $qe->precise_sqlexpr($sqi)
+            ]);
+        }
         //Conf::msg_debugt($filter);
         if ($filter === "false") {
             return Dbl_Result::make_empty();
@@ -1105,10 +1133,7 @@ class PaperSearch extends MessageSet {
         // XXX some of this should be shared with paperQuery
         if ($this->conf->rights_need_tags()
             || $this->conf->has_tracks() /* XXX probably only need check_track_view_sensitivity */
-            || ($sqi->query_options["tags"] ?? false)
-            || ($this->user->privChair
-                && $this->conf->has_any_manager()
-                && $this->conf->tags()->has(TagInfo::TF_SITEWIDE))) {
+            || ($sqi->query_options["tags"] ?? false)) {
             $sqi->add_column("paperTags", "coalesce((select group_concat(' ', tag, '#', tagIndex separator '') from PaperTag force index (primary) where PaperTag.paperId=Paper.paperId), '')");
         }
         if ($sqi->query_options["reviewSignatures"] ?? false) {
@@ -1293,25 +1318,23 @@ class PaperSearch extends MessageSet {
 
     /** @return list<TagAnno> */
     function group_anno_list() {
-        if (($ng = $this->ngroups()) > 1) {
-            $gs = [];
-            for ($i = 0; $i !== $ng; ++$i) {
-                $ch = $this->_then_term->group_head_term($i);
-                $srchstr = $ch->source_subquery($this->q);
-                if ($ch->get_float("view") || str_starts_with($srchstr, "(")) {
-                    $srchstr = self::strip_show($srchstr);
-                }
-                $h = $ch->get_float("legend");
-                $ta = TagAnno::make_legend($h ?? $srchstr);
-                $ta->set_prop("search", $srchstr);
-                $gs[] = $ta;
-            }
-            return $gs;
-        } else if (($h = $this->_qe->get_float("legend"))) {
-            return [TagAnno::make_legend($h)];
-        } else {
-            return [];
+        if (($ng = $this->ngroups()) <= 1) {
+            $h = $this->_qe->get_float("legend");
+            return $h ? [TagAnno::make_legend($h)] : [];
         }
+        $gs = [];
+        for ($i = 0; $i !== $ng; ++$i) {
+            $ch = $this->_then_term->group_head_term($i);
+            $srchstr = $ch->source_subquery($this->q);
+            if ($ch->get_float("view") || str_starts_with($srchstr, "(")) {
+                $srchstr = self::strip_show($srchstr);
+            }
+            $h = $ch->get_float("legend");
+            $ta = TagAnno::make_legend($h ?? $srchstr);
+            $ta->set_prop("search", $srchstr);
+            $gs[] = $ta;
+        }
+        return $gs;
     }
 
     /** @param int $pid
@@ -1346,9 +1369,8 @@ class PaperSearch extends MessageSet {
     function group_slice_term($group) {
         if ($group === null) {
             return $this->main_term();
-        } else {
-            return ($this->group_slice_terms())[$group] ?? $this->_qe;
         }
+        return ($this->group_slice_terms())[$group] ?? $this->_qe;
     }
 
     /** @return array<int,int> */
@@ -1454,8 +1476,7 @@ class PaperSearch extends MessageSet {
         if ($this->_qt !== "n") {
             $x .= "&qt={$this->_qt}";
         }
-        if ($this->_reviewer_user
-            && $this->_reviewer_user->contactXid !== $this->user->contactXid) {
+        if ($this->_reviewer_user) {
             $x .= "&reviewer=" . urlencode($this->_reviewer_user->email);
         }
         return $x;
@@ -1473,12 +1494,11 @@ class PaperSearch extends MessageSet {
         if ($this->_qt !== "n") {
             $xargs["qt"] = $this->_qt;
         }
-        if ($this->_reviewer_user
-            && $this->_reviewer_user->contactId !== $this->user->contactXid) {
+        if ($this->_reviewer_user) {
             $xargs["reviewer"] = $this->_reviewer_user->email;
         }
         $xargs = array_merge($xargs, $this->_urlbase_args ?? [], $args);
-        return $this->conf->hoturl_raw($basepage, $xargs, Conf::HOTURL_SITEREL);
+        return $this->conf->hoturl($basepage, $xargs, Conf::HOTURL_SITEREL);
     }
 
     /** @return string */
@@ -1512,26 +1532,25 @@ class PaperSearch extends MessageSet {
     /** @param string $listid
      * @return ?array<string,string> */
     static function unparse_listid($listid) {
-        if (preg_match('/\Ap\/([^\/]+)\/([^\/]*)(?:|\/([^\/]*))\z/', $listid, $m)) {
-            $args = ["q" => urldecode($m[2]), "t" => $m[1]];
-            if (isset($m[3]) && $m[3] !== "") {
-                foreach (explode("&", $m[3]) as $arg) {
-                    if (str_starts_with($arg, "sort=")) {
-                        $args["sort"] = urldecode(substr($arg, 5));
-                    } else if (str_starts_with($arg, "qt=")) {
-                        $args["qt"] = urldecode(substr($arg, 3));
-                    } else if (str_starts_with($arg, "forceShow=")) {
-                        $args["forceShow"] = urldecode(substr($arg, 10));
-                    } else {
-                        // XXX `reviewer`
-                        error_log(caller_landmark() . ": listid includes {$arg}");
-                    }
-                }
-            }
-            return $args;
-        } else {
+        if (!preg_match('/\Ap\/([^\/]+)\/([^\/]*)(?:|\/([^\/]*))\z/', $listid, $m)) {
             return null;
         }
+        $args = ["q" => urldecode($m[2]), "t" => $m[1]];
+        if (isset($m[3]) && $m[3] !== "") {
+            foreach (explode("&", $m[3]) as $arg) {
+                if (str_starts_with($arg, "sort=")) {
+                    $args["sort"] = urldecode(substr($arg, 5));
+                } else if (str_starts_with($arg, "qt=")) {
+                    $args["qt"] = urldecode(substr($arg, 3));
+                } else if (str_starts_with($arg, "forceShow=")) {
+                    $args["forceShow"] = urldecode(substr($arg, 10));
+                } else {
+                    // XXX `reviewer`
+                    error_log(caller_landmark() . ": listid includes {$arg}");
+                }
+            }
+        }
+        return $args;
     }
 
     /** @param list<int> $ids
@@ -1546,8 +1565,7 @@ class PaperSearch extends MessageSet {
         if ($this->_qt !== "n") {
             $rest[] = "qt={$this->_qt}";
         }
-        if ($this->_reviewer_user
-            && $this->_reviewer_user->contactXid !== $this->user->contactXid) {
+        if ($this->_reviewer_user) {
             $rest[] = "reviewer=" . urlencode($this->_reviewer_user->email);
         }
         $sort = $args["sort"] ?? $this->_req_sort ?? "";
@@ -1615,7 +1633,11 @@ class PaperSearch extends MessageSet {
 
     /** @return string */
     static function limit_description(Conf $conf, $t, ...$args) {
-        return $conf->_c("search_type", $t, ...$args);
+        $text = self::$search_type_descriptions[$t] ?? null;
+        if ($text === null) {
+            $text = "Limit “{$t}”";
+        }
+        return $conf->_c("search_type", $text, ...$args);
     }
 
     /** @param ?string $reqtype
@@ -1630,8 +1652,9 @@ class PaperSearch extends MessageSet {
         }
         if ($user->isPC) {
             $ts[] = "s";
-            if ($user->conf->has_any_accepted()
-                && $user->can_view_some_decision()) {
+            if ($reqtype === "accepted"
+                || ($user->conf->has_any_accepted()
+                    && $user->can_view_some_decision())) {
                 $ts[] = "accepted";
             }
         }
@@ -1660,11 +1683,17 @@ class PaperSearch extends MessageSet {
         if ($user->is_author() || $reqtype === "a") {
             $ts[] = "a";
         }
+        if ($reqtype === "ar") {
+            $ts[] = "ar";
+        }
         if ($user->can_view_some_incomplete()) {
             $ts[] = "active";
         }
         if ($user->privChair) {
             $ts[] = "all";
+        }
+        if ($reqtype && !in_array($reqtype, $ts, true)) {
+            $ts[] = $reqtype;
         }
         return $ts;
     }
@@ -1682,17 +1711,30 @@ class PaperSearch extends MessageSet {
         return $limits[0] ?? "";
     }
 
+    /** Return the canonical name of search limit `$limit`, or `null` if
+     * `$limit` is not a valid limit. An empty/null/`"default"` input returns
+     * `"default"`.
+     * @param ?string $limit
+     * @return ?string */
+    static function canonical_limit($limit, Contact $user) {
+        if ($limit === null || $limit === "" || $limit === "default") {
+            return "default";
+        }
+        return (Limit_SearchTerm::canonical_names($user->conf, $limit))[0] ?? null;
+    }
+
     /** @return list<string> */
-    static function viewable_manager_limits(Contact $user) {
-        if ($user->privChair) {
-            if ($user->conf->has_any_manager()) {
-                $ts = ["alladmin", "admin", "s"];
-            } else {
-                $ts = ["s"];
-            }
-            array_push($ts, "accepted", "undecided", "all");
-        } else {
-            $ts = ["admin"];
+    static function viewable_manager_limits(Contact $user, $limit = null) {
+        if (!$user->privChair) {
+            return ["alladmin", "admin"];
+        }
+        $ts = [];
+        if ($user->conf->has_any_manager()) {
+            array_push($ts, "alladmin", "admin");
+        }
+        array_push($ts, "s", "accepted", "undecided", "all");
+        if ($limit === "sa") {
+            $ts[] = "sa";
         }
         return $ts;
     }
@@ -1711,13 +1753,12 @@ class PaperSearch extends MessageSet {
                 $extra["aria-label"] = "Search collection";
             }
             return Ht::select("t", $sel_opt, $selected, $extra);
-        } else {
-            $t = self::limit_description($conf, $selected);
-            if (isset($extra["id"])) {
-                $t = '<span id="' . htmlspecialchars($extra["id"]) . "\">{$t}</span>";
-            }
-            return $t . Ht::hidden("t", $selected);
         }
+        $t = self::limit_description($conf, $selected);
+        if (isset($extra["id"])) {
+            $t = '<span id="' . htmlspecialchars($extra["id"]) . "\">{$t}</span>";
+        }
+        return $t . Ht::hidden("t", $selected);
     }
 
     /** @param list<int> $ids

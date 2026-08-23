@@ -32,12 +32,14 @@ class CheckFormat extends MessageSet {
     private $last_spec;
     /** @var ?object */
     private $last_banal;
+    /** @var ?Conf */
+    private $banal_conf;
     /** @var ?string */
-    public $banal_stdout;
-    /** @var ?string */
-    public $banal_stderr;
+    private $banal_key;
     /** @var ?int */
-    public $banal_status;
+    private $banal_key_expiry;
+    /** @var ?Subprocess */
+    public $banal_run;
     /** @var ?int */
     public $npages;
     /** @var ?int */
@@ -48,8 +50,13 @@ class CheckFormat extends MessageSet {
     public $appendix_page;
     /** @var int */
     private $run_flags = 0;
+    /** @var ?list<string> */
+    private $banal_command;
+    /** @var bool */
+    private $banal_command_default;
+    /** @var null|false|int */
+    private $banal_command_mtime;
 
-    static private $banal_args;
     /** @var int */
     static public $runcount = 0;
 
@@ -57,64 +64,120 @@ class CheckFormat extends MessageSet {
     function __construct(Conf $conf, $allow_run = null) {
         $this->allow_run = $allow_run ?? self::RUN_ALWAYS;
         $this->conf = $conf;
-        if (self::$banal_args === null) {
-            $z = $this->conf->opt("banalZoom");
-            self::$banal_args = $z ? "-zoom={$z}" : "";
-        }
         $this->fcheckers["default"] = new Default_FormatChecker;
     }
 
-    /** @param string $cmd
-     * @param string $dir
-     * @param array<string,string> $env
-     * @return array{int,string,string} */
-    static function run_command_safely($cmd, $dir, $env) {
-        $descriptors = [["file", "/dev/null", "r"], ["pipe", "wb"], ["pipe", "wb"]];
-        $pipes = null;
-        $proc = proc_open($cmd, $descriptors, $pipes, $dir, $env);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
-        $stdout = $stderr = "";
-        while (!feof($pipes[1]) || !feof($pipes[2])) {
-            $x = fread($pipes[1], 32768);
-            $y = fread($pipes[2], 32768);
-            $stdout .= $x;
-            $stderr .= $y;
-            if ($x === false || $y === false) {
-                break;
-            }
-            $r = [$pipes[1], $pipes[2]];
-            $w = $e = [];
-            stream_select($r, $w, $e, 5);
-        }
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $status = proc_close($proc);
-        return [$status, $stdout, $stderr];
+    /** @return int */
+    private function banal_lock_expiry() {
+        $conf = $this->banal_conf ?? $this->conf;
+        return $conf->opt("banalLockExpiry") ?? 60;
     }
 
+    /** @return list<string> */
+    private function banal_command() {
+        if ($this->banal_command !== null) {
+            return $this->banal_command;
+        }
+        $c = $this->conf->opt("banalCommand");
+        if (is_string($c)) {
+            $c = trim($c);
+            if (strcspn($c, "!#\$*?[]\\(){}<>|&;`\"'") !== strlen($c)) {
+                error_log("\$Opt[banalCommand] contains shell metacharacters, ignored");
+                $c = null;
+            } else if ($c === "") {
+                $c = null;
+            } else {
+                $c = preg_split('/\s+/', trim($c));
+            }
+        }
+        if ($c === null) {
+            $c = ["perl", "src/banal", "-json"];
+            if (($z = $this->conf->opt("banalZoom"))) {
+                $c[] = "-zoom={$z}";
+            }
+        }
+        $this->banal_command = $c;
+        $this->banal_command_default = count($c) >= 3
+            && $c[0] === "perl"
+            && $c[1] === "src/banal"
+            && $c[2] === "-json";
+        return $c;
+    }
+
+    /** @return string */
+    private function banal_command_signature() {
+        $command = $this->banal_command();
+        if ($this->banal_command_default) {
+            if (count($command) === 3) {
+                return "";
+            } else if (count($command) === 4) {
+                return $command[3];
+            }
+        }
+        return json_encode_db($command);
+    }
+
+    /** @return int|false */
+    private function banal_command_mtime() {
+        if ($this->banal_command_mtime !== null) {
+            return $this->banal_command_mtime;
+        }
+        $file = null;
+        foreach ($this->banal_command() as $arg) {
+            if (strpos($arg, "/") !== false && $arg[0] !== "-") {
+                $file = $arg;
+            }
+        }
+        if ($file !== null) {
+            $this->banal_command_mtime = @filemtime(SiteLoader::resolve($file));
+        } else {
+            $this->banal_command_mtime = false;
+        }
+        return $this->banal_command_mtime;
+    }
+
+    function run_banal_progress($subp) {
+        $t = time();
+        if ($t >= $this->banal_key_expiry - 20) {
+            $expiry = $this->banal_lock_expiry();
+            $this->banal_conf->qe("update Settings set value=? where name=? and value=?",
+                $t + $expiry, $this->banal_key, $this->banal_key_expiry);
+            $this->banal_key_expiry = $t + $expiry;
+        }
+    }
+
+    /** @param string $filename
+     * @return ?object */
     function run_banal($filename) {
         $env = ["PATH" => getenv("PATH")];
-        $pdftohtml = $this->conf->opt("pdftohtmlCommand")
-            ?? $this->conf->opt("pdftohtml") /* XXX */;
-        if ($pdftohtml) {
+        $command = $this->banal_command();
+        if ($this->banal_command_default
+            && ($pdftohtml = $this->conf->opt("pdftohtmlCommand"))) {
             $env["PHP_PDFTOHTML"] = $pdftohtml;
         }
-        $banal_run = "perl src/banal -json ";
-        if (self::$banal_args) {
-            $banal_run .= self::$banal_args . " ";
+        $command[] = $filename;
+        $subp = (new Subprocess($command, SiteLoader::$root))
+            ->set_env($env);
+        if ($this->banal_key) {
+            $subp->add_progress_function([$this, "run_banal_progress"]);
         }
-        $banal_run .= escapeshellarg($filename);
-        $tstart = microtime(true);
-        list($this->banal_status, $this->banal_stdout, $this->banal_stderr) =
-            self::run_command_safely($banal_run, SiteLoader::$root, $env);
+        $subp->run();
+        $this->banal_run = $subp;
         ++self::$runcount;
-        $banal_time = microtime(true) - $tstart;
-        Conf::$blocked_time += $banal_time;
+        Conf::$blocked_time += $subp->runtime;
         if (self::DEBUG && Conf::$blocked_time > 0.1) {
-            error_log(sprintf("%.6f: +%.6f %s", Conf::$blocked_time, $banal_time, $banal_run));
+            error_log(sprintf("%.6f: +%.6f %s", Conf::$blocked_time, $subp->runtime, join(" ", $command)));
         }
-        return json_decode($this->banal_stdout);
+        $bj = json_decode($this->banal_run->stdout);
+        if (is_object($bj)) {
+            // Set `args` to our signature
+            if (($sig = $this->banal_command_signature()) === "") {
+                unset($bj->args);
+            } else {
+                $bj->args = $sig;
+            }
+        }
+        return $bj;
     }
 
     /** @param mixed $x
@@ -181,8 +244,8 @@ class CheckFormat extends MessageSet {
 
         // check whether to skip run (cached JSON exists, matches spec)
         if ($bj
-            && ($bj->args ?? "") === (self::$banal_args ?? "")
-            && $bj->at >= @filemtime(SiteLoader::find("src/banal"))
+            && ($bj->args ?? "") === $this->banal_command_signature()
+            && $bj->at >= $this->banal_command_mtime()
             && ($allow_run !== CheckFormat::RUN_ALWAYS
                 || $bj->at >= Conf::$now - 86400)
             && (!isset($bj->npages) /* i.e., banal JSON is not truncated */
@@ -209,31 +272,50 @@ class CheckFormat extends MessageSet {
             return $this->complete_banal_json($bj, $flags & ~CheckFormat::RUN_ALLOWED);
         }
 
-        // constrain the number of concurrent banal executions to banalLimit
-        // (counter resets every 2 seconds)
-        $t = (int) (time() / 2);
-        $n = ($doc->conf->setting_data("__banal_count") == $t ? $doc->conf->setting("__banal_count") + 1 : 1);
-        $limit = $doc->conf->opt("banalLimit") ?? 8;
-        if ($limit > 0) {
-            if ($n > $limit) {
-                $this->error_at("error", "<0>Server too busy to check paper formats");
-                $this->inform_at("error", "<0>This is a transient error; feel free to try again.");
-                return $this->complete_banal_json($bj, $flags | CheckFormat::RUN_ABANDONED);
+        // restrict concurrent and duplicate runs with Settings rows
+        // Setting `__banal.PAPERID.DOCID` indicates a run is in progress for that document;
+        // the value is the expiry time.
+        $now = time();
+        $limit = $doc->conf->opt("banalLimit") ?? 12;
+        $nlive = 0;
+        $dead = [];
+        foreach ($doc->conf->settings as $name => $value) {
+            if (str_starts_with($name, "__banal.")) {
+                $value >= $now ? ++$nlive : ($dead[] = $name);
             }
-            $doc->conf->q("insert into Settings set name=?, value=?, data=? ?U on duplicate key update value=?U(value), data=?U(data)",
-                          "__banal_count", $n, (string) $t);
+        }
+        if (count($dead) >= 10) {
+            $doc->conf->qe("delete from Settings where name?a and value<?", $dead, $now);
+        }
+        if ($limit > 0 && $nlive >= $limit) {
+            $this->error_at("error", "<0>Server too busy to check paper formats");
+            $this->inform_at("error", "<0>This is a transient error; feel free to try again.");
+            return $this->complete_banal_json($bj, $flags | CheckFormat::RUN_ABANDONED);
+        }
+
+        // claim this document's lease by compare-and-swap
+        $this->banal_conf = $doc->conf;
+        $this->banal_key = "__banal.{$doc->paperId}.{$doc->paperStorageId}";
+        $this->banal_key_expiry = $now + $this->banal_lock_expiry();
+        $result = $doc->conf->qe("insert into Settings set name=?, value=? ?U on duplicate key update value=if(Settings.value<?,?U(value),Settings.value)", $this->banal_key, $this->banal_key_expiry, $now);
+        if ($result->affected_rows === 0) {
+            $this->error_at("error", "<0>Concurrent format checker run in progress");
+            $this->inform_at("error", "<0>This is a transient error; feel free to try again.");
+            $this->banal_key = null;
+            return $this->complete_banal_json($bj, $flags | CheckFormat::RUN_ABANDONED);
         }
 
         $flags |= CheckFormat::RUN_ATTEMPTED;
-        if (($xbj = self::validate_banal_json($this->run_banal($path)))) {
-            $flags &= ~(CheckFormat::RUN_ALLOWED | CheckFormat::RUN_DESIRED);
-            $bj = $xbj;
-        } else {
-            $this->unprocessable_error($doc);
-        }
-
-        if ($limit > 0) {
-            $doc->conf->q("update Settings set value=value-1 where name='__banal_count' and data=?", (string) $t);
+        try {
+            if (($xbj = self::validate_banal_json($this->run_banal($path)))) {
+                $flags &= ~(CheckFormat::RUN_ALLOWED | CheckFormat::RUN_DESIRED);
+                $bj = $xbj;
+            } else {
+                $this->unprocessable_error($doc);
+            }
+        } finally {
+            $doc->conf->qe("delete from Settings where name=? and value=?", $this->banal_key, $this->banal_key_expiry);
+            $this->banal_key = null;
         }
         return $this->complete_banal_json($bj, $flags);
     }
@@ -244,6 +326,11 @@ class CheckFormat extends MessageSet {
             $mi = $this->error_at("error", "<0>File may be corrupt or not in PDF format");
             $mi->landmark = $doc->export_filename();
         }
+    }
+
+    /** @return list<'body'|'blank'|'cover'|'appendix'|'bib'|'figure'> */
+    static function banal_page_type_list() {
+        return ["body", "blank", "cover", "appendix", "bib", "figure"];
     }
 
     /** @return 'body'|'blank'|'cover'|'appendix'|'bib'|'figure' */
@@ -502,6 +589,7 @@ class Default_FormatChecker implements FormatChecker {
             || count($bj->papersize) != 2) {
             $cf->unprocessable_error($doc);
         } else {
+            $this->check_unsafe($cf, $bj);
             if ($spec->papersize) {
                 $this->check_papersize($cf, $bj, $spec);
             }
@@ -534,6 +622,57 @@ class Default_FormatChecker implements FormatChecker {
         // store messages in metadata
         if ($cf->run_attempted()) {
             $doc->set_prop("banal", self::truncate_banal_json($bj, $cf, $nmsg0, $spec));
+        }
+    }
+
+    /** @param object $bj */
+    private function check_unsafe(CheckFormat $cf, $bj) {
+        if (!($bj->unsafe ?? null)) {
+            return;
+        }
+        $pagemap = [];
+        $errmap = [];
+        $morepages = false;
+        $status = 0;
+        foreach ($bj->unsafe as $k => $pagelist) {
+            if (empty($pagelist)) {
+                continue;
+            }
+            if ($k === "rellaunch" || $k === "multimedia") {
+                if ($status === 0) {
+                    $status = 1;
+                } else if ($status === 2) {
+                    continue;
+                }
+            } else if ($status < 2) {
+                $status = 2;
+                $errmap = $pagemap = [];
+            }
+            $errmap[$k] = true;
+            foreach ($pagelist as $page) {
+                if ($page === 0) {
+                    $morepages = true;
+                } else {
+                    $pagemap[$page] = true;
+                }
+            }
+        }
+        if ($status === 0) {
+            return;
+        }
+        ksort($pagemap);
+        $pagelist = array_keys($pagemap);
+        if ($morepages) {
+            $pagelist[] = "others";
+        }
+        ksort($errmap);
+        $errnames = array_keys($errmap);
+        if ($status === 1) {
+            $cf->warning_at("unsafe", "<0>Unusual content: this PDF contains links to content that may not be available on other machines.");
+            $cf->inform_at("unsafe", "<0>Such links often point to artifact files (source code, multimedia content) that might be submitted alongside the PDF. (" . plural_word($pagelist, "page") . " " . numrangejoin($pagelist) . ")");
+        } else {
+            $cf->error_at("unsafe", "<5><strong>Dangerous content</strong>: this PDF may cause some PDF viewers to run embedded code or contact external servers, potentially deanonymizing reviewers.");
+            $cf->inform_at("unsafe", "<0>These features are sometimes added by tools without author knowledge; printing the PDF to a new PDF file usually removes them. (" . plural_word($pagelist, "page") . " " . numrangejoin($pagelist) . "; " . plural_word($errnames, "feature") . ": " . commajoin($errnames) . ")");
         }
     }
 

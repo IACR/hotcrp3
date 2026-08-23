@@ -1,6 +1,6 @@
 <?php
 // pages/p_profile.php -- HotCRP profile management page
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Profile_Page {
     /** @var Conf
@@ -17,8 +17,10 @@ class Profile_Page {
     public $user;
     /** @var UserStatus */
     public $ustatus;
-    /** @var int */
-    public $page_type = 0;
+    /** @var ?string */
+    public $mode;
+    /** @var object */
+    public $_modej;
     /** @var string */
     public $topic;
 
@@ -35,9 +37,10 @@ class Profile_Page {
 
     /** @return never */
     private function fail_user_search($text) {
-        $action_bar = $this->viewer->privChair ? QuicklinksRenderer::make($this->qreq, "account") : "";
+        $action_bar = $this->viewer->privChair ? "quicklinks:account" : "";
         Multiconference::fail($this->qreq, 404, [
-            "title" => "Profile", "action_bar" => $action_bar
+            "title" => "Profile",
+            "action_bar" => $action_bar
         ], $text);
     }
 
@@ -45,24 +48,24 @@ class Profile_Page {
      * @return Contact */
     private function handle_user_search($u) {
         if (!$this->viewer->privChair) {
-            Multiconference::fail($this->qreq, 403, ["title" => "Profile"], "<5>Permission error: you can only access <a href=\"" . $this->conf->hoturl("profile", ["u" => null]) . "\">your own profile</a>");
+            Multiconference::fail($this->qreq, 403, ["title" => "Profile"], "<5>Permission error: you can only access " . $this->conf->hotlink("your own profile", "profile", ["u" => null]));
         }
 
         $user = null;
         if (ctype_digit($u)) {
             $user = $this->conf->user_by_id(intval($u));
         } else if ($u === "" && $this->qreq->search) {
-            $this->conf->redirect_hoturl("users");
+            $this->qreq->redirect_hoturl("users");
         } else if (($user = $this->conf->user_by_email($u))) {
             // OK
         } else if ($this->qreq->search) {
             $cs = new ContactSearch(ContactSearch::F_USER, $u, $this->viewer);
             if ($cs->user_ids()) {
                 $list = (new SessionList("u/all/" . urlencode($this->qreq->search), $cs->user_ids(), "“{$u}”"))
-                    ->set_urlbase($this->conf->hoturl_raw("users", ["t" => "all"], Conf::HOTURL_SITEREL));
+                    ->set_urlbase($this->conf->hoturl("users", ["t" => "all"], Conf::HOTURL_SITEREL));
                 $list->set_cookie($this->qreq);
                 $user = $this->conf->user_by_id($cs->user_ids()[0]);
-                $this->conf->redirect_hoturl("profile", ["u" => $user->email]);
+                $this->qreq->redirect_hoturl("profile", ["u" => $user->email]);
             } else {
                 $this->fail_user_search("<0>User matching ‘{$u}’ not found");
             }
@@ -76,7 +79,7 @@ class Profile_Page {
             if (isset($this->qreq->save) || isset($this->qreq->savebulk)) {
                 $this->conf->error_msg("<0>Changes not saved; your session has changed since you last loaded this tab");
             }
-            $this->conf->redirect_self($this->qreq, ["u" => $u]);
+            $this->qreq->redirect_self(["u" => $u]);
         }
 
         if ($user->contactId > 0 && $user->contactId === $this->viewer->contactId) {
@@ -91,7 +94,9 @@ class Profile_Page {
             $this->qreq->u = $this->qreq->user ? : $this->qreq->contact;
         }
         if (($p = $this->qreq->path_component(0)) !== null) {
-            if (in_array($p, ["", "me", "self", "new", "bulk"], true)
+            if ($p === ""
+                || $p === "me"
+                || $p === "self"
                 || strpos($p, "@") !== false
                 || !$this->ustatus->cs()->might_exist($p)) {
                 if ($this->qreq->u === null) {
@@ -115,11 +120,16 @@ class Profile_Page {
             || ($this->viewer->contactId > 0 && $u === (string) $this->viewer->contactId)) {
             $user = $this->viewer;
         } else if ($this->viewer->privChair
-                   && ($u === "new" || $u === "bulk")) {
+                   && ($gj = $this->ustatus->cs()->get("__mode/{$u}"))) {
             $user = Contact::make_placeholder($this->conf);
-            $this->page_type = $u === "new" ? 1 : 2;
+            $this->mode = $u;
+            $this->ustatus->set_profile_mode($u);
+            $this->_modej = $gj;
         } else {
             $user = $this->handle_user_search($u);
+        }
+        if (!$this->_modej) {
+            $this->_modej = $this->ustatus->cs()->get("__mode/profile");
         }
 
         $this->user = $user;
@@ -150,17 +160,31 @@ class Profile_Page {
             $ustatus->inform_at("email", "<0>Use ‘Manage email’ to manage your accounts’ email addresses.");
         }
 
-        // save account
-        return $ustatus->execute_update() ? $ustatus->user : null;
+        // attempt save
+        if (!$ustatus->execute_update()) {
+            return null;
+        }
+
+        // maybe save theme
+        if ($ustatus->is_auth_self()
+            && isset($ustatus->jval->theme)
+            && ($ui = $this->user->session_index()) >= 0) {
+            UpdateSession::apply_theme($this->qreq->qsession(), $ui, $this->user->theme());
+        }
+
+        // return user
+        return $ustatus->user;
     }
 
 
     /** @return \Generator<MessageItem> */
     private function decorated_message_list(MessageSet $msx, ?UserStatus $us = null) {
-        $ms = (new MessageSet)->set_ignore_duplicates(MessageSet::IGNORE_DUPS_FIELD);
+        $ms = (new MessageSet)->set_ignore_duplicates(MessageSet::IGNORE_DUPS_FIELD)
+            ->set_message_formatter($this->conf);
         foreach ($msx->message_list() as $mi) {
             if (($mi->field ?? "") !== ""
-                && str_ends_with($mi->field, ":context")) {
+                && (str_ends_with($mi->field, "/context")
+                    || str_ends_with($mi->field, ":context"))) {
                 continue;
             }
             if ($us
@@ -181,7 +205,7 @@ class Profile_Page {
 
     /** @return MessageItem */
     private function linked_secondary_warning_note(UserStatus $ustatus, Contact $user) {
-        return MessageItem::warning_note("<5>" . htmlspecialchars($ustatus->linked_secondary) . " is linked to primary account " . Ht::link(htmlspecialchars($user->email), $this->conf->hoturl("profile", ["u" => $user->email])));
+        return MessageItem::warning_note("<5>" . htmlspecialchars($ustatus->linked_secondary) . " is linked to primary account " . $this->conf->hotlink(htmlspecialchars($user->email), "profile", ["u" => $user->email]));
     }
 
     /** @param string $text
@@ -250,13 +274,11 @@ class Profile_Page {
         while (($line = $csv->next_row())) {
             $ustatus->clear_messages();
             $ustatus->start_update();
-            $ustatus->csvreq = $line;
-            $ustatus->parse_csv_group("");
+            $ustatus->parse_csv($line);
             $ustatus->set_notify(friendly_boolean($line["notify"]) ?? true);
             $saved_user = $this->save_user($ustatus);
             if ($saved_user) {
-                $url = $this->conf->hoturl("profile", "u=" . urlencode($saved_user->email));
-                $link = "<a class=\"nb\" href=\"{$url}\">" . $saved_user->name_h(NAME_E) . "</a>";
+                $link = $this->conf->hotlink($saved_user->name_h(NAME_E), "profile", ["u" => $saved_user->email], ["class" => "nb"]);
                 if ($ustatus->linked_secondary) {
                     $ms->append_item($this->linked_secondary_warning_note($ustatus, $saved_user));
                 }
@@ -306,12 +328,12 @@ class Profile_Page {
 
 
     private function handle_save() {
-        assert($this->user->is_empty() === ($this->page_type !== 0));
+        assert($this->user->is_empty() === (!!$this->mode));
 
         // prepare UserStatus
         $this->ustatus->start_update();
         $this->ustatus->no_deprivilege_self = true;
-        if ($this->page_type === 0) {
+        if (!$this->mode) {
             $this->ustatus->set_user($this->user);
         } else {
             $this->ustatus->set_if_empty(UserStatus::IF_EMPTY_MOST);
@@ -327,21 +349,25 @@ class Profile_Page {
 
         // report messages
         $ml = [];
-        $purl = $this->conf->hoturl("profile", ["u" => $saved_user ? $saved_user->email : null]);
+        $plink = $saved_user ? $this->conf->hotlink($saved_user->name_h(NAME_E), "profile", ["u" => $saved_user->email]) : "";
         if ($this->ustatus->has_error()) {
             $ml[] = MessageItem::error("<0>Changes not saved; please correct the highlighted errors and try again");
         } else if ($this->ustatus->created && $this->ustatus->notified) {
-            $ml[] = MessageItem::success("<5>Account " . Ht::link($saved_user->name_h(NAME_E), $purl) . " created and notified");
+            $ml[] = MessageItem::success("<5>Account {$plink} created and notified");
         } else if ($this->ustatus->created) {
-            $ml[] = MessageItem::success("<5>Account " . Ht::link($saved_user->name_h(NAME_E), $purl) . " created, but not notified");
+            if ($saved_user && $saved_user->is_bot()) {
+                $ml[] = MessageItem::success("<5>Bot account {$plink} created");
+            } else {
+                $ml[] = MessageItem::success("<5>Account {$plink} created, but not notified");
+            }
         } else {
             if ($this->ustatus->linked_secondary) {
                 $ml[] = $this->linked_secondary_warning_note($this->ustatus, $saved_user);
             }
-            if ($this->page_type !== 0) {
-                $ml[] = MessageItem::warning_note("<5>User " . Ht::link($saved_user->name_h(NAME_E), $purl) . " already had an account on this site");
+            if ($this->mode) {
+                $ml[] = MessageItem::warning_note("<5>User {$plink} already had an account on this site");
             }
-            if ($this->page_type !== 0 || $this->user !== $this->viewer) {
+            if ($this->mode || $this->user !== $this->viewer) {
                 $diffs = " to " . commajoin(array_keys($this->ustatus->diffs));
             } else {
                 $diffs = "";
@@ -365,15 +391,17 @@ class Profile_Page {
 
         // redirect on success
         if (isset($this->qreq->redirect)) {
-            $this->conf->redirect();
+            $this->qreq->redirect(null);
         }
         $xcj = [];
-        if ($this->page_type !== 0) {
+        if ($this->mode) {
             $roles = $this->ustatus->jval->roles ?? [];
             if (in_array("chair", $roles, true)) {
                 $xcj["pctype"] = "chair";
             } else if (in_array("pc", $roles, true)) {
                 $xcj["pctype"] = "pc";
+            } else if (in_array("unlistedpc", $roles, true)) {
+                $xcj["pctype"] = "unlistedpc";
             } else {
                 $xcj["pctype"] = "none";
             }
@@ -386,10 +414,10 @@ class Profile_Page {
             $xcj["warning_fields"] = $this->ustatus->problem_fields();
         }
         $this->qreq->set_csession("profile_redirect", $xcj);
-        if ($this->user !== $this->viewer && $this->page_type === 0) {
-            $this->conf->redirect_self($this->qreq, ["u" => $this->user->email]);
+        if ($this->user !== $this->viewer && !$this->mode) {
+            $this->qreq->redirect_self(["u" => $this->user->email]);
         } else {
-            $this->conf->redirect_self($this->qreq);
+            $this->qreq->redirect_self();
         }
     }
 
@@ -407,7 +435,7 @@ class Profile_Page {
         }
         if (trim($text) !== "" && trim($text) !== "Enter users one per line") {
             if ($this->save_bulk($text, $filename)) {
-                $this->conf->redirect_self($this->qreq);
+                $this->qreq->redirect_self();
             }
         } else {
             $this->conf->feedback_msg(MessageItem::warning_note("<0>No changes"));
@@ -423,21 +451,21 @@ class Profile_Page {
         }
         $this->conf->feedback_msg($ua);
         if ($ok) {
-            $this->conf->redirect_hoturl("users", "t=all");
+            $this->qreq->redirect_hoturl("users", ["t" => "all"]);
         }
     }
 
     function handle_request() {
         $this->find_user();
         if ($this->qreq->cancel) {
-            $this->conf->redirect_self($this->qreq);
+            $this->qreq->redirect_self();
         } else if ($this->qreq->reauth
                    && $this->qreq->valid_post()) {
             if (!$this->ustatus->has_error()) {
-                $this->conf->redirect_self($this->qreq);
+                $this->qreq->redirect_self();
             }
         } else if ($this->qreq->savebulk
-                   && $this->page_type !== 0
+                   && $this->mode
                    && $this->qreq->valid_post()) {
             $this->handle_save_bulk();
         } else if ($this->qreq->save
@@ -474,9 +502,9 @@ class Profile_Page {
             }
         }
         if ($this->viewer->privChair
-            && $this->page_type !== 0
+            && $this->mode
             && empty($this->ustatus->jval->roles)) {
-            if (in_array($this->qreq->role, ["pc", "chair"], true)) {
+            if (in_array($this->qreq->role, ["pc", "unlistedpc", "chair"], true)) {
                 $this->qreq->pctype = $this->qreq->role;
             } else if ($this->qreq->role === "sysadmin") {
                 $this->qreq->ass = "1";
@@ -484,10 +512,9 @@ class Profile_Page {
         }
 
         // crosscheck
-        if ($this->page_type === 0) {
-            foreach ($this->ustatus->cs()->members("__crosscheck", "crosscheck_function") as $gj) {
-                $this->ustatus->cs()->call_function($gj, $gj->crosscheck_function, $gj);
-            }
+        $cs = $this->ustatus->cs();
+        foreach ($cs->members("__crosscheck", "crosscheck_function") as $gj) {
+            $cs->call_function($gj, $gj->crosscheck_function, $gj);
         }
     }
 
@@ -495,7 +522,7 @@ class Profile_Page {
         // canonicalize topic
         $this->ustatus->set_user($this->user);
         $reqtopic = $this->qreq->t ? : "main";
-        if ($this->page_type === 0
+        if (!$this->mode
             && $reqtopic !== "main"
             && !str_starts_with($reqtopic, "__")
             && ($g = $this->ustatus->cs()->canonical_group($reqtopic))) {
@@ -505,16 +532,16 @@ class Profile_Page {
         }
         if ($this->qreq->t
             && $this->qreq->t !== $this->topic
-            && $this->qreq->is_get()) {
+            && $this->qreq->is_getlike()) {
             $this->qreq->t = $this->topic === "main" ? null : $this->topic;
-            $this->conf->redirect_self($this->qreq);
+            $this->qreq->redirect_self();
         }
-        $this->ustatus->cs()->set_root($this->topic);
+        $this->ustatus->set_profile_topic($this->topic);
 
         // set session list
-        if ($this->page_type === 0
+        if (!$this->mode
             && ($list = SessionList::load_cookie($this->viewer, "u"))
-            && $list->set_current_id($this->user->contactId)) {
+            && $list->possibly_active($this->user->contactId)) {
             $this->qreq->set_active_list($list);
         }
 
@@ -523,16 +550,19 @@ class Profile_Page {
             || $this->ustatus->has_error();
 
         // maybe prepare & crosscheck
-        $this->ustatus->user_json();
-        if (!$use_req) {
+        $this->ustatus->user_json(); // set `$this->ustatus->jval`
+        if (!$this->ustatus->has_error()
+            && ($this->user->has_account_here()
+                || !isset($this->qreq->follow_review))) {
             $this->prepare_and_crosscheck();
+            $want_ustatus_message = true;
+        } else {
+            $want_ustatus_message = $this->conf->saved_messages_status() < 1;
         }
 
         // set title
-        if ($this->page_type === 2) {
-            $title = "Bulk update";
-        } else if ($this->page_type === 1) {
-            $title = "New account";
+        if ($this->mode) {
+            $title = $this->_modej->title;
         } else if ($this->user === $this->viewer) {
             $title = "Profile";
             $this->qreq->set_annex("profile_self", true);
@@ -542,27 +572,22 @@ class Profile_Page {
         $this->qreq->print_header($title, "account", [
             "title_div" => "",
             "body_class" => "leftmenu",
-            "action_bar" => QuicklinksRenderer::make($this->qreq, "account"),
+            "action_bar" => "quicklinks:account" . ($this->mode ? "" : ":{$this->user->contactId}"),
             "save_messages" => true
         ]);
 
         // start form
         $form_params = [];
-        if ($this->page_type === 2) {
-            $form_params["u"] = "bulk";
-        } else if ($this->page_type === 1) {
-            $form_params["u"] = "new";
+        if ($this->mode) {
+            $form_params["u"] = $this->mode;
         } else if ($this->user !== $this->viewer) {
             $form_params["u"] = $this->user->email;
         }
         $form_params["t"] = $this->qreq->t;
-        if (isset($this->qreq->ls)) {
-            $form_params["ls"] = $this->qreq->ls;
-        }
-        echo Ht::form($this->conf->hoturl("=profile", $form_params), [
+        echo $this->conf->hotform("=profile", $form_params, [
             "id" => "f-profile",
             "class" => "need-diff-check need-unload-protection",
-            "data-user" => $this->page_type ? null : $this->user->email
+            "data-user" => $this->mode ? null : $this->user->email
         ]);
 
         // left menu
@@ -571,64 +596,16 @@ class Profile_Page {
             '<h1 class="leftmenu"><button type="button" class="q ui js-leftmenu">Account',
             '<span class="leftmenu-not-left">', aria_plus_expander("after"), '</span>',
             '</button></h1><ul class="leftmenu-list">';
-
         if ($this->viewer->privChair) {
-            foreach ([["New account", "new"], ["Bulk update", "bulk"], ["Your profile", null]] as $t) {
-                if (!$t[1] && $this->page_type === 0 && $this->user === $this->viewer) {
-                    continue;
-                }
-                $active = $t[1] && $this->page_type === ($t[1] === "new" ? 1 : 2);
-                echo '<li class="leftmenu-item font-italic',
-                    $active ? ' active" aria-current="page' : ' ui js-click-child',
-                    '">';
-                if ($active) {
-                    echo $t[0];
-                } else {
-                    echo Ht::link($t[0], $this->conf->selfurl($this->qreq, ["u" => $t[1], "t" => null]));
-                }
-                echo '</li>';
-            }
+            $this->print_leftmenu_modes();
         }
-
-        if ($this->page_type === 0) {
-            $first = $this->viewer->privChair;
-            $cs = $this->ustatus->cs();
-            foreach ($cs->members("", "title") as $gj) {
-                $disabled = false;
-                if (isset($gj->display_if)) {
-                    $disp = $gj->display_if;
-                    if (is_string($disp) && $disp !== "dim") {
-                        $disp = $cs->call_function($gj, $disp);
-                    }
-                    if (!$disp) {
-                        continue;
-                    } else if ($disp === "dim") {
-                        $disabled = true;
-                    }
-                }
-                echo '<li class="leftmenu-item',
-                    $first ? ' leftmenu-item-gap4' : '',
-                    $gj->name === $this->topic ? ' active" aria-current="page' : ' ui js-click-child',
-                    '">';
-                $title = $gj->short_title ?? $gj->title;
-                if ($gj->name === $this->topic) {
-                    echo $title;
-                } else {
-                    $aextra = [];
-                    if ($disabled) {
-                        $aextra["class"] = "dim";
-                    }
-                    echo Ht::link($title, $this->conf->selfurl($this->qreq, ["t" => $gj->name]), $aextra);
-                }
-                echo '</li>';
-                $first = false;
-            }
+        if (!$this->mode) {
+            $this->print_leftmenu_topics();
         }
-
         echo '</ul>';
 
-        if ($this->page_type === 0 || $this->page_type === 1) {
-            $t = $this->page_type === 0 ? "Save changes" : "Create account";
+        if (!isset($this->_modej->print_group)) {
+            $t = $this->_modej->save_button_label ?? "Save changes";
             echo '<div class="leftmenu-if-left if-differs mt-5">',
                 Ht::submit("save", $t, ["class" => "btn-primary"]), '</div>';
         }
@@ -636,8 +613,8 @@ class Profile_Page {
         echo '</nav></div>',
             '<div class="leftmenu-content main-column">';
 
-        if ($this->page_type === 2) {
-            echo '<h2 class="leftmenu">Bulk update</h2>';
+        if (isset($this->_modej->print_group)) {
+            echo '<h2 class="leftmenu">', $this->_modej->title, '</h2>';
         } else {
             echo Ht::hidden("profile_contactid", $this->user->contactId);
             if (isset($this->qreq->redirect)) {
@@ -647,8 +624,9 @@ class Profile_Page {
             echo '<div id="foldaccount" class="';
             if ($this->qreq->pctype === "chair"
                 || $this->qreq->pctype === "pc"
+                || $this->qreq->pctype === "unlistedpc"
                 || (!isset($this->qreq->pctype)
-                    && ($this->user->roles & Contact::ROLE_PC) !== 0)) {
+                    && $this->user->is_pc_member())) {
                 echo "fold1o fold2o";
             } else if ($this->qreq->ass
                        || (!isset($this->qreq->pctype)
@@ -659,9 +637,9 @@ class Profile_Page {
             }
             echo "\">";
 
-            echo '<h2 class="leftmenu">';
-            if ($this->page_type === 1) {
-                echo 'New account';
+            echo '<h2 id="h-subtitle" class="leftmenu">';
+            if (isset($this->_modej->heading)) {
+                echo $this->_modej->heading;
             } else {
                 if ($this->user !== $this->viewer) {
                     echo $this->viewer->name_for("rn", $this->user), ' ';
@@ -674,13 +652,14 @@ class Profile_Page {
             echo '</h2>';
         }
 
-        if (($this->conf->report_saved_messages() < 1 || !$use_req)
-            && $this->ustatus->has_message()) {
+        if ($this->ustatus->has_message() && $want_ustatus_message) {
             $this->conf->feedback_msg($this->decorated_message_list($this->ustatus, $this->ustatus));
         }
 
-        if ($this->page_type === 2) {
-            $this->ustatus->print_members("__bulk");
+        $this->conf->report_saved_messages();
+
+        if (isset($this->_modej->print_group)) {
+            $this->ustatus->print_members($this->_modej->print_group);
         } else {
             $this->print_topic();
             echo "</div>"; // foldaccount
@@ -690,10 +669,74 @@ class Profile_Page {
             // include #f-reauth in case we need to reauthenticate
             '<form id="f-reauth" class="ui-submit js-reauth"></form>';
 
-        if ($this->page_type === 0) {
+        if (!$this->mode) {
             Ht::stash_script('$("#f-profile").awaken()');
         }
         $this->qreq->print_footer();
+    }
+
+    private function print_leftmenu_modes() {
+        $cs = $this->ustatus->cs();
+        foreach ($cs->members("__mode") as $gj) {
+            $n = substr($gj->name, strlen($gj->group) + 1);
+            if ($n === "profile" && !$this->mode && $this->user === $this->viewer) {
+                continue;
+            }
+            if (isset($gj->display_if)) {
+                $disp = $gj->display_if;
+                if (is_string($disp)) {
+                    $disp = $cs->call_function($gj, $disp);
+                }
+                if (!$disp) {
+                    continue;
+                }
+            }
+            $active = $n !== "profile" && $this->mode === $n;
+            echo '<li class="leftmenu-item font-italic',
+                $active ? ' active" aria-current="page' : ' ui js-click-child',
+                '">';
+            if ($active) {
+                echo $gj->title;
+            } else {
+                echo $this->conf->selflink($gj->title, $this->qreq, ["u" => $n === "profile" ? null : $n, "t" => null]);
+            }
+            echo '</li>';
+        }
+    }
+
+    private function print_leftmenu_topics() {
+        $first = $this->viewer->privChair;
+        $cs = $this->ustatus->cs();
+        foreach ($cs->members("", "title") as $gj) {
+            $disabled = false;
+            if (isset($gj->display_if)) {
+                $disp = $gj->display_if;
+                if (is_string($disp) && $disp !== "dim") {
+                    $disp = $cs->call_function($gj, $disp);
+                }
+                if (!$disp) {
+                    continue;
+                } else if ($disp === "dim") {
+                    $disabled = true;
+                }
+            }
+            echo '<li class="leftmenu-item',
+                $first ? ' leftmenu-item-gap4' : '',
+                $gj->name === $this->topic ? ' active" aria-current="page' : ' ui js-click-child',
+                '">';
+            $title = $gj->short_title ?? $gj->title;
+            if ($gj->name === $this->topic) {
+                echo $title;
+            } else {
+                $aextra = [];
+                if ($disabled) {
+                    $aextra["class"] = "dim";
+                }
+                echo $this->conf->selflink($title, $this->qreq, ["t" => $gj->name], $aextra);
+            }
+            echo '</li>';
+            $first = false;
+        }
     }
 
     private function print_topic() {

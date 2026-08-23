@@ -113,7 +113,7 @@ class Settings_Batch {
     /** @param bool $new
      * @return string */
     function output(SettingValues $sv, $new) {
-        return json_encode($sv->all_jsonv(["new" => $new]), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+        return $sv->all_json_string(["new" => $new]);
     }
 
     /** @return int */
@@ -149,19 +149,21 @@ class Settings_Batch {
             $this->sv->execute();
         }
         $fb = $this->sv->decorated_feedback_text();
-        if ($fb === "" && !$this->dry_run) {
-            if (empty($this->sv->saved_keys())) {
+        if ($fb === "") {
+            $cl = [];
+            foreach ($this->sv->changed_top_si() as $si) {
+                $cl[] = $si->name;
+            }
+            if (empty($cl) && ($this->dry_run || empty($this->sv->saved_keys()))) {
                 $fb = "No changes\n";
             } else if ($this->dry_run) {
-                $fb = "No errors\n";
+                $fb = "Would change " . join(", ", $cl) . "\n";
             } else {
-                $fb = "Settings saved\n";
+                $fb = "Saved " . join(", ", $cl ? : $this->sv->saved_keys()) . "\n";
             }
         }
         fwrite(STDERR, $fb);
         if ($this->diff) {
-            $dmp = new dmp\diff_match_patch;
-            $dmp->Line_Histogram = true;
             if ($this->dry_run) {
                 $this->sv->set_si_filter(null)->set_si_exclude(null);
                 assert($this->output($this->sv, false) === $old_jsonstr);
@@ -169,8 +171,7 @@ class Settings_Batch {
             } else {
                 $new_jsonstr = $this->output($this->make_sv(), false);
             }
-            $diff = $dmp->line_diff($old_jsonstr, $new_jsonstr);
-            fwrite(STDOUT, $dmp->line_diff_toUnified($diff));
+            fwrite(STDOUT, SettingValues::json_unified_diff($old_jsonstr, $new_jsonstr));
         }
         return $this->sv->has_error() ? 1 : 0;
     }

@@ -1,6 +1,6 @@
 <?php
 // formulas/f_pref.php -- HotCRP helper class for formula expressions
-// Copyright (c) 2009-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2009-2026 Eddie Kohler; see LICENSE.
 
 class Pref_Fexpr extends Fexpr {
     private $is_expertise;
@@ -34,21 +34,23 @@ class Pref_Fexpr extends Fexpr {
         }
         return new Pref_Fexpr($ff);
     }
+    function about() {
+        return SearchTerm::ABOUT_PREFS;
+    }
     function inferred_index() {
-        return Fexpr::IDX_PC;
+        return Fexpr::IDX_PREF;
     }
     function compile(FormulaCompiler $state) {
-        if (!$state->user->is_reviewer()) {
+        if (!$state->user->isPC) {
             return "null";
         }
-        $state->queryOptions["allReviewerPreference"] = true;
-        $pref = $state->_add_preferences();
-        $cid = $state->loop_cid(!$this->cids);
-        $condition = "isset({$pref}[{$cid}])";
+        $pref = $state->current_preference();
+        $condition = "isset({$pref})";
         if ($this->cids) {
-            $condition .= " && in_array({$cid}, [" . join(",", $this->cids) . "], true)";
+            $uid = $state->current_uid();
+            $condition .= " && in_array({$uid}, [" . join(",", $this->cids) . "], true)";
         }
         $property = $this->is_expertise ? "expertise" : "preference";
-        return "({$condition} ? {$pref}[{$cid}]->{$property} : null)";
+        return "({$condition} ? {$pref}->{$property} : null)";
     }
 }

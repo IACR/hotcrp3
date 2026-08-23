@@ -1,6 +1,6 @@
 <?php
 // s3client.php -- helper class for S3 access papers
-// Copyright (c) 2006-2023 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class S3Client {
     const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -21,6 +21,11 @@ class S3Client {
     /** @var string
      * @readonly */
     public $s3_region;
+    /** @var ?string
+     * @readonly */
+    public $s3_domain;
+    /** @var bool */
+    public $verbose = false;
     /** @var ?Conf */
     private $setting_cache;
     /** @var string */
@@ -35,13 +40,21 @@ class S3Client {
     private $reset_key = false;
     /** @var class-string<S3Result> */
     public $result_class = "StreamS3Result";
+    /** @var int */
+    public $request_count = 0;
+    /** @var int */
+    public $retry_count = 0;
+    /** @var int */
+    public $success_count = 0;
+    /** @var int */
+    public $fail_count = 0;
+    /** @var int */
+    public $incomplete_count = 0;
 
     /** @var int */
     static public $retry_timeout_allowance = 10; // in seconds
     /** @var list<S3Client> */
     static private $instances = [];
-    /** @var bool */
-    static public $verbose = false;
 
     /** @var array<string,string>
      * @readonly */
@@ -50,7 +63,8 @@ class S3Client {
         "content_file" => false,
         "content_type" => "Content-Type",
         "content_encoding" => "Content-Encoding",
-        "content_disposition" => "Content-Disposition"
+        "content_disposition" => "Content-Disposition",
+        "if_none_match" => "If-None-Match"
     ];
 
     const CONFIRM_DELETE_BUCKET = 1203498141;
@@ -60,15 +74,20 @@ class S3Client {
         $this->s3_secret = $opt["secret"];
         $this->s3_bucket = $opt["bucket"];
         $this->s3_region = $opt["region"] ?? "us-east-1";
+        $this->s3_domain = $opt["domain"] ?? null;
         $this->setting_cache = $opt["setting_cache"] ?? null;
         $this->setting_cache_prefix = $opt["setting_cache_prefix"] ?? "__s3";
     }
 
-    /** @return S3Client */
+    /** @param array{key:string,secret:string,bucket:string} $opt
+     * @return S3Client */
     static function make($opt) {
         foreach (self::$instances as $s3) {
-            if ($s3->check_key_secret_bucket($opt["key"], $opt["secret"], $opt["bucket"])
-                && $s3->s3_region === ($opt["region"] ?? "us-east-1"))
+            if ($s3->s3_key === $opt["key"]
+                && $s3->s3_secret === $opt["secret"]
+                && $s3->s3_bucket === $opt["bucket"]
+                && $s3->s3_region === ($opt["region"] ?? "us-east-1")
+                && $s3->s3_domain === ($opt["domain"] ?? null))
                 return $s3;
         }
         $s3 = new S3Client($opt);
@@ -83,11 +102,42 @@ class S3Client {
         return $this;
     }
 
-    /** @return bool */
-    function check_key_secret_bucket($key, $secret, $bucket) {
-        return $this->s3_key === $key
-            && $this->s3_secret === $secret
-            && $this->s3_bucket === $bucket;
+    /** @param class-string<S3Result> $result_class
+     * @return $this */
+    function set_result_class($result_class) {
+        $this->result_class = $result_class;
+        return $this;
+    }
+
+    /** @param bool $x
+     * @return $this */
+    function set_verbose($x) {
+        $this->verbose = $x;
+        return $this;
+    }
+
+    /** @return $this */
+    function reset_counts() {
+        $this->request_count = $this->retry_count = $this->success_count = $this->fail_count = $this->incomplete_count = 0;
+        return $this;
+    }
+
+    /** @param ?int $status */
+    function account($status) {
+        if ($status === null || $status === 500) {
+            ++$this->retry_count;
+        } else if ($status === 598) {
+            ++$this->incomplete_count;
+        } else if ($status < 400) {
+            ++$this->success_count;
+        } else {
+            ++$this->fail_count;
+        }
+    }
+
+    /** @return string */
+    function bucket() {
+        return $this->s3_bucket;
     }
 
     /** @param int $time
@@ -117,11 +167,11 @@ class S3Client {
 
     /** @return ?int */
     function check_403() {
-        if (!$this->reset_key) {
-            $this->s3_scope = $this->s3_signing_key = "";
-            return null;
+        if ($this->reset_key) {
+            return 403;
         }
-        return 403;
+        $this->s3_scope = $this->s3_signing_key = "";
+        return null;
     }
 
     /** @param 'GET'|'POST'|'HEAD'|'PUT'|'DELETE' $method
@@ -228,8 +278,9 @@ class S3Client {
      * @param array<string,string|array<string,string>> $args
      * @return array{string,list<string>} */
     function signed_headers($skey, $method, $args) {
+        $domain = $this->s3_domain ?? "s3.{$this->s3_region}.amazonaws.com";
         $sep = str_starts_with($skey, "/") ? "" : "/";
-        $url = "https://{$this->s3_bucket}.s3.{$this->s3_region}.amazonaws.com{$sep}{$skey}";
+        $url = "https://{$this->s3_bucket}.{$domain}{$sep}{$skey}";
         $hdr = ["Date" => Navigation::http_date($this->fixed_time ?? time())];
         foreach ($args as $key => $value) {
             if ($key === "user_data") {
@@ -256,6 +307,7 @@ class S3Client {
      * @return S3Result<T> */
     private function start($skey, $method, $args,
                            $finisher = "S3Result::success_finisher") {
+        ++$this->request_count;
         $klass = $this->result_class;
         return new $klass($this, $skey, $method, $args, $finisher);
     }
@@ -325,6 +377,7 @@ class S3Client {
     /** @param string $skey
      * @return CurlS3Result<?string> */
     function start_curl_get($skey) {
+        ++$this->request_count;
         return new CurlS3Result($this, $skey, "GET", [], "S3Client::finish_get");
     }
 
@@ -335,7 +388,7 @@ class S3Client {
         }
         if ($s3r->status !== 404 && $s3r->status !== 500) {
             trigger_error("S3 warning: GET {$s3r->skey}: status {$s3r->status}", E_USER_WARNING);
-            if (self::$verbose) {
+            if ($s3r->s3->verbose) {
                 trigger_error("S3 response: " . var_export($s3r->response_headers, true), E_USER_WARNING);
             }
         }
@@ -425,7 +478,7 @@ class S3Client {
      * @return S3Result<?string> */
     function start_ls($prefix, $args = []) {
         $suffix = "?list-type=2&prefix=" . urlencode($prefix);
-        foreach (["max-keys", "start-after", "continuation-token"] as $k) {
+        foreach (["max-keys", "start-after", "continuation-token", "delimiter"] as $k) {
             if (isset($args[$k]))
                 $suffix .= "&{$k}=" . urlencode($args[$k]);
         }
@@ -500,7 +553,7 @@ class S3Client {
         list($url, $hdr) = $this->signed_headers($skey, "GET", []);
         $dl->set_content_redirect($accel . $url);
         foreach ($hdr as $h) {
-            $dl->header($h);
+            $dl->set_header($h);
         }
     }
 
@@ -508,9 +561,9 @@ class S3Client {
      * @param string $accel */
     function get_accel_redirect($skey, $accel) {
         list($url, $hdr) = $this->signed_headers($skey, "GET", []);
-        header("X-Accel-Redirect: {$accel}{$url}");
+        Navigation::header("X-Accel-Redirect: {$accel}{$url}");
         foreach ($hdr as $h) {
-            header($h);
+            Navigation::header($h);
         }
     }
 
@@ -549,7 +602,7 @@ class S3Client {
     function delete_many($skeys) {
         $i = 0;
         while ($i < count($skeys)) {
-            $j = min(1000, count($skeys) - $i);
+            $j = min($i + 1000, count($skeys));
             $l = ["<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Delete xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\n"];
             for (; $i < $j; ++$i) {
                 $l[] = "<Object><Key>" . htmlspecialchars($skeys[$i]) . "</Key></Object>\n";
@@ -571,22 +624,26 @@ class S3Client {
     }
 
     /** @param string $prefix
-     * @param array{max-keys?:int|string,start-after?:int|string,continuation-token?:string} $args
+     * @param array{max-keys?:int|string,start-after?:int|string,continuation-token?:string,delimiter?:string} $args
      * @return ?string */
     function ls($prefix, $args = []) {
         return $this->start_ls($prefix, $args)->finish();
     }
 
     /** @param string $prefix
-     * @param array{start-after?:int|string,max-keys?:int,continuation-token?:void} $args
+     * @param array{start-after?:int|string,max-keys?:int,continuation-token?:void,delimiter?:string} $args
      * @return Generator<SimpleXMLElement> */
     function ls_all($prefix, $args = []) {
         $max_keys = $args["max-keys"] ?? -1;
         $xml = null;
-        $xmlpos = 0;
+        $xml_contents = $xml_common_prefixes = $xmlpos = 0;
         while ($max_keys !== 0) {
-            if ($xml && $xmlpos < count($xml->Contents ?? [])) {
-                yield $xml->Contents[$xmlpos];
+            if ($xml && $xmlpos < $xml_common_prefixes) {
+                if ($xmlpos < $xml_contents) {
+                    yield $xml->Contents[$xmlpos];
+                } else {
+                    yield $xml->CommonPrefixes[$xmlpos - $xml_contents];
+                }
                 ++$xmlpos;
                 $max_keys = max($max_keys - 1, -1);
                 continue;
@@ -594,14 +651,17 @@ class S3Client {
             if ($xml && !isset($args["continuation-token"])) {
                 break;
             }
-            $args["max-keys"] = $max_keys < 0 ? 600 : min(600, $max_keys);
+            $args["max-keys"] = $max_keys < 0 ? 800 : min(800, $max_keys);
             $content = $this->ls($prefix, $args);
             $xml = new SimpleXMLElement($content);
             $xmlpos = 0;
-            if (empty($xml->Contents)
+            $xml_contents = count($xml->Contents ?? []);
+            $xml_common_prefixes = $xml_contents + count($xml->CommonPrefixes ?? []);
+            if ($xml_common_prefixes === 0
                 && (!isset($xml->KeyCount) || (string) $xml->KeyCount !== "0")) {
                 throw new Exception("Bad response from S3 List Objects");
             }
+            unset($args["start-after"]);
             if (isset($xml->IsTruncated) && (string) $xml->IsTruncated === "true") {
                 $args["continuation-token"] = (string) $xml->NextContinuationToken;
             } else {
@@ -611,12 +671,14 @@ class S3Client {
     }
 
     /** @param string $prefix
-     * @param array{start-after?:int|string,max-keys?:int,continuation-token?:void} $args
+     * @param array{start-after?:int|string,max-keys?:int,continuation-token?:void,delimiter?:string} $args
      * @return Generator<string> */
     function ls_all_keys($prefix, $args = []) {
         foreach ($this->ls_all($prefix, $args) as $content) {
             if (isset($content->Key)) {
                 yield (string) $content->Key;
+            } else if (isset($content->Prefix)) {
+                yield (string) $content->Prefix;
             }
         }
     }

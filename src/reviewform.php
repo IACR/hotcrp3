@@ -1,6 +1,6 @@
 <?php
 // reviewform.php -- HotCRP helper class for producing review forms and tables
-// Copyright (c) 2006-2024 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class ReviewForm {
     /** @var Conf
@@ -44,7 +44,6 @@ class ReviewForm {
         1 => "E", 2 => "P", 3 => "2", 4 => "1", 5 => "M"
     ];
 
-    static private $review_author_seen = null;
 
     /** @param null|array|object $rfj */
     function __construct(Conf $conf, $rfj) {
@@ -197,7 +196,6 @@ class ReviewForm {
     private function print_web_edit(PaperInfo $prow, ReviewInfo $rrow,
                                     Contact $contact, ReviewValues $rvalues) {
         $fi = $this->conf->format_info(null);
-        echo '<div class="rve">';
         foreach ($rrow->viewable_fields($contact, true) as $f) {
             if (!$f->test_exists($rrow)) {
                 $rvalues->warning_at($f->short_id, "<0>This review field is currently hidden by a field condition and is not visible to others.");
@@ -206,7 +204,6 @@ class ReviewForm {
             $reqstr = $rvalues->req[$f->short_id] ?? null;
             $f->print_web_edit($fv, $reqstr, $rvalues, ["format" => $fi]);
         }
-        echo "</div>\n";
     }
 
     /** @return int */
@@ -244,59 +241,25 @@ class ReviewForm {
     }
 
 
-    static function update_review_author_seen() {
-        while (self::$review_author_seen) {
-            $conf = self::$review_author_seen[0][0];
-            $qstager = Dbl::make_multi_qe_stager($conf->dblink);
-            $next = [];
-            foreach (self::$review_author_seen as $x) {
-                if ($x[0] === $conf) {
-                    array_shift($x);
-                    /** @phan-suppress-next-line PhanParamTooFewUnpack */
-                    $qstager(...$x);
-                } else {
-                    $next[] = $x;
-                }
-            }
-            $qstager(null);
-            self::$review_author_seen = $next;
-        }
-    }
-
     /** @param PaperInfo $prow
      * @param ?ReviewInfo $rrow
-     * @param Contact $viewer
+     * @param ContactPermissions $viewer
      * @param bool $no_update */
     static function check_review_author_seen($prow, $rrow, $viewer,
                                              $no_update = false) {
         if (!$rrow
             || !$rrow->reviewId
             || ($rrow->reviewAuthorSeen && ($rrow->rflags & ReviewInfo::RF_AUSEEN) !== 0)
-            || !$viewer->act_author_view($prow)
-            || $viewer->is_actas_user()) {
+            || !$viewer->implies_author_view($prow)) {
             return;
         }
         // XXX combination of review tokens & authorship gets weird -- old comment
-        if (!$rrow->reviewAuthorSeen) {
-            $rrow->reviewAuthorSeen = Conf::$now;
-            if (!$no_update) {
-                self::add_review_author_seen_update($prow->conf, "update PaperReview set reviewAuthorSeen=? where paperId=? and reviewId=?", $rrow->reviewAuthorSeen, $rrow->paperId, $rrow->reviewId);
-            }
+        $rrow->reviewAuthorSeen = $rrow->reviewAuthorSeen ? : Conf::$now;
+        $rrow->rflags |= ReviewInfo::RF_AUSEEN;
+        if (!$no_update) {
+            $prow->conf->register_shutdown_function("ReviewAuthorSeenUpdate")
+                ->add(Conf::$now, $rrow->paperId, $rrow->reviewId);
         }
-        if (($rrow->rflags & ReviewInfo::RF_AUSEEN) === 0) {
-            $rrow->rflags |= ReviewInfo::RF_AUSEEN;
-            if (!$no_update) {
-                self::add_review_author_seen_update($prow->conf, "update PaperReview set rflags=rflags|? where paperId=? and reviewId=?", ReviewInfo::RF_AUSEEN, $rrow->paperId, $rrow->reviewId);
-            }
-        }
-    }
-
-    static private function add_review_author_seen_update(...$args) {
-        if (!self::$review_author_seen) {
-            register_shutdown_function("ReviewForm::update_review_author_seen");
-            self::$review_author_seen = [];
-        }
-        self::$review_author_seen[] = $args;
     }
 
 
@@ -306,7 +269,7 @@ class ReviewForm {
         $x = "==+== " . $this->conf->short_name . " Review Form" . ($plural ? "s" : "") . "\n";
         $x .= "==-== DO NOT CHANGE LINES THAT START WITH \"==+==\" OR \"==*==\".
 ==-== For further guidance, or to upload this file when you are done, go to:
-==-== " . $this->conf->hoturl_raw("offline", null, Conf::HOTURL_ABSOLUTE) . "\n\n";
+==-== " . $this->conf->hoturl("offline", null, Conf::HOTURL_ABSOLUTE) . "\n\n";
         return $x;
     }
 
@@ -358,7 +321,7 @@ class ReviewForm {
 
 Ready\n";
             if ($this->conf->review_blindness() === Conf::BLIND_OPTIONAL) {
-                $blind = $rrow->reviewBlind ? "Anonymous" : "Open";
+                $blind = $rrow->is_blind() ? "Anonymous" : "Open";
                 $t[] = "\n==+== Review Anonymity
 ==-== {$this->conf->short_name} allows either anonymous or open review.
 ==-== Enter \"Open\" if you want to expose your name to authors:
@@ -387,9 +350,9 @@ Ready\n";
     const UNPARSE_FLOWED = 4;
     const UNPARSE_TRUNCATE = 8;
 
-    function unparse_text(PaperInfo $prow, ReviewInfo $rrow, Contact $contact,
-                          $flags = 0) {
-        self::check_review_author_seen($prow, $rrow, $contact, !!($flags & self::UNPARSE_NO_AUTHOR_SEEN));
+    function unparse_text(PaperInfo $prow, ReviewInfo $rrow,
+                          ContactPermissions $viewer, $flags = 0) {
+        self::check_review_author_seen($prow, $rrow, $viewer, !!($flags & self::UNPARSE_NO_AUTHOR_SEEN));
 
         $n = "";
         if (!($flags & self::UNPARSE_NO_TITLE)) {
@@ -400,7 +363,7 @@ Ready\n";
             $n .= " #" . $rrow->unparse_ordinal_id();
         }
         if ($rrow->reviewRound
-            && $contact->can_view_review_meta($prow, $rrow)) {
+            && $viewer->can_view_review_meta($prow, $rrow)) {
             $n .= " [" . $prow->conf->round_name($rrow->reviewRound) . "]";
         }
         $t = [$n . "\n" . str_repeat("=", 75) . "\n"];
@@ -409,12 +372,13 @@ Ready\n";
         if (!($flags & self::UNPARSE_NO_TITLE)) {
             $t[] = prefix_word_wrap("* ", "Paper: #{$prow->paperId} {$prow->title}", 2, null, $flowed);
         }
-        if ($contact->can_view_review_identity($prow, $rrow)) {
+        if ($viewer->can_view_review_identity($prow, $rrow)) {
             $reviewer = $rrow->reviewer();
-            $t[] = "* Reviewer: " . Text::nameo($reviewer, NAME_EB) . "\n";
+            $t[] = "* Reviewer: " . Text::nameo($reviewer, NAME_EB)
+                . ($reviewer->is_bot() ? Contact::bot_mark_text() : "") . "\n";
         }
         if ($rrow->reviewModified > $rrow->reviewSubmitted) {
-            list($time, $obscured) = $rrow->mtime_info($contact);
+            list($time, $obscured) = $rrow->mtime_info($viewer);
             if ($time > 0) {
                 $time_text = $obscured ? $this->conf->unparse_time_obscure($time) : $this->conf->unparse_time($time);
                 $t[] = "* Updated: {$time_text}\n";
@@ -422,7 +386,7 @@ Ready\n";
         }
 
         $args = ["flowed" => ($flags & self::UNPARSE_FLOWED) !== 0];
-        foreach ($rrow->viewable_fields($contact) as $f) {
+        foreach ($rrow->viewable_fields($viewer) as $f) {
             if (($fv = $rrow->fval($f)) !== null) {
                 $f->unparse_text_field($t, $fv, $args);
             }
@@ -430,38 +394,50 @@ Ready\n";
         return join("", $t);
     }
 
+    /** @param ReviewInfo $rrow
+     * @param Contact $user
+     * @return ?FailureReasons */
+    private function _override_reason($rrow, $user) {
+        if ($this->conf->time_review($rrow->reviewRound, $rrow->reviewType, true)) {
+            return null;
+        }
+        $fr = $rrow->prow->failure_reason();
+        $fr["deadline"] = $rrow->reviewType < REVIEW_PC ? "extrev_hard" : "pcrev_hard";
+        $fr["reviewRound"] = $rrow->reviewRound;
+        $fr["confirmOverride"] = true;
+        return $fr;
+    }
+
     /** @param PaperInfo $prow
-     * @param ?ReviewInfo $rrow
+     * @param ReviewInfo $rrow
      * @param Contact $user */
     private function _print_review_actions($prow, $rrow, $user) {
         $buttons = [];
 
-        $submitted = $rrow && $rrow->reviewStatus === ReviewInfo::RS_COMPLETED;
+        $submitted = $rrow->reviewStatus === ReviewInfo::RS_COMPLETED;
         $disabled = !$user->can_clickthrough("review", $prow);
-        $my_review = !$rrow || $user->is_my_review($rrow);
-        $pc_deadline = $user->act_pc($prow) || $user->allow_administer($prow);
-        if (!$this->conf->time_review($rrow ? $rrow->reviewRound : null, $rrow ? $rrow->reviewType : $pc_deadline, true)) {
-            $whyNot = new FailureReason($this->conf, ["deadline" => ($rrow && $rrow->reviewType < REVIEW_PC ? "extrev_hard" : "pcrev_hard"), "confirmOverride" => true]);
+        $my_review = $user->is_my_review($rrow);
+        if (($whyNot = $this->_override_reason($rrow, $user))) {
             $override_text = $whyNot->unparse_html();
             if (!$submitted) {
-                $buttons[] = [Ht::button("Submit review", ["class" => "btn-primary btn-savereview ui js-override-deadlines", "data-override-text" => $override_text, "data-override-submit" => "submitreview"]), "(admin only)"];
-                $buttons[] = [Ht::button("Save draft", ["class" => "btn-savereview ui js-override-deadlines", "data-override-text" => $override_text, "data-override-submit" => "savedraft"]), "(admin only)"];
+                $buttons[] = [Ht::button("Submit review", ["class" => "btn-primary js-savereview ui js-override-deadlines", "data-override-text" => $override_text, "data-override-submit" => "submitreview"]), "(admin only)"];
+                $buttons[] = [Ht::button("Save draft", ["class" => "js-savereview ui js-override-deadlines", "data-override-text" => $override_text, "data-override-submit" => "savedraft"]), "(admin only)"];
             } else {
-                $buttons[] = [Ht::button("Save changes", ["class" => "btn-primary btn-savereview ui js-override-deadlines", "data-override-text" => $override_text, "data-override-submit" => "submitreview"]), "(admin only)"];
+                $buttons[] = [Ht::button("Save changes", ["class" => "btn-primary js-savereview ui js-override-deadlines", "data-override-text" => $override_text, "data-override-submit" => "submitreview"]), "(admin only)"];
             }
-        } else if (!$submitted && $rrow && $rrow->subject_to_approval()) {
+        } else if (!$submitted && $rrow->subject_to_approval()) {
             assert($rrow->reviewStatus <= ReviewInfo::RS_APPROVED);
             if ($rrow->reviewStatus === ReviewInfo::RS_APPROVED) {
-                $buttons[] = Ht::submit("update", "Update approved review", ["class" => "btn-primary btn-savereview need-clickthrough-enable", "disabled" => $disabled]);
+                $buttons[] = Ht::submit("update", "Update approved review", ["class" => "btn-primary js-savereview need-clickthrough-enable", "disabled" => $disabled]);
             } else if ($my_review) {
                 if ($rrow->reviewStatus !== ReviewInfo::RS_DELIVERED) {
                     $subtext = "Submit for approval";
                 } else {
                     $subtext = "Resubmit for approval";
                 }
-                $buttons[] = Ht::submit("submitreview", $subtext, ["class" => "btn-primary btn-savereview need-clickthrough-enable", "disabled" => $disabled]);
+                $buttons[] = Ht::submit("submitreview", $subtext, ["class" => "btn-primary js-savereview need-clickthrough-enable", "disabled" => $disabled]);
             } else {
-                $class = "btn-highlight btn-savereview need-clickthrough-enable ui js-approve-review";
+                $class = "btn-highlight js-savereview need-clickthrough-enable ui js-approve-review";
                 $text = "Approve review";
                 if ($rrow->requestedBy === $user->contactId) {
                     $my_rrow = $prow->review_by_user($user);
@@ -473,26 +449,26 @@ Ready\n";
                         $text = "Approve/adopt review";
                     }
                 }
-                if ($user->allow_administer($prow)
+                if ($user->allow_admin($prow)
                     || $this->conf->ext_subreviews !== 3) {
                     $class .= " can-approve-submit";
                 }
                 $buttons[] = Ht::submit("approvesubreview", $text, ["class" => $class, "disabled" => $disabled]);
             }
             if ($rrow->reviewStatus < ReviewInfo::RS_DELIVERED) {
-                $buttons[] = Ht::submit("savedraft", "Save draft", ["class" => "btn-savereview need-clickthrough-enable", "disabled" => $disabled]);
+                $buttons[] = Ht::submit("savedraft", "Save draft", ["class" => "js-savereview need-clickthrough-enable", "disabled" => $disabled]);
             }
         } else if (!$submitted) {
             // NB see `PaperTable::_print_clickthrough` data-clickthrough-enable
-            $buttons[] = Ht::submit("submitreview", "Submit review", ["class" => "btn-primary btn-savereview need-clickthrough-enable", "disabled" => $disabled]);
-            $buttons[] = Ht::submit("savedraft", "Save draft", ["class" => "btn-savereview need-clickthrough-enable", "disabled" => $disabled]);
+            $buttons[] = Ht::submit("submitreview", "Submit review", ["class" => "btn-primary js-savereview need-clickthrough-enable", "disabled" => $disabled]);
+            $buttons[] = Ht::submit("savedraft", "Save draft", ["class" => "js-savereview need-clickthrough-enable", "disabled" => $disabled]);
         } else {
             // NB see `PaperTable::_print_clickthrough` data-clickthrough-enable
-            $buttons[] = Ht::submit("submitreview", "Save changes", ["class" => "btn-primary btn-savereview need-clickthrough-enable", "disabled" => $disabled]);
+            $buttons[] = Ht::submit("submitreview", "Save changes", ["class" => "btn-primary js-savereview need-clickthrough-enable", "disabled" => $disabled]);
         }
         $buttons[] = Ht::submit("cancel", "Cancel");
 
-        if ($rrow && $user->allow_administer($prow)) {
+        if ($user->allow_admin($prow)) {
             $buttons[] = "";
             if ($rrow->reviewStatus >= ReviewInfo::RS_APPROVED) {
                 $buttons[] = [Ht::submit("unsubmitreview", "Unsubmit review"), "(admin only)"];
@@ -509,21 +485,25 @@ Ready\n";
         self::check_review_author_seen($prow, $rrow, $viewer);
 
         $reviewOrdinal = $rrow->unparse_ordinal_id();
-        $forceShow = $viewer->is_admin_force() ? "&amp;forceShow=1" : "";
-        $reviewlink = "p={$prow->paperId}" . ($rrow->reviewId ? "&amp;r={$reviewOrdinal}" : "");
-        $reviewPostLink = $this->conf->hoturl("=review", "{$reviewlink}&amp;m=re{$forceShow}");
-        $reviewDownloadLink = $this->conf->hoturl("review", "{$reviewlink}&amp;m=re&amp;download=1{$forceShow}");
+        $rlink1 = ["p" => $prow->paperId];
+        if ($rrow->reviewId) {
+            $rlink1["r"] = $reviewOrdinal;
+        }
+        $rlink2 = $viewer->is_override_conflict() ? ["forceShow" => 1] : [];
 
-        echo '<div class="pcard revcard" id="r', $reviewOrdinal, '" data-pid="',
+        echo '<div class="pcard s-review" id="r', $reviewOrdinal, '" data-pid="',
             $prow->paperId, '" data-rid="', ($rrow->reviewId ? : "new");
         if ($rrow->reviewOrdinal) {
             echo '" data-review-ordinal="', unparse_latin_ordinal($rrow->reviewOrdinal);
         }
         echo '">',
-            Ht::form($reviewPostLink, [
+            Ht::form($this->conf->hoturl("=review", $rlink1 + ["m" => "re"] + $rlink2), [
                 "id" => "f-review",
                 "class" => "need-unload-protection need-diff-check",
-                "data-differs-toggle" => "review-alert"
+                "data-differs-toggle" => "review-alert",
+                "data-pid" => $prow->paperId,
+                "data-rid" => $rrow->reviewId ? $reviewOrdinal : null,
+                "data-force" => $viewer->is_override_conflict() ? true : null
             ]),
             Ht::hidden_default_submit("default", "");
         if ($rrow->reviewId) {
@@ -534,21 +514,15 @@ Ready\n";
 
         // Links
         if ($rrow->reviewId) {
-            echo '<div class="float-right"><a href="' . $this->conf->hoturl("review", "{$reviewlink}&amp;text=1{$forceShow}") . '" class="noul">',
-                Ht::img("txt.png", "[Text]", "b"),
-                "&nbsp;<u>Plain text</u></a>",
+            echo '<div class="float-right">',
+                $this->conf->hotlink(Ht::img("txt.png", "[Text]", "b") . "&nbsp;<u>Plain text</u>", "review", $rlink1 + ["text" => 1] + $rlink2, ["class" => "noul"]),
                 "</div>";
         }
 
         echo '<h2><span class="revcard-header-name">';
         if ($rrow->reviewId) {
-            echo '<a class="qo" href="',
-                $rrow->conf->hoturl("review", "{$reviewlink}{$forceShow}"),
-                '">Edit ', ($rrow->subject_to_approval() ? "Subreview" : "Review");
-            if ($rrow->reviewOrdinal) {
-                echo "&nbsp;#", $reviewOrdinal;
-            }
-            echo "</a>";
+            $t = "Edit " . ($rrow->subject_to_approval() ? "Subreview" : "Review") . ($rrow->reviewOrdinal ? " #{$reviewOrdinal}" : "");
+            echo $this->conf->hotlink($t, "review", $rlink1 + $rlink2, ["class" => "qo"]);
         } else {
             echo "New Review";
         }
@@ -560,7 +534,7 @@ Ready\n";
         } else if ($rrow->reviewId && $viewer->can_view_review_identity($prow, $rrow)) {
             $reviewer = $rrow->reviewer();
             $revname = $viewer->reviewer_html_for($reviewer);
-            if ($rrow->reviewBlind) {
+            if ($rrow->is_blind()) {
                 $revname = "[{$revname}]";
             }
             if (!Contact::is_anonymous_email($reviewer->email)) {
@@ -577,29 +551,18 @@ Ready\n";
             $ttitle = $this->conf->unparse_time($rrow->reviewModified);
             $revtime = "<time class=\"revtime\" datetime=\"{$tattr}\" data-ts=\"{$rrow->reviewModified}\" title=\"{$ttitle}\">{$ttext}</time>";
         }
-        if ($revname || $revtime) {
-            echo '<div class="revthead">';
-            if ($revname) {
-                echo '<address class="revname">', $revname, '</address>';
-            }
-            if ($revname && $revtime) {
-                echo '<span class="barsep">·</span>';
-            }
-            echo $revtime, '</div>';
+        echo '<div class="revthead">';
+        if ($revname) {
+            echo '<address class="revname">', $revname, '</address>';
         }
+        if ($revname && $revtime) {
+            echo '<span class="barsep">·</span>';
+        }
+        echo $revtime,
+            Ht::button("Review offline", ["class" => "ui js-offline-review btn ml-4"]),
+            '</div>';
 
-        // download?
-        echo '<hr class="c">';
-        echo "<table class=\"revoff\"><tr>
-      <td><strong>Offline reviewing</strong> &nbsp;</td>
-      <td>Upload form: &nbsp; <input class=\"ignore-diff\" type=\"file\" name=\"file\" accept=\"text/plain\" size=\"30\">
-      &nbsp; ", Ht::submit("upload", "Go"), "</td>
-    </tr><tr>
-      <td></td>
-      <td><a href=\"$reviewDownloadLink\">Download form</a>
-      <span class=\"barsep\">·</span>
-      <span class=\"hint\"><strong>Tip:</strong> Use <a href=\"", $this->conf->hoturl("search"), "\">Search</a> or <a href=\"", $this->conf->hoturl("offline"), "\">Offline reviewing</a> to download or upload many forms at once.</span></td>
-    </tr></table></div>\n";
+        echo '<hr class="c"></div>', "\n";
 
         if (!empty($rrow->message_list)) {
             echo '<div class="revcard-feedback">',
@@ -609,16 +572,18 @@ Ready\n";
 
         // review card
         echo '<div class="revcard-form">';
-        $allow_admin = $viewer->allow_administer($prow);
+        $allow_admin = $viewer->allow_admin($prow);
 
         // blind?
         if ($this->conf->review_blindness() === Conf::BLIND_OPTIONAL) {
-            $blind = !!($rvalues->req["blind"] ?? $rrow->reviewBlind);
-            echo '<div class="rge"><h3 class="rfehead checki"><label class="revfn">',
+            $blind = !!($rvalues->req["blind"] ?? $rrow->is_blind());
+            echo '<div class="s-rfg">',
+                '<h3 class="s-rf-title checki"><label class="revfn">',
                 Ht::hidden("has_blind", 1),
-                '<span class="checkc">', Ht::checkbox("blind", 1, $blind), '</span>',
-                "Anonymous review</label></h3>\n",
-                '<div class="field-d">', htmlspecialchars($this->conf->short_name), " allows either anonymous or open review.  Check this box to submit your review anonymously (the authors won’t know who wrote the review).</div>",
+                '<span class="checkc">',
+                Ht::checkbox("blind", 1, $blind, ["aria-describedby" => "rf-blind:d"]),
+                '</span>Anonymous review</label></h3>',
+                '<div id="rf-blind:d" class="field-d">', htmlspecialchars($this->conf->short_name), " allows either anonymous or open review.  Check this box to submit your review anonymously (the authors won’t know who wrote the review).</div>",
                 "</div>\n";
         }
 
@@ -663,13 +628,13 @@ Ready\n";
     function unparse_flow_entry(PaperInfo $prow, ReviewInfo $rrow, Contact $viewer) {
         // See also CommentInfo::unparse_flow_entry
         $barsep = ' <span class="barsep">·</span> ';
-        $a = '<a href="' . $prow->hoturl(["#" => "r" . $rrow->unparse_ordinal_id()]) . '"';
+        $a = '<a href="' . Ht::escape_attr($prow->hoturl(["#" => "r" . $rrow->unparse_ordinal_id()])) . '"';
         $t = "<tr class=\"pl\"><td class=\"pl_eventicon\">{$a}>"
             . Ht::img("review48.png", "[Review]", ["class" => "dlimg", "width" => 24, "height" => 24])
             . "</a></td>"
             . "<td class=\"pl_eventid pl_rowclick\">{$a} class=\"pnum\">#{$prow->paperId}</a></td>"
             . "<td class=\"pl_eventdesc pl_rowclick\"><small>{$a} class=\"ptitle\">"
-            . htmlspecialchars(UnicodeHelper::utf8_abbreviate($prow->title, 80))
+            . htmlspecialchars(UnicodeHelper::utf8_word_abbreviate($prow->title, 80))
             . "</a>";
         if ($rrow->reviewStatus >= ReviewInfo::RS_DRAFTED) {
             if ($viewer->can_view_review_time($prow, $rrow)) {
@@ -729,5 +694,44 @@ Ready\n";
             $updatef("update PaperReview set reviewViewScore=? where paperId?a and reviewId?a and reviewViewScore=?", $last_view_score, $pids, $rids, ReviewInfo::VIEWSCORE_RECOMPUTE);
         }
         $updatef(null);
+    }
+}
+
+class ReviewAuthorSeenUpdate {
+    /** @var Conf */
+    private $conf;
+    /** @var list<non-empty-list<int>> */
+    private $_up = [];
+
+    function __construct(Conf $conf) {
+        $this->conf = $conf;
+    }
+
+    /** @param int $now
+     * @param int $pid
+     * @param int $rid */
+    function add($now, $pid, $rid) {
+        for ($i = 0; $i !== count($this->_up); ++$i) {
+            if ($this->_up[$i][0] === $now)
+                break;
+        }
+        if ($i === count($this->_up)) {
+            $this->_up[] = [$now];
+        }
+        $this->_up[$i][] = $pid;
+        $this->_up[$i][] = $rid;
+    }
+
+    function __invoke() {
+        $qstager = Dbl::make_multi_qe_stager($this->conf->dblink);
+        foreach ($this->_up as $l) {
+            $x = [];
+            for ($i = 1; $i !== count($l); $i += 2) {
+                $x[] = "(paperId={$l[$i]} and reviewId={$l[$i+1]})";
+            }
+            $qstager("update PaperReview set reviewAuthorSeen=if(reviewAuthorSeen=0,?,reviewAuthorSeen), rflags=rflags|? where " . join(" or ", $x), $l[0], ReviewInfo::RF_AUSEEN);
+        }
+        $qstager(null);
+        $this->_up = [];
     }
 }

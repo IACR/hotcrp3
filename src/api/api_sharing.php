@@ -1,14 +1,16 @@
 <?php
 // api_sharing.php -- HotCRP sharing API call
-// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class Sharing_API extends MessageSet {
     static function run(Contact $user, Qrequest $qreq, PaperInfo $prow) {
-        if (!$user->can_administer($prow)
-            && !$prow->has_author($user)) {
+        // require `can_manage` (admin scope) because this yields a bearer
+        // credential
+        if (!$prow->has_author($user)
+            && !$user->can_manage($prow)) {
             return JsonResult::make_permission_error();
         }
-        if ($qreq->method() !== "GET") {
+        if (!$qreq->is_getlike()) {
             if ($qreq->method() === "DELETE") {
                 $share = false;
             } else if (!isset($qreq->share)) {
@@ -41,7 +43,7 @@ class Sharing_API extends MessageSet {
             if ($tok->timeInvalid > 0) {
                 $jr["expires_at"] = $tok->timeInvalid;
             }
-            $jr["url"] = $prow->hoturl(["cap" => $tok->salt], Conf::HOTURL_ABSOLUTE | Conf::HOTURL_RAW);
+            $jr["url"] = $prow->hoturl(["cap" => $tok->salt], Conf::HOTURL_ABSOLUTE);
         } else {
             $jr["token"] = null;
         }

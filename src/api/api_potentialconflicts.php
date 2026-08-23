@@ -1,6 +1,6 @@
 <?php
 // api_potentialconflicts.php -- HotCRP user-related API calls
-// Copyright (c) 2008-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class PotentialConflicts_API {
     /** @return JsonResult */
@@ -14,7 +14,7 @@ class PotentialConflicts_API {
         }
 
         // API accessible to authors and administrators
-        if (!$prow->has_author($user) && !$user->can_administer($prow)) {
+        if (!$prow->has_author($user) && !$user->is_admin($prow)) {
             return JsonResult::make_permission_error("p");
         }
 
@@ -26,6 +26,7 @@ class PotentialConflicts_API {
         }
 
         // apply changes
+        $overrides = $user->add_overrides(Contact::OVERRIDE_CONFLICT);
         $ps = new PaperStatus($user);
         $ps->set_ignore_errors(true);
         if (isset($qreq->json)) {
@@ -44,7 +45,7 @@ class PotentialConflicts_API {
                 $ps->prepare_save_paper_json($njson, $prow);
             }
         } else {
-            $nqreq = new Qrequest("POST");
+            $nqreq = (new Qrequest("POST"))->set_user($user);
             $hasau = false;
             foreach ($qreq as $k => $v) {
                 if ($k === "collaborators") {
@@ -61,6 +62,7 @@ class PotentialConflicts_API {
                 $ps->prepare_save_paper_web($nqreq, $prow);
             }
         }
+        $user->set_overrides($overrides);
 
         // compute potential conflict list
         $potconfs = [];

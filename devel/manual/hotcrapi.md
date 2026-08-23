@@ -16,7 +16,7 @@ The site URL is set using the `-S SITEURL` command line option. If not present,
 Hotcrapi checks the `HOTCRAPI_SITE` environment variable; and if that is not
 present, Hotcrapi searches the per-user configuration file for a default site.
 
-An API token is a long alphanumeric string starting with `hct_`, such as
+An API token is a long alphanumeric string starting with `hct_` or `hcT_`, such as
 `hct_KYyAfMVWXrRCmQxfhjYQiMhiYKYLidQtctSgGsknSXaL`. Create an API token for your
 site on Account settings > Developer. Once the token is created, supply it to
 Hotcrapi using the `-T APITOKEN` command line option; the `HOTCRAPI_TOKEN`
@@ -50,7 +50,7 @@ would contact `https://sigcomm25.hotcrp.com` with token `hct_aep...`.
 
 ## `test`
 
-Use the `test` subcommand to check your configuration and API token. `php
+The `test` subcommand can check your configuration and API token. `php
 batch/hotcrapi.php test` will contact the site you specify and print `Success`
 if the connection succeeds. The command’s exit status is 0 on success and 1 on
 failure. Options change what’s printed; `-q` will print nothing (use the exit
@@ -61,7 +61,7 @@ any roles that user has on the given site.
 
 ## `paper`
 
-Use the `paper` subcommand to fetch, modify, or delete submissions from a site.
+The `paper` subcommand can fetch, modify, or delete submissions from a site.
 
 To fetch a single submission, run `php batch/hotcrapi.php paper PID`, where
 `PID` is the relevant submission ID. The JSON representation of the submission
@@ -91,9 +91,23 @@ To delete a submission, run `php batch/hotcrapi.php paper delete PID`.
 Error messages and warnings are written to standard error.
 
 
+## `document`
+
+The `document` subcommand downloads submission documents or lists available
+document versions.
+
+To fetch a single document, run `php batch/hotcrapi.php document DOCNAME`, where
+`DOCNAME` is HotCRP’s name for the document—something like
+`testconf-paper1.pdf`. Alternately, give `-p`, `--dt`, and (optionally) `--file`
+arguments to specify a paper, document type, and (for attachment fields) the
+name of the file to select. To list a paper’s current documents, run `php
+batch/hotcrapi.php document list -p PID`; to list past versions as well, run
+`php batch/hotcrapi.php document history -p PID`.
+
+
 ## `search`
 
-Use the `search` subcommand to perform searches and search actions.
+The `search` subcommand performs searches and search actions.
 
 To list the PIDs that match a search, run `php batch/hotcrapi.php search -q
 SEARCH`, where `SEARCH` is a search query. To list other fields in CSV format,
@@ -112,9 +126,75 @@ get more information about action parameters with `php batch/hotcrapi.php search
 help action ACTION`.
 
 
+## `comment`
+
+The `comment` subcommand can fetch, modify, or delete comments and responses on
+a site. Its shape mirrors `paper`.
+
+To fetch the comments on a single submission, run `php batch/hotcrapi.php comment
+PID`, where `PID` is the relevant submission ID; an array of JSON comments is
+written to standard output. Add `-c COMMENT` to fetch one comment, where
+`COMMENT` is a comment ID, `response`, or a named-response selector such as
+`R2response`; its JSON representation is written to standard output.
+
+To fetch comments across multiple submissions, run `php batch/hotcrapi.php
+comment -q SEARCH`, where `SEARCH` is a submission search query.
+
+To modify a single comment, run `php batch/hotcrapi.php comment save PID < FILE`.
+The modification is specified as a JSON comment object; `FILE` can contain that
+JSON, or a ZIP whose `data.json` member holds the object plus any referenced
+attachments (see `paper save`). Add `-c COMMENT` to target an existing comment
+(otherwise a new comment is created).
+
+To modify several comments at once, supply a JSON *array* of comment objects
+instead. With `comment save PID`, the batch is scoped to submission `PID`; with
+`comment save` (no `PID`), each object identifies its own submission with `pid`,
+so a batch may span submissions.
+
+The saved comments are written to standard output as an array, and results are
+reported one comment per line.
+
+To delete a comment, run `php batch/hotcrapi.php comment delete PID -c COMMENT`.
+
+Error messages and warnings are written to standard error.
+
+
+## `review`
+
+The `review` subcommand can fetch, modify, or delete reviews on a site. Its shape
+mirrors `comment`.
+
+To fetch the reviews on a single submission, run `php batch/hotcrapi.php review
+PID`, where `PID` is the relevant submission ID; an array of JSON reviews is
+written to standard output. Add `-r REVIEW` to fetch one review, where `REVIEW`
+is a review ID or a display ordinal such as `A`; its JSON representation is
+written to standard output.
+
+To fetch reviews across multiple submissions, run `php batch/hotcrapi.php review
+-q SEARCH`, where `SEARCH` is a submission search query.
+
+To modify a single review, run `php batch/hotcrapi.php review save PID < FILE`.
+The modification is specified as a JSON review object, or as a plain-text offline
+review form; `FILE` can contain either. Add `-r REVIEW` to target an existing
+review (`-r new` requires a fresh review; otherwise, with no `-r`, your own
+review is created or updated).
+
+To modify several reviews at once, supply a JSON *array* of review objects, or an
+offline form covering several submissions, and omit `PID`; each object identifies
+its own submission with `pid`, so a batch may span submissions.
+
+The saved reviews are written to standard output, and results are reported one
+review per line.
+
+To delete a review, run `php batch/hotcrapi.php review delete PID -r REVIEW`. Only
+administrators may delete reviews.
+
+Error messages and warnings are written to standard error.
+
+
 ## `assign`
 
-Use the `assign` subcommand to perform assignments. Given a bulk-assignment
+The `assign` subcommand performs assignments. Given a bulk-assignment
 CSV file, run `php batch/hotcrapi.php assign < FILE` to perform the
 assignments.
 
@@ -131,7 +211,7 @@ assign help ACTION`.
 
 ## `autoassign`
 
-Use the `autoassign` subcommand to perform automatic assignments. Use `php
+The `autoassign` subcommand performs automatic assignments. Use `php
 batch/hotcrapi.php autoassign help` to list the available autoassigners, `php
 batch/hotcrapi.php autoassign help AUTOASSIGNER` to list the parameters for a
 specific autoassigner, and `php batch/hotcrapi.php autoassign AUTOASSIGNER
@@ -143,7 +223,7 @@ performed, and accepts `--dry-run` and `--quiet`.
 
 ## `settings`
 
-Use the `settings` subcommand to fetch or modify site settings in JSON format.
+The `settings` subcommand fetches or modifies site settings in JSON format.
 Administrator privilege is required to access `settings`. The subcommand writes
 textual error messages and warnings to standard error.
 

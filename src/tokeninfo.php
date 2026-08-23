@@ -1,6 +1,6 @@
 <?php
 // tokeninfo.php -- HotCRP token management
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class TokenInfo {
     /** @var Conf
@@ -60,8 +60,10 @@ class TokenInfo {
      * @readonly */
     public $lookupKey;
 
-    /** @var ?string */
-    public $email;
+    /** Not in the Capability table; occasionally joined
+     * @var ?string */
+    protected $email;
+
     /** @var ?Contact|false */
     private $_user = false;
     /** @var ?string */
@@ -77,6 +79,8 @@ class TokenInfo {
     /** @var int */
     private $_changes;
 
+    const SALT_PREFIX = "hc";
+
     const RESETPASSWORD = 1;
     const CHANGEEMAIL = 2;
     const UPLOAD = 3;
@@ -88,10 +92,13 @@ class TokenInfo {
     const OAUTHCODE = 9;
     const MANAGEEMAIL = 10;
     const ALERT = 11;
+    const OAUTHREFRESH = 12;
+    const OAUTHCLIENT = 13;
 
-    const CHF_TIMES = 1;
-    const CHF_DATA = 2;
-    const CHF_OUTPUT = 4;
+    const CHF_UID = 1;
+    const CHF_TIMES = 2;
+    const CHF_DATA = 4;
+    const CHF_OUTPUT = 8;
 
     /** @param ?int $capabilityType */
     function __construct(Conf $conf, $capabilityType = null) {
@@ -113,30 +120,8 @@ class TokenInfo {
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
     final function set_contactdb($is_cdb) {
-        assert($this->_user === false && !$this->contactId);
+        assert($this->is_cdb === null);
         $this->is_cdb = $is_cdb;
-        return $this;
-    }
-
-    /** @return $this
-     * @suppress PhanAccessReadOnlyProperty */
-    final function set_user(Contact $user) {
-        assert(!$this->is_cdb && !$this->stored());
-        $this->is_cdb = false;
-        $this->contactId = $user->contactId > 0 ? $user->contactId : 0;
-        $this->email = $user->email;
-        $this->_user = $user;
-        return $this;
-    }
-
-    /** @return $this
-     * @suppress PhanAccessReadOnlyProperty */
-    final function set_cdb_user(Contact $user) {
-        assert($user->contactDbId > 0 && !$this->stored());
-        $this->is_cdb = true;
-        $this->contactId = $user->contactDbId > 0 ? $user->contactDbId : 0;
-        $this->email = $user->email;
-        $this->_user = $user;
         return $this;
     }
 
@@ -144,8 +129,28 @@ class TokenInfo {
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
     final function set_user_id($uid) {
-        assert(!$this->is_cdb && !$this->stored());
+        assert(!$this->contactId && $uid >= 0);
         $this->contactId = $uid;
+        $this->_changes |= self::CHF_UID;
+        return $this;
+    }
+
+    /** @param ?bool $is_cdb
+     * @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_user_from(Contact $user, $is_cdb) {
+        if ($this->is_cdb === null) {
+            $this->is_cdb = $is_cdb ?? $user->is_cdb_user();
+        }
+        if (!$this->is_cdb) {
+            $user->ensure_account_here();
+        }
+        $uid = $this->is_cdb ? $user->contactDbId : $user->contactId;
+        assert(!$this->contactId && $uid > 0);
+        $this->contactId = $uid;
+        $this->email = $user->email;
+        $this->_user = $user;
+        $this->_changes |= self::CHF_UID;
         return $this;
     }
 
@@ -315,27 +320,31 @@ class TokenInfo {
     }
 
     /** @param ?string $token
+     * @param bool $is_cdb
      * @return ?TokenInfo */
-    static function find($token, Conf $conf) {
-        if ($token === null || strlen($token) < 5) {
+    static function find_from($token, Conf $conf, $is_cdb) {
+        $db = $is_cdb ? $conf->contactdb() : $conf->dblink;
+        if ($token === null || strlen($token) < 5 || !$db) {
             return null;
         }
-        $result = Dbl::qe($conf->dblink, "select * from Capability where salt=?", $token);
-        $cap = self::fetch($result, $conf, false);
+        $extra = $is_cdb ? ", (select email from ContactInfo where contactDbId=Capability.contactId) email" : "";
+        $result = Dbl::qe($db, "select *{$extra} from Capability where salt=?", $token);
+        $cap = self::fetch($result, $conf, $is_cdb);
         $result->close();
         return $cap;
     }
 
     /** @param ?string $token
      * @return ?TokenInfo */
+    static function find($token, Conf $conf) {
+        return self::find_from($token, $conf, false);
+    }
+
+    /** @param ?string $token
+     * @return ?TokenInfo
+     * @deprecated */
     static function find_cdb($token, Conf $conf) {
-        if ($token === null || strlen($token) < 5 || !($cdb = $conf->contactdb())) {
-            return null;
-        }
-        $result = Dbl::qe($cdb, "select *, (select email from ContactInfo where contactDbId=Capability.contactId) email from Capability where salt=?", $token);
-        $cap = self::fetch($result, $conf, true);
-        $result->close();
-        return $cap;
+        return self::find_from($token, $conf, true);
     }
 
     /** @param string $token
@@ -344,7 +353,7 @@ class TokenInfo {
      * @return ?TokenInfo
      * @deprecated */
     static function find_active($token, $capabilityType, Conf $conf, $is_cdb = false) {
-        $tok = $is_cdb ? self::find_cdb($token, $conf) : self::find($token, $conf);
+        $tok = self::find_from($token, $conf, $is_cdb);
         return $tok && $tok->is_active($capabilityType) ? $tok : null;
     }
 
@@ -364,12 +373,47 @@ class TokenInfo {
     }
 
 
+    /** Return the time at which this token stops being active, or 0 if it
+     * never does. `timeInvalid` is normally the earlier time; `timeExpires`
+     * is when the token’s row is removed.
+     * @return int */
+    final function inactive_at() {
+        if ($this->timeInvalid > 0 && $this->timeExpires > 0) {
+            return min($this->timeInvalid, $this->timeExpires);
+        }
+        return $this->timeInvalid > 0 ? $this->timeInvalid : $this->timeExpires;
+    }
+
+    const ABBREVIATION_PREFIX = 0;
+    const ABBREVIATION_ELLIPSIS = 1;
+    /** Abbreviated token salt, used for correlation across logs.
+     * @param int $type
+     * @return string */
+    final function abbreviation($type = 0) {
+        $s = substr($this->salt, 0, 12);
+        if ($type === self::ABBREVIATION_ELLIPSIS
+            && strlen($this->salt) > 12) {
+            $s .= "…";
+        }
+        return $s;
+    }
+
     /** @param ?int $capabilityType
      * @return bool */
     final function is_active($capabilityType = null) {
         return ($capabilityType === null || $this->capabilityType === $capabilityType)
             && ($this->timeExpires === 0 || $this->timeExpires > Conf::$now)
             && ($this->timeInvalid === 0 || $this->timeInvalid > Conf::$now);
+    }
+
+    /** @return ?string */
+    final function email() {
+        if ($this->email !== null) {
+            return $this->email;
+        } else if (($u = $this->user())) {
+            return $u->email;
+        }
+        return null;
     }
 
     /** @return ?Contact */
@@ -399,9 +443,15 @@ class TokenInfo {
 
     /** @return string */
     final function instantiate_token() {
-        return preg_replace_callback('/\[(\d+)\]/', function ($m) {
-            return base48_encode(random_bytes(intval($m[1])));
-        }, $this->_token_pattern);
+        while (true) {
+            $s = preg_replace_callback('/\[(\d+)\]/', function ($m) {
+                return base48_encode(random_bytes(intval($m[1])));
+            }, $this->_token_pattern);
+            if (!str_starts_with($this->_token_pattern, "[")
+                || !str_starts_with($s, self::SALT_PREFIX)) {
+                return $s;
+            }
+        }
     }
 
     /** @return $this
@@ -524,6 +574,26 @@ class TokenInfo {
         return $this;
     }
 
+    /** Atomically consume the single use this token is good for.
+     *
+     * Returns true for the first caller and false for every later one, even
+     * when the callers overlap: this is one conditional UPDATE, so the
+     * database picks the winner. Reading a flag and then writing it back
+     * cannot do that — two requests redeeming the same authorization code
+     * would both find it unconsumed and both succeed — and a second redemption
+     * is exactly the signal that the code reached someone it should not have.
+     * @return bool
+     * @suppress PhanAccessReadOnlyProperty */
+    final function consume() {
+        assert(!!$this->salt);
+        $result = Dbl::qe($this->dblink(), "update Capability set useCount=useCount+1 where salt=? and useCount=0", $this->salt);
+        if ($result->affected_rows <= 0) {
+            return false;
+        }
+        $this->useCount = 1;
+        return true;
+    }
+
     /** @param ?string $data
      * @return $this */
     final function change_data($data, $value = null) {
@@ -571,6 +641,10 @@ class TokenInfo {
             return false;
         }
         $qf = $qv = [];
+        if (($this->_changes & self::CHF_UID) !== 0) {
+            $qf[] = "contactId=?";
+            $qv[] = $this->contactId;
+        }
         if (($this->_changes & self::CHF_TIMES) !== 0) {
             array_push($qf, "timeUsed=?", "useCount=?", "timeInvalid=?", "timeExpires=?");
             array_push($qv, $this->timeUsed, $this->useCount, $this->timeInvalid, $this->timeExpires);

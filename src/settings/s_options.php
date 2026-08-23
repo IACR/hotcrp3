@@ -285,7 +285,8 @@ class Options_SettingParser extends SettingParser {
             $types = $this->conf->option_type_map();
             $curt = $types[$this->sfs->type];
             if (empty($conversions)) {
-                $content = htmlspecialchars($curt->title) . Ht::hidden("sf/{$this->ctr}/type", $curt->name);
+                $content = htmlspecialchars($curt->title ?? $curt->name)
+                    . Ht::hidden("sf/{$this->ctr}/type", $curt->name);
             } else {
                 $sel = [$curt->name => $curt->title, "_sep" => null];
                 foreach ($types as $t) {
@@ -306,8 +307,7 @@ class Options_SettingParser extends SettingParser {
             "data-tooltip-type" => "focus",
             "feedback_items" => make_array(
                 ...$sv->message_list_at("sf/{$this->ctr}/values_text"),
-                ...$sv->message_list_at("sf/{$this->ctr}/values"),
-                ...$sv->message_list_at_prefix("sf/{$this->ctr}/values/")
+                ...$sv->message_list_under("sf/{$this->ctr}/values", "/")
             )
         ]);
     }
@@ -429,12 +429,12 @@ class Options_SettingParser extends SettingParser {
             $this->pt->append_item(MessageItem::warning_note_at($io->formid, "<0>Read-only (not editable)"));
         } else if (strcasecmp($this->sfs->editable_if, "phase:review") === 0) {
             $this->pt->append_item(MessageItem::warning_note_at($io->formid, "<0>Editable in the review phase"));
-        } else if (strcasecmp($this->sfs->editable_if, "phase:final") !== 0) {
+        } else if (strcasecmp($this->sfs->editable_if, "phase:final") === 0) {
             $this->pt->append_item(MessageItem::warning_note_at($io->formid, "<0>Editable in the final-version phase"));
         } else {
-            $this->pt->append_item(MessageItem::warning_note_at("<0>Editable on submissions matching ‘" . $this->sfs->editable_if . "’"));
+            $this->pt->append_item(MessageItem::warning_note_at($io->formid, "<0>Editable on submissions matching ‘" . $this->sfs->editable_if . "’"));
         }
-        foreach ($sv->message_list_at_prefix("sf/{$ctr}/") as $mi) {
+        foreach ($sv->message_list_under("sf/{$ctr}", "/") as $mi) {
             $this->pt->append_item(new MessageItem($mi->status > 0 ? MessageSet::WARNING_NOTE : $mi->status, $io->formid, $mi->message));
         }
         $ei = $io->editable_condition();
@@ -582,7 +582,7 @@ class Options_SettingParser extends SettingParser {
     static function make_types_json($tmap) {
         $typelist = [];
         foreach ($tmap as $sf) {
-            $j = ["name" => $sf->name, "title" => $sf->title];
+            $j = ["name" => $sf->name, "title" => $sf->title ?? $sf->name];
             if (!empty($sf->placeholders)) {
                 $j["placeholders"] = $sf->placeholders;
             }
@@ -606,8 +606,16 @@ class Options_SettingParser extends SettingParser {
                 && (strcasecmp($n, "final") !== 0 || $sfs->option_id !== DTYPE_FINAL)
                 && (strcasecmp($n, "title") !== 0 || $sfs->option_id !== PaperOption::TITLEID)
                 && ((strcasecmp($n, "author") !== 0 && strcasecmp($n, "authors") !== 0) || $sfs->option_id !== PaperOption::AUTHORSID)) {
-                $sv->error_at($si, "<0>Field name ‘{$n}’ is reserved");
+                $sv->error_at($si, "<0>Field name ‘{}’ is reserved", $n);
                 $sv->inform_at($si, "<0>Please pick another name.");
+            }
+        } else if (preg_match('/\A(?:[_$]|[a-z][a-z0-9_:]*+\z)/', $n)
+                   && $n !== $sv->oldv("sf/{$si->name1}/name")) {
+            if ($n[0] === "_" || $n[0] === "\$") {
+                $sv->error_at($si->name, "<0>Field names cannot begin with ‘{}’", $n[0]);
+            } else {
+                $sv->error_at($si->name, "<0>Field name ‘{}’ is reserved", $n);
+                $sv->inform_at($si->name, "<0>Please pick a name with at least one space or capital letter.");
             }
         }
         $sv->save($si, $n);
@@ -1013,7 +1021,7 @@ class Options_SettingParser extends SettingParser {
             $sv->update("options_version", (int) $sv->conf->setting("options") + 1);
             $sv->request_validate($si);
             $sv->request_store_value($si);
-            $sv->mark_invalidate_caches(["options" => true]);
+            $sv->mark_invalidate_caches("options");
             foreach ($this->_delete_optionids as $oid) {
                 if (($opt = $sv->conf->option_by_id($oid))
                     && $opt->has_document()) {
@@ -1090,7 +1098,7 @@ class Options_SettingParser extends SettingParser {
             }
         }
         $sv->conf->save_setting("__sf_condition_recursion", null);
-        $sv->mark_invalidate_caches(["autosearch" => true]);
+        $sv->mark_invalidate_caches("autosearch");
     }
 
 

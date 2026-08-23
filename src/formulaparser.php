@@ -27,6 +27,8 @@ class FormulaParser {
     /** @var ?FormulaCall */
     private $_macro;
     /** @var array<string,VarDef_Fexpr> */
+    private $_free_bind = [];
+    /** @var array<string,VarDef_Fexpr> */
     private $_bind = [];
     /** @var ?int */
     private $_last_lerror_pos;
@@ -43,7 +45,7 @@ class FormulaParser {
 
     static private $_oprewrite = [
         "=" => "==", ":" => "==", "≤" => "<=", "≥" => ">=", "≠" => "!=",
-        "and" => "&&", "or" => "||"
+        "and" => "&&", "or" => "||", "xor" => "^^"
     ];
 
 
@@ -92,6 +94,7 @@ class FormulaParser {
         $fp->recursion = $this->recursion + 1;
         if ($macro) {
             $fp->_macro = $macro;
+            $fp->_free_bind = &$this->_free_bind;
             $fp->_bind = $this->_bind;
         }
         $fp->string_context = new SearchStringContext($str, $ppos1, $ppos2, $this->string_context);
@@ -104,6 +107,19 @@ class FormulaParser {
         $r = self::$current_recursion;
         self::$current_recursion = $recursion;
         return $r;
+    }
+
+
+    /** @param VarDef_Fexpr $vare
+     * @return $this */
+    function add_param($vare) {
+        $this->_free_bind[$vare->name()] = $vare;
+        return $this;
+    }
+
+    /** @return array<string,VarDef_Fexpr> */
+    function params() {
+        return $this->_free_bind;
     }
 
 
@@ -136,13 +152,15 @@ class FormulaParser {
     /** @param string &$name
      * @return ?object */
     private function _find_formula_function(&$name) {
-        while ($name !== "") {
-            if (($kwdef = $this->conf->formula_function($name, $this->user))) {
+        $s = $name;
+        while ($s !== "") {
+            if (($kwdef = $this->conf->formula_function($s, $this->user))) {
+                $name = $s;
                 return $kwdef;
             }
-            $pos1 = strrpos($name, ":");
-            $pos2 = strrpos($name, ".");
-            $name = substr($name, 0, max((int) $pos1, (int) $pos2));
+            $pos1 = strrpos($s, ":");
+            $pos2 = strrpos($s, ".");
+            $s = substr($s, 0, max((int) $pos1, (int) $pos2));
         }
         return null;
     }
@@ -308,17 +326,44 @@ class FormulaParser {
      * @return ?Fexpr */
     private function _reviewer_base($t) {
         $t = strtolower($t);
-        if (preg_match('/\A(?:r|re|rev|review)type\z/i', $t)) {
-            return Revtype_Fexpr::make($this->user);
-        } else if (preg_match('/\A(?:|r|re|rev|review)round\z/i', $t)) {
-            return ReviewRound_Fexpr::make($this->user);
-        } else if (preg_match('/\A(?:|r|re|rev)reviewer\z/i', $t)) {
+        $len = strlen($t);
+        if (str_ends_with($t, "type")) {
+            if ($len === 4 || in_array($t, ["rtype", "retype", "revtype", "reviewtype"], true)) {
+                return Revtype_Fexpr::make($this->user);
+            }
+        } else if (str_ends_with($t, "round")) {
+            if ($len === 5 || in_array($t, ["rround", "reround", "revround", "reviewround"], true)) {
+                return ReviewRound_Fexpr::make($this->user);
+            }
+        } else if ($t === "reviewer") {
             if (!$this->user->can_view_some_review_identity()) {
                 return Fexpr::cnever();
             }
             return new Reviewer_Fexpr;
-        } else if (preg_match('/\A(?:|r|re|rev|review)(?:|au)words\z/i', $t)) {
-            return ReviewWordCount_Fexpr::make($this->user);
+        } else if (str_ends_with($t, "auwords")) {
+            if ($len === 7 || in_array($t, ["rauwords", "reauwords", "revauwords", "reviewauwords"], true)) {
+                return ReviewWordCount_Fexpr::make($this->user);
+            }
+        } else if (str_ends_with($t, "words")) {
+            if ($len === 5 || in_array($t, ["rwords", "rewords", "revwords", "reviewwords"], true)) {
+                return ReviewWordCount_Fexpr::make($this->user);
+            }
+        } else if ($t !== "") {
+            if ($t[0] === "c") {
+                $completeness = ReviewSearchMatcher::COMPLETE;
+                $t = substr($t, 1);
+            } else if ($t[0] === "i") {
+                $completeness = ReviewSearchMatcher::INCOMPLETE;
+                $t = substr($t, 1);
+            } else if ($t[0] === "p") {
+                $completeness = ReviewSearchMatcher::INPROGRESS;
+                $t = substr($t, 1);
+            } else {
+                $completeness = 0;
+            }
+            if (in_array($t, ["re", "rev", "review"], true)) {
+                return new ReviewStatus_Fexpr($completeness);
+            }
         }
         return null;
     }
@@ -330,20 +375,29 @@ class FormulaParser {
         $rsm = new ReviewSearchMatcher;
         $t = $this->str;
         $len = strlen($t);
+        $completeness = 0;
+        if (($had_revexists = $e0 instanceof ReviewStatus_Fexpr)) {
+            $completeness = $e0->status;
+            $e0 = null;
+        }
         while ($this->pos !== $len) {
-            if (!preg_match('/\G:((?:"[^"]*(?:"|\z)|~*[-A-Za-z0-9_.\#@]+(?!\s*\())+)/si', $t, $m, 0, $this->pos)
-                || preg_match('/\A(?:null|false|true|pid|paperid)\z/i', $m[1])) {
+            if (!preg_match('/\G:((?:"[^"]*(?:"|\z)|~*[-A-Za-z0-9_.\#@]+(?!\s*\())+)/si', $t, $m, 0, $this->pos)) {
                 break;
             }
-            if (preg_match('/\A(?:type|round|reviewer|words|auwords)\z/i', $m[1])) {
+            $lcword = strtolower($m[1]);
+            if (in_array($lcword, ["null", "false", "true", "pid", "paperid"], true)) {
+                break;
+            }
+            if (in_array($lcword, ["type", "round", "reviewer", "words", "auwords"], true)) {
                 if ($e0) {
                     break;
                 }
                 $e0 = $this->_reviewer_base($m[1]);
             } else if ($rsm->apply_review_type($m[1])
-                       || $rsm->apply_round($m[1], $this->conf)) {
+                       || $rsm->apply_round($m[1], $this->conf)
+                       || $rsm->apply_completeness($m[1])) {
                 // nothing
-            } else if ($m[1] === "pc") {
+            } else if ($lcword === "pc") {
                 $es[] = new Inequality_Fexpr(">=", Revtype_Fexpr::make($this->user), new Constant_Fexpr(REVIEW_PC, Fexpr::FREVTYPE));
             } else {
                 if (strpos($m[1], "\"") !== false) {
@@ -361,32 +415,40 @@ class FormulaParser {
         if ($rsm->round_list !== null) {
             $es[] = new In_Fexpr(ReviewRound_Fexpr::make($this->user), $rsm->round_list);
         }
+        if ($completeness || $rsm->completeness_mask() !== 0) {
+            $es[] = new ReviewStatus_Fexpr($completeness | $rsm->completeness_mask());
+        }
 
         $e1 = empty($es) ? null : $es[0];
         for ($i = 1; $i < count($es); ++$i) {
             $e1 = new And_Fexpr($e1, $es[$i]);
         }
 
-        if ($e0 && $e1) {
-            return new Ternary_Fexpr($e1, $e0, Fexpr::cnull());
+        if (!$e0 || !$e1) {
+            return $e0 ?? $e1;
+        } else if ($e0->format() === Fexpr::FBOOL) {
+            return new And_Fexpr($e0, $e1);
         }
-        return $e0 ?? $e1;
+        return new Ternary_Fexpr($e1, $e0, Fexpr::cnull());
     }
 
     /** @param string &$field
      * @return ?object */
     private function _find_formula_field(&$field) {
-        while (true) {
-            if (strlen($field) > 1) {
-                $fs = $this->conf->find_all_fields($field);
-                if (count($fs) === 1) {
-                    return $fs[0];
-                }
+        $s = $field;
+        if (($colon = strpos($s, ":")) !== false) {
+            $s = substr($s, 0, $colon);
+        }
+        while (strlen($s) > 1) {
+            $fs = $this->conf->find_all_fields($s);
+            if (count($fs) === 1) {
+                $field = $s;
+                return $fs[0];
             }
-            if (($dash = strrpos($field, "-")) === false) {
+            if (($dash = strrpos($s, "-")) === false) {
                 break;
             }
-            $field = substr($field, 0, $dash);
+            $s = substr($s, 0, $dash);
         }
         return null;
     }
@@ -457,6 +519,63 @@ class FormulaParser {
         return $this->cerror($pos1, $this->pos);
     }
 
+    /** @param string $var
+     * @param int $varpos
+     * @param int $exprpos
+     * @param bool $in_qc
+     * @return Fexpr */
+    private function _parse_let($var, $varpos, $exprpos, $in_qc) {
+        $saved_bind = $this->_bind;
+        $vals = [];
+        while (true) {
+            if (in_array($var, ["null", "true", "false", "let", "and", "or", "xor", "not", "in"], true)) {
+                $this->lerror($varpos, $varpos + strlen($var), "<0>Cannot redefine reserved word ‘{$var}’");
+                $varok = false;
+            } else if (isset($vals[$var])) {
+                $this->lerror($varpos, $varpos + strlen($var), "<0>‘{$var}’ multiply defined");
+                $varok = false;
+            } else {
+                $varok = true;
+            }
+
+            $this->pos = $exprpos;
+            $vale = $this->_parse_ternary(false);
+            if (!$vale) {
+                $this->_bind = $saved_bind;
+                return null;
+            }
+
+            if ($varok) {
+                $vare = new VarDef_Fexpr($var, null);
+                $vare->apply_strspan($varpos, $varpos + strlen($var), $this->string_context);
+                $this->_bind[$var] = $vare;
+                $vals[$var] = $vale;
+            }
+
+            if (preg_match('/\G\s*in(?=[\s(])/si', $this->str, $m, 0, $this->pos)) {
+                $this->pos += strlen($m[0]);
+                break;
+            } else if (!preg_match('/\G(\s*,\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/si', $this->str, $m, 0, $this->pos)) {
+                $this->weak_lerror($exprpos, "<0>Expected ‘in’");
+                $this->_bind = $saved_bind;
+                return null;
+            }
+            $var = $m[2];
+            $varpos = $this->pos + strlen($m[1]);
+            $exprpos = $this->pos + strlen($m[0]);
+        }
+
+        $e = $this->_parse_ternary($in_qc);
+
+        if ($e) {
+            foreach (array_reverse($vals, true) as $name => $vale) {
+                $e = new Let_Fexpr($this->_bind[$name], $vale, $e);
+            }
+        }
+        $this->_bind = $saved_bind;
+        return $e;
+    }
+
     /** @return Constant_Fexpr */
     static function make_error_call(FormulaCall $ff) {
         $ff->parser->lerror($ff->pos1, $ff->pos1 + strlen($ff->name), "<0>Function ‘{$ff->name}’ not found");
@@ -505,7 +624,7 @@ class FormulaParser {
                 return null;
             }
             $e = new Not_Fexpr($e);
-        } else if (preg_match('/\G(?:\d+\.?\d*|\.\d+)/s', $t, $m, 0, $this->pos)) {
+        } else if (preg_match('/\G(?:\d++\.?+\d*+|\.\d++)(?![A-Za-z])/s', $t, $m, 0, $this->pos)) {
             $this->pos += strlen($m[0]);
             $e = new Constant_Fexpr((float) $m[0], Fexpr::FNUMERIC);
         } else if (($ch === "f" || $ch === "t")
@@ -544,37 +663,24 @@ class FormulaParser {
             $this->pos += strlen($m[0]);
             $e = $this->field_search_fexpr(PaperSearch::status_field_matcher($this->conf, $m[1]));
         } else if ($ch === "r"
-                   && preg_match('/\G(?:(?:r|re|rev|review)(?:type|round|words|auwords|)|round|reviewer)(?=[:\#])/is', $t, $m, 0, $this->pos)) {
+                   && preg_match('/\G(?:r(?:|e|ev|eview)(?:|type|round|words|auwords)|round|reviewer)(?=[:\#])/is', $t, $m, 0, $this->pos)) {
             $this->pos += strlen($m[0]);
             $e = $this->_reviewer_decoration($this->_reviewer_base($m[0]));
         } else if ($ch === "r"
-                   && preg_match('/\G((?:r|re|rev|review)(?:type|round|words|auwords)|round|reviewer|re|rev|review)\b\s*(?!\()/is', $t, $m, 0, $this->pos)) {
+                   && preg_match('/\G(r(?:|e|ev|eview)(?:|type|round|words|auwords)|round|reviewer)\b\s*(?![\(\s])/is', $t, $m, 0, $this->pos)) {
+            $this->pos += strlen($m[0]);
+            $e = $this->_reviewer_base($m[1]);
+        } else if (($ch === "i" || $ch === "c" || $ch === "p")
+                   && preg_match('/\G[icp]re(?:|v|view)(?=[:\#])/is', $t, $m, 0, $this->pos)) {
+            $this->pos += strlen($m[0]);
+            $e = $this->_reviewer_decoration($this->_reviewer_base($m[0]));
+        } else if (($ch === "i" || $ch === "c" || $ch === "p")
+                   && preg_match('/\G([icp]re(?:|v|view))\b\s*(?![\(\s])/is', $t, $m, 0, $this->pos)) {
             $this->pos += strlen($m[0]);
             $e = $this->_reviewer_base($m[1]);
         } else if ($ch === "l"
                    && preg_match('/\G(let\s+)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/si', $t, $m, 0, $this->pos)) {
-            $var = $m[2];
-            $varpos = $this->pos + strlen($m[1]);
-            if (preg_match('/\A(?:null|true|false|let|and|or|not|in)\z/', $var)) {
-                $this->lerror($varpos, $varpos + strlen($var), "<0>Cannot redefine reserved word ‘{$var}’");
-            }
-            $vare = new VarDef_Fexpr($var);
-            $vare->apply_strspan($varpos, $varpos + strlen($var), $this->string_context);
-            $this->pos += strlen($m[0]);
-            $e = $this->_parse_ternary(false);
-            if ($e && preg_match('/\G\s*in(?=[\s(])/si', $t, $m, 0, $this->pos)) {
-                $this->pos += strlen($m[0]);
-                $old_bind = $this->_bind[$var] ?? null;
-                $this->_bind[$var] = $vare;
-                $e2 = $this->_parse_ternary($in_qc);
-                $this->_bind[$var] = $old_bind;
-            } else {
-                $this->weak_lerror($this->pos, "<0>Expected ‘in’");
-                $e2 = null;
-            }
-            if ($e && $e2) {
-                $e = new Let_Fexpr($vare, $e, $e2);
-            }
+            $e = $this->_parse_let($m[2], $this->pos + strlen($m[1]), $this->pos + strlen($m[0]), $in_qc);
         } else if ($ch === "\$"
                    && preg_match('/\G\$(\d+)/s', $t, $m, 0, $this->pos)
                    && $this->_macro
@@ -592,25 +698,34 @@ class FormulaParser {
             if (count($fs) === 1) {
                 $e = $this->_parse_field($pos1, $fs[0]);
             } else {
-                $e = new Constant_Fexpr($m[1], Fexpr::FUNKNOWN);
+                $e = new VarUse_Fexpr(new VarDef_Fexpr($m[1], 0));
             }
-        } else if (!empty($this->_bind)
-                   && preg_match('/\G[A-Za-z_][A-Za-z0-9_]*/', $t, $m, 0, $this->pos)
-                   && isset($this->_bind[$m[0]])) {
-            $this->pos += strlen($m[0]);
-            $e = new VarUse_Fexpr($this->_bind[$m[0]]);
-        } else if (preg_match('/\G(?:\#|[A-Za-z_][A-Za-z0-9_.@:]*)/is', $t, $m, 0, $this->pos)
-                   && ($kwdef = $this->_find_formula_function($m[0]))) {
-            $e = $this->_parse_function($m[0], $kwdef);
-        } else if (preg_match('/\G[-A-Za-z0-9_.@]+(?!\s*\()/s', $t, $m, 0, $this->pos)) {
-            $f = $this->_find_formula_field($m[0]);
-            $this->pos += strlen($m[0]);
-            $e = $f ? $this->_parse_field($pos1, $f) : new Constant_Fexpr($m[0], Fexpr::FUNKNOWN);
-        } else if (preg_match('/\G[A-Za-z][A-Za-z0-9_.@:]*/is', $t, $m, 0, $this->pos)) {
-            $e = $this->_parse_function($m[0], (object) [
-                "name" => $m[0], "args" => true, "optional" => true,
-                "function" => "FormulaParser::make_error_call"
-            ]);
+        } else if ($ch === "#"
+                   && ($kwdef = $this->_find_formula_function($ch))) {
+            $e = $this->_parse_function($ch, $kwdef);
+        } else if (preg_match('/\G((?:[A-Za-z_0-9]|\.[A-Za-z_0-9])(?:[A-Za-z_0-9]|[.@:][A-Za-z_0-9])*+)(-[A-Za-z_0-9](?:[A-Za-z_0-9]|[-.@:][A-Za-z_0-9])*+|)/s', $t, $m, 0, $this->pos)) {
+            $isfunc = preg_match('/\G\s*+\(/s', $t, $mm, 0, $this->pos + strlen($m[0]));
+            $isfunc1 = $isfunc && $m[2] === "";
+            if (!$isfunc1
+                && ($vd = $this->_bind[$m[1]] ?? $this->_free_bind[$m[1]] ?? null)) {
+                $this->pos += strlen($m[1]);
+                $e = new VarUse_Fexpr($vd);
+            } else if (($kwdef = $this->_find_formula_function($m[1]))) {
+                $e = $this->_parse_function($m[1], $kwdef);
+            } else if (!$isfunc && ($f = $this->_find_formula_field($m[0]))) {
+                $this->pos += strlen($m[0]);
+                $e = $this->_parse_field($pos1, $f);
+            } else if (!$isfunc) {
+                $this->pos += strlen($m[1]);
+                $vare = new VarDef_Fexpr($m[1], 0);
+                $this->_free_bind[$m[1]] = $vare;
+                $e = new VarUse_Fexpr($vare);
+            } else {
+                $e = $this->_parse_function($m[1], (object) [
+                    "name" => $m[1], "args" => true, "optional" => true,
+                    "function" => "FormulaParser::make_error_call"
+                ]);
+            }
         }
 
         if (!$e) {
@@ -662,6 +777,8 @@ class FormulaParser {
                 $e = new And_Fexpr($e, $e2);
             } else if ($opx === "||") {
                 $e = new Or_Fexpr($e, $e2);
+            } else if ($opx === "^^") {
+                $e = new Xor_Fexpr($e, $e2);
             } else if ($opx === "??") {
                 $e = new Coalesce_Fexpr(FormulaCall::make_args($this, "??", [$e, $e2]));
             } else if ($opx === "+" || $opx === "-") {
@@ -742,9 +859,12 @@ class FormulaParser {
             }
             $this->formula->fexpr_lerror($fe, "<0>Circular reference in formula");
             $this->formula->lerrors[] = MessageItem::error_at("circular_reference");
-        } else if ((string) $this->str === "") {
+            return $fe;
+        }
+        $s = (string) $this->str;
+        if (trim($s) === "") {
             $fe = Fexpr::cerror();
-            $fe->apply_strspan(0, 0, $this->string_context);
+            $fe->apply_strspan(0, strlen($this->str), $this->string_context);
             $this->formula->fexpr_lerror($fe, "<0>Empty formula");
         } else {
             $fe = $this->_parse_ternary(false)

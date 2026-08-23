@@ -200,7 +200,7 @@ class ReviewCSV_Batch {
         $x["review"] = $rrow->unparse_ordinal_id();
         $x["email"] = $rrow->reviewer()->email;
         $x["round"] = $prow->conf->round_name($rrow->reviewRound);
-        $x["submitted_at"] = $rrow->reviewSubmitted;
+        $x["submitted_at"] = $rrow->reviewSubmitted ? : null;
         $x["vtag"] = $rrow->reviewTime;
         $x["status"] = $rrow->status_description();
         $x["format"] = $prow->conf->default_format;
@@ -292,7 +292,7 @@ class ReviewCSV_Batch {
             "name:,n: !",
             "config: !",
             "help,h !",
-            "type:,t: =COLLECTION Search COLLECTION “s” (submitted) or “all” [s]",
+            "type:,t: =SCOPE Scope of search [s]",
             "narrow,x Narrow output",
             "wide,w !",
             "all,a Include all reviews, not just submitted ones",

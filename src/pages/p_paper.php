@@ -1,6 +1,6 @@
 <?php
 // pages/p_paper.php -- HotCRP paper view and edit page
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Paper_Page {
     /** @var Conf */
@@ -38,13 +38,22 @@ class Paper_Page {
         PaperTable::print_header($pt, $this->qreq, $error);
     }
 
-    /** @param ?FailureReason $perm */
-    function error_exit($perm = null) {
-        if ($perm && (!$perm->secondary || $this->conf->saved_messages_status() < 2)) {
+    /** @return never
+     * @throws PageCompletion */
+    function error_exit(FailureReason $perm) {
+        Navigation::http_response_code($perm->response_code($this->user));
+        if (!$perm->secondary || $this->conf->saved_messages_status() < 2) {
             $perm->set("expand", true);
             $perm->set("listViewable", $this->user->is_author() || $this->user->is_reviewer());
             $this->conf->feedback_msg($perm->message_list());
         }
+        $this->print_exit();
+    }
+
+    /** Render the terminal page and stop.
+     * @return never
+     * @throws PageCompletion */
+    function print_exit() {
         $this->print_header(true);
         Ht::stash_script("hotcrp.shortcut().add()");
         $this->qreq->print_footer();
@@ -62,13 +71,23 @@ class Paper_Page {
         } catch (FailureReason $perm) {
             $this->error_exit($perm);
         }
+        // check path suffix for `/main` or `/edit`
+        if ($this->qreq->path_component_index() === 1
+            && ($pc = (string) $this->qreq->path_component(0)) !== ""
+            && in_array($pc, ["main", "edit", "p", "r", "rea"], true)) {
+            $this->qreq->m = $pc;
+            $this->qreq->consume_path_components(1);
+        }
+        if ((string) $this->qreq->path_component(0) !== "") {
+            $this->error_exit(new FailureReason($this->conf, ["invalidPath" => $this->qreq->path_component(0)]));
+        }
     }
 
     function handle_cancel() {
         if ($this->prow->timeSubmitted && $this->qreq->m === "edit") {
             unset($this->qreq->m);
         }
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
     }
 
     function handle_withdraw() {
@@ -79,7 +98,7 @@ class Paper_Page {
 
         $reason = (string) $this->qreq->reason;
         if ($reason === ""
-            && $this->user->can_administer($this->prow)
+            && $this->user->can_manage($this->prow)
             && $this->qreq["status:notify"] > 0) {
             $reason = (string) $this->qreq["status:notify_reason"];
         }
@@ -91,7 +110,7 @@ class Paper_Page {
         if (!$aset->execute()) {
             error_log("{$this->conf->dbname}: withdraw #{$this->prow->paperId} failure: " . json_encode($aset->json_result()));
         }
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
     }
 
     function handle_revive() {
@@ -107,13 +126,13 @@ class Paper_Page {
         if (!$aset->execute()) {
             error_log("{$this->conf->dbname}: revive #{$this->prow->paperId} failure: " . json_encode($aset->json_result()));
         }
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
     }
 
     function handle_delete() {
         if ($this->prow->paperId <= 0) {
             $this->conf->success_msg("<0>{$this->conf->snouns[2]} deleted");
-        } else if (!$this->user->can_administer($this->prow)) {
+        } else if (!$this->user->can_manage($this->prow)) {
             $this->conf->feedback_msg(
                 MessageItem::error("<0>Only program chairs can permanently delete a {$this->conf->snouns[0]}"),
                 MessageItem::inform("<0>Authors can withdraw {$this->conf->snouns[1]}.")
@@ -129,7 +148,7 @@ class Paper_Page {
             if ($this->prow->delete_from_database($this->user)) {
                 $this->conf->success_msg("<0>{$this->conf->snouns[2]} #{$this->prow->paperId} deleted");
             }
-            $this->error_exit();
+            $this->print_exit();
         }
     }
 
@@ -137,12 +156,12 @@ class Paper_Page {
         $stripfields = $this->ps->strip_unchanged_fields_qreq($this->qreq, $this->prow);
         $fields = $this->ps->changed_fields_qreq($this->qreq, $this->prow);
         if (empty($fields) && $this->prow->paperId) {
-            $this->conf->redirect_self($this->qreq, ["p" => $this->prow->paperId, "m" => "edit"]);
+            $this->qreq->redirect_self(["p" => $this->prow->paperId, "m" => "edit"]);
         } else {
             $this->ps->inform_at("status:if_unmodified_since",
                 $this->conf->_("<5>Your changes were not saved because the {submission} has changed since you last loaded this page. Unsaved changes to {:list} are highlighted. Check them and save again, or <a href=\"{url}\" class=\"uic js-ignore-unload-protection\">discard your edits</a>.",
                     PaperTable::field_title_links($fields, "edit_title"),
-                    new FmtArg("url", $this->prow->hoturl(["m" => "edit"], Conf::HOTURL_RAW), 0)));
+                    new FmtArg("url", $this->prow->hoturl(["m" => "edit"]), 0)));
         }
     }
 
@@ -155,10 +174,9 @@ class Paper_Page {
             && $this->qreq["status:phase"] === "final";
         $this->useRequest = true;
 
+        // prepare save and check permissions
         $this->ps = new PaperStatus($this->user);
-        $prepared = $this->ps->prepare_save_paper_web($this->qreq, $this->prow);
-
-        if (!$prepared) {
+        if (!$this->ps->prepare_save_paper_web($this->qreq, $this->prow)) {
             if ($is_new && $this->qreq->has_files()) {
                 // XXX save uploaded files
                 $this->ps->prepend_item(MessageItem::error("<5><strong>Your uploaded files were ignored.</strong>"));
@@ -169,22 +187,6 @@ class Paper_Page {
                 $this->ps->prepend_item(MessageItem::error("<5><strong>Changes not saved.</strong> Please correct these issues and try again."));
             }
             $conf->feedback_msg($this->ps->decorated_message_list());
-            return;
-        }
-
-        // check deadlines
-        // NB PaperStatus also checks deadlines now; this is likely redundant.
-        $whynot = $this->user->perm_edit_paper($this->prow);
-        if ($whynot
-            && !$is_new
-            && !$is_final
-            && !count(array_diff($this->ps->changed_keys(), ["contacts", "status"]))) {
-            $whynot = $this->user->perm_finalize_paper($this->prow);
-        }
-        if ($whynot) {
-            $conf->feedback_msg($whynot->set("expand", true)->message_list());
-            $this->useRequest = !$is_new; // XXX used to have more complex logic
-            $this->ps->abort_save();
             return;
         }
 
@@ -224,6 +226,7 @@ class Paper_Page {
         } else {
             $chf = array_map(function ($f) { return $f->edit_title(); }, $this->ps->changed_fields());
             $ml[] = MessageItem::success($conf->_("<0>Updated {submission} (changed {:list})", $chf, new FmtArg("phase", $is_final ? "final" : "review")));
+            $this->useRequest = false; // ????
         }
         if ($this->ps->has_error()) {
             if (!$this->ps->has_change()) {
@@ -240,7 +243,7 @@ class Paper_Page {
 
         // mail notification
         if ($this->ps->has_change()) {
-            if ($this->user->can_administer($new_prow)) {
+            if ($this->user->can_manage($new_prow)) {
                 if (friendly_boolean($this->qreq["status:notify"])) {
                     $this->ps->set_notify_reason($this->qreq["status:notify_reason"] ?? "");
                 } else {
@@ -253,7 +256,7 @@ class Paper_Page {
         $this->qreq->set_paper($new_prow);
         $this->prow = $new_prow;
         if (!$this->ps->has_error() || $new_prow->is_new()) {
-            $conf->redirect_self($this->qreq, ["p" => $new_prow->paperId, "m" => "edit"]);
+            $this->qreq->redirect_self(["p" => $new_prow->paperId, "m" => "edit"]);
         }
     }
 
@@ -261,7 +264,7 @@ class Paper_Page {
         $conf = $this->conf;
         $this->useRequest = true;
 
-        if (!$this->user->can_administer($this->prow)
+        if (!$this->user->can_manage($this->prow)
             && !$this->prow->has_author($this->user)) {
             $conf->feedback_msg($this->prow->failure_reason(["permission" => "contact:edit", "expand" => true])->message_list());
             return;
@@ -287,7 +290,7 @@ class Paper_Page {
         }
 
         if (!$this->ps->has_error()) {
-            $conf->redirect_self($this->qreq);
+            $this->qreq->redirect_self();
         }
     }
 
@@ -316,7 +319,7 @@ class Paper_Page {
             $m = $this->conf->_("<0>You’re accessing this {submission} using a special link for reviewer {reviewer}",
                 new FmtArg("reviewer", $u->email, 0),
                 new FmtArg("self", $this->user->email, 0),
-                new FmtArg("signinurl", $this->conf->hoturl_raw("signin", ["email" => $u->email, "cap" => null])));
+                new FmtArg("signinurl", $this->conf->hoturl("signin", ["email" => $u->email, "cap" => null])));
             $this->pt()->add_pre_status_feedback(MessageItem::warning_note($m));
         }
     }
@@ -327,7 +330,8 @@ class Paper_Page {
         $pt->resolve_comments();
         if ($pt->can_view_reviews()
             || $pt->mode === "re"
-            || ($this->prow->paperId > 0 && $this->user->can_edit_some_review($this->prow))) {
+            || ($this->prow->paperId > 0
+                && $this->user->can_edit_some_review($this->prow))) {
             $pt->resolve_review(false);
         }
         if ($pt->mode === "edit") {
@@ -338,17 +342,15 @@ class Paper_Page {
         $this->print_header(false);
         $pt->print_paper_info();
 
-        if ($pt->mode === "edit") {
-            $pt->paptabEndWithoutReviews();
-        } else {
+        if ($pt->mode !== "edit") {
             if ($pt->mode === "re") {
                 $pt->print_review_form();
                 $pt->print_main_link();
             } else if ($pt->can_view_reviews()) {
-                $pt->paptabEndWithReviewsAndComments();
+                $pt->print_prepare_reviews();
             } else {
-                $pt->paptabEndWithReviewMessage();
-                $pt->print_comments();
+                $pt->print_no_reviews_message();
+                $pt->request_comments();
             }
             // restore comment across logout bounce
             if ($this->qreq->editcomment) {
@@ -357,6 +359,7 @@ class Paper_Page {
         }
 
         echo "</article>\n";
+        $pt->print_finish_reviews();
         $this->qreq->print_footer();
     }
 
@@ -376,7 +379,7 @@ class Paper_Page {
                     && ($crow->commentType & CommentInfo::CT_RESPONSE) != 0
                     && $preferred_resp_round
                     && $crow->commentRound === $preferred_resp_round->id)) {
-                $j = $crow->unparse_json($this->user);
+                $j = $crow->unparse_json($this->user, 0);
             }
         }
         if (!$j) {
@@ -393,16 +396,14 @@ class Paper_Page {
             $j->visibility = $this->qreq->visibility;
             $tags = trim((string) $this->qreq->tags);
             $j->tags = $tags === "" ? [] : preg_split('/\s+/', $tags);
-            $j->blind = !!$this->qreq->blind;
-            $j->draft = !!$this->qreq->draft;
+            $j->blind = friendly_boolean($this->qreq->blind) ?? false;
+            $j->draft = friendly_boolean($this->qreq->draft) ?? false;
         }
         Ht::stash_script("hotcrp.edit_comment(" . json_encode_browser($j) . ")");
     }
 
     static function go(Contact $user, Qrequest $qreq) {
-        if (!isset($qreq->m) && ($pc = $qreq->path_component(1))) {
-            $qreq->m = $pc;
-        } else if (!isset($qreq->m) && isset($qreq->mode)) {
+        if (!isset($qreq->m) && isset($qreq->mode)) {
             $qreq->m = $qreq->mode;
         }
 
@@ -449,7 +450,7 @@ class Paper_Page {
         } else if ($qreq->delete && $qreq->valid_post()) {
             $pp->handle_delete();
         } else if ($qreq->updateoverride && $qreq->valid_token()) {
-            $pp->conf->redirect_self($qreq, ["m" => "edit", "forceShow" => 1]);
+            $qreq->redirect_self(["m" => "edit", "forceShow" => 1]);
         }
 
         // capability messages: decline, accept to different user

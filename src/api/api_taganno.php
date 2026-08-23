@@ -7,10 +7,12 @@ class TagAnno_API {
         $tagger = new Tagger($user);
         if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE))) {
             return JsonResult::make_error(400, $tagger->error_ftext());
+        } else if (!$user->can_view_tag_somewhere($tag)) {
+            return JsonResult::make_permission_error("tag");
         }
-        $dt = $user->conf->tags()->ensure(Tagger::tv_tag($tag));
         $anno = [];
-        foreach ($dt->order_anno_list() as $oa) {
+        $ti = $user->conf->tags()->find($tag);
+        foreach ($ti ? $ti->order_anno_list() : [] as $oa) {
             if ($oa->annoId !== null)
                 $anno[] = $oa;
         }
@@ -30,9 +32,8 @@ class TagAnno_API {
         $tagger = new Tagger($user);
         if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE))) {
             return JsonResult::make_error(400, $tagger->error_ftext());
-        }
-        if (!$user->can_edit_tag_anno($tag)) {
-            return JsonResult::make_permission_error();
+        } else if (!$user->can_edit_tag_anno($tag)) {
+            return JsonResult::make_permission_error("tag");
         }
         $reqanno = json_decode($qreq->anno ?? "");
         if (!is_object($reqanno) && !is_array($reqanno)) {
@@ -43,6 +44,9 @@ class TagAnno_API {
         $anno_by_id = [];
         $next_annoid = 1;
         foreach ($dt->order_anno_list() as $anno) {
+            if ($anno->annoId === null) { // skip fencepost
+                continue;
+            }
             $anno_by_id[$anno->annoId] = $anno;
             $next_annoid = max($anno->annoId + 1, $next_annoid);
         }
@@ -55,7 +59,8 @@ class TagAnno_API {
                 || (!is_int($anno->annoid) && !preg_match('/^n/', $anno->annoid))) {
                 return JsonResult::make_parameter_error("anno");
             }
-            if (isset($anno->deleted) && $anno->deleted) {
+            if (($anno->delete ?? false)
+                || /* XXX backward compat */ ($anno->deleted ?? false)) {
                 if (is_int($anno->annoid)) {
                     $q[] = "delete from PaperTagAnno where tag=? and annoId=?";
                     array_push($qv, $tag, $anno->annoid);

@@ -1,6 +1,6 @@
 <?php
 // pages/p_users.php -- HotCRP people listing/editing page
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Users_Page {
     /** @var Conf */
@@ -10,8 +10,8 @@ class Users_Page {
     /** @var Qrequest */
     public $qreq;
     /** @var array<string,string|array{label:string}> */
-    public $limits;
-    /** @var list<int> */
+    public $limits = [];
+    /** @var ?list<int> */
     private $papersel;
 
     function __construct(Contact $viewer, Qrequest $qreq) {
@@ -21,70 +21,56 @@ class Users_Page {
         }
         $this->viewer = $viewer;
         $this->qreq = $qreq;
-        $this->papersel = SearchSelection::make($qreq)->selection();
+        $pap = $qreq->p ?? $qreq->pap;
+        if (isset($pap) && $pap !== "all") {
+            $this->papersel = SearchSelection::make($qreq)->selection();
+        }
 
-        $this->limits = [];
-        if ($viewer->can_view_pc()) {
-            $this->limits["pc"] = "Program committee";
-        }
+        $this->add_limit("pc", "Program committee");
         foreach ($this->conf->viewable_user_tags($viewer) as $t) {
-            if ($t !== "pc")
-                $this->limits["#{$t}"] = ["optgroup" => "PC tags", "label" => "#{$t} program committee"];
+            if ($t !== "pc" && $t !== "listedpc" && $t !== "unlistedpc")
+                $this->add_limit("#{$t}", ["optgroup" => "PC tags", "label" => "#{$t} program committee"]);
         }
-        if ($viewer->isPC
-            && $viewer->can_view_pc()) {
-            $this->limits["admin"] = "System administrators";
-            $this->limits["pcadmin"] = ["label" => "PC and system administrators", "exclude" => true];
-        }
-        if ($viewer->is_manager()
-            || ($viewer->isPC && $this->conf->setting("viewrev") > 0)) {
-            $this->limits["re"] = "All reviewers";
-            $this->limits["ext"] = "External reviewers";
-            $this->limits["extsub"] = "External reviewers who completed a review";
-            $this->limits["extrev-not-accepted"] = "External reviewers with outstanding requests";
-        }
-        if ($viewer->isPC) {
-            $this->limits["req"] = ["label" => "External reviewers you requested", "exclude" => !$viewer->is_requester()];
-        }
-        if ($viewer->is_manager()
-            || ($viewer->isPC
-                && $this->conf->submission_blindness() !== Conf::BLIND_ALWAYS)) {
-            $this->limits["au"] = "Contact authors of submitted papers";
-        }
-        if ($viewer->is_manager()
-            || ($viewer->isPC
-                && $viewer->can_view_some_decision()
-                && $viewer->can_view_some_authors())) {
-            $this->limits["auacc"] = ["label" => "Contact authors of accepted papers", "exclude" => !$this->conf->has_any_accepted()];
-        }
-        if ($viewer->is_manager()
-            || ($viewer->isPC
-                && $viewer->can_view_some_decision()
-                && $this->conf->submission_blindness() !== Conf::BLIND_ALWAYS)) {
-            $this->limits["aurej"] = "Contact authors of rejected papers";
-        }
-        if ($viewer->is_manager()) {
-            $this->limits["auuns"] = "Contact authors of non-submitted papers";
-        }
-        if ($viewer->privChair) {
-            $this->limits["all"] = "Active users";
+        $this->add_limit("unlistedpc", ["label" => "Unlisted program committee", "exclude" => !$this->conf->has_unlisted_pc_members()]);
+        $this->add_limit("fullpc", ["label" => "Listed and unlisted program committee", "exclude" => !$this->conf->has_unlisted_pc_members()]);
+        $this->add_limit("admin", "System administrators");
+        $this->add_limit("pcadmin", ["label" => "PC and system administrators", "exclude" => true]);
+        $this->add_limit("re", "All reviewers");
+        $this->add_limit("ext", "External reviewers");
+        $this->add_limit("extsub", "External reviewers who completed a review");
+        $this->add_limit("extrev-not-accepted", "External reviewers with outstanding requests");
+        $this->add_limit("req", ["label" => "External reviewers you requested", "exclude" => !$viewer->is_requester()]);
+        $this->add_limit("bot", ["label" => "Bot accounts", "exclude" => !$this->conf->setting("bots") || !$viewer->privChair]);
+        $this->add_limit("au", "Contact authors of submitted papers");
+        $this->add_limit("auacc", ["label" => "Contact authors of accepted papers", "exclude" => !$this->conf->has_any_accepted()]);
+        $this->add_limit("aurej", "Contact authors of rejected papers");
+        $this->add_limit("auuns", "Contact authors of non-submitted papers");
+        $this->add_limit("all", "Active users");
+    }
+
+    /** @param string $name
+     * @param string|array $value */
+    private function add_limit($name, $value) {
+        if (ContactList::can_view_list($this->viewer, $name)) {
+            $this->limits[$name] = $value;
         }
     }
 
 
+    /** @return list<Contact> */
+    function selected_users() {
+        // `papersel` is a raw client-supplied selection, so it must not bypass
+        // the listing's visibility filter
+        return (new ContactList($this->viewer, false, $this->qreq))
+            ->set_user_filter($this->papersel)
+            ->sorted_users($this->qreq->t);
+    }
+
     /** @return bool */
     private function handle_nameemail() {
-        $result = $this->conf->qe("select * from ContactInfo where contactId?a", $this->papersel);
-        $users = [];
-        while (($user = Contact::fetch($result, $this->conf))) {
-            $users[] = $user;
-        }
-        Dbl::free($result);
-        usort($users, $this->conf->user_comparator());
-
         $texts = [];
         $has_country = $has_orcid = false;
-        foreach ($users as $u) {
+        foreach ($this->selected_users() as $u) {
             $texts[] = $line = [
                 "given_name" => $u->firstName,
                 "family_name" => $u->lastName,
@@ -107,16 +93,9 @@ class Users_Page {
         return true;
     }
 
-
     /** @return bool */
     private function handle_pcinfo() {
-        $result = $this->conf->qe("select * from ContactInfo where contactId?a", $this->papersel);
-        $users = [];
-        while (($user = Contact::fetch($result, $this->conf))) {
-            $users[] = $user;
-        }
-        Dbl::free($result);
-        usort($users, $this->conf->user_comparator());
+        $users = $this->selected_users();
         Contact::load_topic_interests($users);
 
         // NB This format is expected to be parsed by profile.php's bulk upload.
@@ -161,13 +140,15 @@ class Users_Page {
                     $f[] = $fb;
             }
             $row["follow"] = empty($f) ? "none" : join(" ", $f);
-            if ($user->roles & (Contact::ROLE_PC | Contact::ROLE_ADMIN | Contact::ROLE_CHAIR)) {
+            if ($user->roles & Contact::ROLE_PCLIKE) {
                 $r = [];
                 if ($user->roles & Contact::ROLE_CHAIR) {
                     $r[] = "chair";
                 }
                 if ($user->roles & Contact::ROLE_PC) {
                     $r[] = "pc";
+                } else if ($user->roles & Contact::ROLE_UNLISTEDPC) {
+                    $r[] = "unlistedpc";
                 }
                 if ($user->roles & Contact::ROLE_ADMIN) {
                     $r[] = "sysadmin";
@@ -215,7 +196,6 @@ class Users_Page {
         return true;
     }
 
-
     /** @return bool */
     private function handle_modify() {
         $modifyfn = $this->qreq->modifyfn;
@@ -239,10 +219,19 @@ class Users_Page {
             if (!empty($ua->name_list("skipped"))) {
                 $ua->append_item(MessageItem::warning_note($this->conf->_("<0>Skipped disabled accounts {:list}", $ua->name_list("skipped"))));
             }
-        } else if ($modifyfn === "add_pc" || $modifyfn === "remove_pc") {
+        } else if ($modifyfn === "add_pc"
+                   || $modifyfn === "add_unlistedpc"
+                   || $modifyfn === "remove_pc") {
             $ua->$modifyfn($this->papersel);
             $list = $modifyfn;
-            $action = new FmtArg("action", $modifyfn === "add_pc" ? "added to PC" : "removed from PC", 0);
+            if ($modifyfn === "add_pc") {
+                $atext = "added to PC";
+            } else if ($modifyfn === "add_unlistedpc") {
+                $atext = "added to unlisted PC";
+            } else {
+                $atext = "removed from PC";
+            }
+            $action = new FmtArg("action", $atext, 0);
         } else {
             return false;
         }
@@ -259,7 +248,7 @@ class Users_Page {
         }
 
         $this->conf->feedback_msg($ua);
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
         return true;
     }
 
@@ -330,7 +319,7 @@ class Users_Page {
 
         // that’s it
         Conf::$no_invalidate_caches = false;
-        $this->conf->invalidate_caches(["pc" => true]);
+        $this->conf->invalidate_caches("pc");
 
         // report
         if ($us->has_error()) {
@@ -345,7 +334,7 @@ class Users_Page {
         }
         $this->conf->feedback_msg($ms);
         unset($this->qreq->fn, $this->qreq->tagfn);
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
         return true;
     }
 
@@ -366,7 +355,7 @@ class Users_Page {
             $sv[] = "ulscoresort=" . ScoreInfo::parse_score_sort($this->qreq->scoresort);
         }
         Session_API::change_session($this->qreq, join(" ", $sv));
-        $this->conf->redirect_self($this->qreq);
+        $this->qreq->redirect_self();
         return true;
     }
 
@@ -376,14 +365,12 @@ class Users_Page {
         $qreq = $this->qreq;
         if ($qreq->fn === "get"
             && $qreq->getfn === "nameemail") {
-            return !empty($this->papersel)
-                && $this->viewer->isPC
+            return $this->viewer->isPC
                 && $this->handle_nameemail();
         }
         if ($qreq->fn === "get"
             && $qreq->getfn === "pcinfo") {
-            return !empty($this->papersel)
-                && $this->viewer->privChair
+            return $this->viewer->privChair
                 && $this->handle_pcinfo();
         }
         if ($qreq->fn === "modify") {
@@ -408,7 +395,7 @@ class Users_Page {
         echo '<div class="tlcontainer mb-3">';
 
         echo '<div class="tld is-tla active" id="default" role="tabpanel" aria-labelledby="k-default-tab">',
-            Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
+            $this->conf->hotform("users", null, ["method" => "get"]);
         if (isset($this->qreq->sort)) {
             echo Ht::hidden("sort", $this->qreq->sort);
         }
@@ -417,7 +404,7 @@ class Users_Page {
 
         // Display options
         echo '<div class="tld is-tla" id="view" role="tabpanel" aria-labelledby="k-view-tab">',
-            Ht::form($this->conf->hoturl("users"), ["method" => "get"]);
+            $this->conf->hotform("users", null, ["method" => "get"]);
         foreach (["t", "sort"] as $x) {
             if (isset($this->qreq[$x]))
                 echo Ht::hidden($x, $this->qreq[$x]);
@@ -501,7 +488,7 @@ class Users_Page {
             $title = "Users";
         }
         $this->qreq->print_header($title, "users", [
-            "action_bar" => QuicklinksRenderer::make($this->qreq, "account")
+            "action_bar" => "quicklinks:account"
         ]);
 
 
@@ -522,20 +509,20 @@ class Users_Page {
 
         if ($this->viewer->privChair) {
             if ($this->qreq->t === "pc") {
-                $this->print_pre_list_links('<a href="' . $this->conf->hoturl("profile", "u=new&amp;role=pc") . '" class="btn">Add accounts</a>',
+                $this->print_pre_list_links($this->conf->hotlink("Add accounts", "profile", ["u" => "new", "role" => "pc"], ["class" => "btn"]),
                     'Select a user to edit their profile or remove them from the PC.');
             } else if (str_starts_with($this->qreq->t, "#")) {
-                $this->print_pre_list_links('<a href="' . $this->conf->hoturl("profile", ["u" => "new", "role" => "pc", "tags" => substr($this->qreq->t, 1)]) . '" class="btn">Add accounts</a>',
+                $this->print_pre_list_links($this->conf->hotlink("Add accounts", "profile", ["u" => "new", "role" => "pc", "tags" => substr($this->qreq->t, 1)], ["class" => "btn"]),
                     'Select a user to edit their profile or remove them from the PC.');
             } else if ($this->qreq->t === "all") {
-                $this->print_pre_list_links('<a href="' . $this->conf->hoturl("profile", "u=new") . '" class="btn">Add accounts</a>',
+                $this->print_pre_list_links($this->conf->hotlink("Add accounts", "profile", ["u" => "new"], ["class" => "btn"]),
                     'Select a user to edit their profile.',
                     'Select ' . Ht::img("viewas.png", "[Act as]") . ' to view the site as that user.');
             }
         }
 
         if ($pl->has("sel")) {
-            echo Ht::form($this->conf->hoturl("=users", ["t" => $this->qreq->t]),
+            echo $this->conf->hotform("=users", ["t" => $this->qreq->t],
                     ["class" => "ui-submit js-submit-list"]),
                 Ht::hidden("defaultfn", ""),
                 Ht::hidden_default_submit("default", 1),
@@ -584,7 +571,7 @@ class Users_Page {
         }
 
         // update from contactdb
-        (new CdbUserUpdate($viewer->conf))->check();
+        (new CdbUserUpdate($viewer->conf))->import_empty_props();
 
         // handle request
         if (isset($qreq["default"]) && $qreq->defaultfn) {

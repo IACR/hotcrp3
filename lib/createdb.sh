@@ -381,13 +381,12 @@ echo 'select User from user group by User;' | eval $MYSQL $mycreatedb_args $myar
 userexists="$?"
 
 createdb=y; createuser=y
-# IACR removed this.
-#if $dbuser_existing && [ "$userexists" != 0 ]; then
-#    echo "* The requested database user $DBUSER does not exist." 1>&2
-#    exit 1
-#elif $dbuser_existing; then
-#    createuser=n
-#fi
+if $dbuser_existing && [ "$userexists" != 0 ]; then
+    echo "* The requested database user $DBUSER does not exist." 1>&2
+    exit 1
+elif $dbuser_existing; then
+    createuser=n
+fi
 
 if [ "$createdb$dbexists" = y0 -o "$createuser$userexists" = y0 ]; then
     echo 1>&2
@@ -417,24 +416,20 @@ if [ "$createdb" = y ]; then
     eval $MYSQLADMIN $mycreatedb_args $myargs $FLAGS --default-character-set=utf8 create $DBNAME || exit 1
 fi
 
-# IACR only uses localhost
-#allhosts="localhost 127.0.0.1 localhost.localdomain$granthosts"
-allhosts="localhost"
-# =======
-#defaulthosts=""
-#if $default_granthosts; then
-#    defaulthosts="localhost 127.0.0.1 ::1"
-#
-#    # Also include `localhost.localdomain` (for backward compatibility), but
-#    # only if `skip_name_resolve` is off
-#    skip_name_resolve=`echo 'select @@global.skip_name_resolve;' | \
-#        eval $MYSQL $mycreatedb_args $myargs $FLAGS -N 2>/dev/null`
-#    if [ "x$skip_name_resolve" != x1 ]; then
-#        defaulthosts="$defaulthosts localhost.localdomain"
-#    fi
-#fi
-#allhosts="$granthosts$defaulthosts"
-# ======
+defaulthosts=""
+if $default_granthosts; then
+    defaulthosts="localhost 127.0.0.1 ::1"
+
+    # Also include `localhost.localdomain` (for backward compatibility), but
+    # only if `skip_name_resolve` is off
+    skip_name_resolve=`echo 'select @@global.skip_name_resolve;' | \
+        eval $MYSQL $mycreatedb_args $myargs $FLAGS -N 2>/dev/null`
+    if [ "x$skip_name_resolve" != x1 ]; then
+        defaulthosts="$defaulthosts localhost.localdomain"
+    fi
+fi
+allhosts="$granthosts$defaulthosts"
+
 if [ "$createuser" = y ]; then
     $qecho "Creating $DBUSER user and password..."
     # 1. GRANT USAGE to ensure users exist (because DROP USER errors if they don't)
@@ -443,12 +438,11 @@ if [ "$createuser" = y ]; then
     for host in $allhosts; do
         echo "select User from user where User='$DBUSER' and Host='$host';" | eval $MYSQL $mycreatedb_args $myargs $FLAGS -N mysql | grep . >/dev/null 2>&1
         if [ $? = 0 ]; then
-            # IACR modify to add "IF EXISTS"
             if $verbose; then
-                echo ". DROP USER IF EXISTS '$DBUSER'@'$host';"
+                echo ". DROP USER '$DBUSER'@'$host';"
             fi
             eval $MYSQL $mycreatedb_args $myargs $FLAGS mysql <<__EOF__ || exit 1
-DROP USER IF EXISTS '$DBUSER'@'$host';
+DROP USER '$DBUSER'@'$host';
 __EOF__
         fi
         if $verbose; then

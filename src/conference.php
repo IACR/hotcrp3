@@ -5233,9 +5233,10 @@ class Conf {
 
     private function print_header_site_page() {
         $sn = htmlspecialchars($this->short_name);
+        // IACR renders differently in dark mode.
         echo '<div id="h-site" class="header-site-page">',
             $this->hotlink("<span class=\"header-site-name\">{$sn}</span>",
-                           "index", ["cap" => null], ["class" => "q"]),
+                           "index", ["cap" => null], ["class" => "iacr_q"]),
             '</div>';
     }
 

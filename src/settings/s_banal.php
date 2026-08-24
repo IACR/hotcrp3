@@ -92,7 +92,12 @@ class Banal_SettingParser extends SettingParser {
         assert($si->name === "format");
         $m = [];
         foreach ([DTYPE_SUBMISSION, DTYPE_FINAL] as $oid) {
-            $fmt = Banal_Setting::make_document($sv, $sv->conf->option_by_id($oid));
+            // IACR: DTYPE_FINAL may have no intrinsic option (final version
+            // upload is handled by IACRLink_PaperOption instead)
+            if (!($opt = $sv->conf->option_by_id($oid))) {
+                continue;
+            }
+            $fmt = Banal_Setting::make_document($sv, $opt);
             if ($fmt->active || !$fmt->spec->is_banal_empty()) {
                 $m[] = $fmt;
             }

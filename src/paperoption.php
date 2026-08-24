@@ -1259,7 +1259,10 @@ require_once(SiteLoader::find("iacr/api/util.php"));
 
 class IACRCB_PaperOption extends Checkbox_PaperOption {
   function __construct(Conf $conf, $args) {
-    parent::__construct($conf, $args, "only-form");
+        // Ensure json_key is initialized on the spec object
+        $oid = $args->option_id ?? $args->id;
+        $args->json_key = $args->json_key ?? "iacrcb_{$oid}";
+        parent::__construct($conf, $args, 'only-form');
   }
   function print_web_edit(PaperTable $pt, $ov, $reqov) {
         // Calculate the link to be shown.
@@ -1296,6 +1299,9 @@ class IACRCB_PaperOption extends Checkbox_PaperOption {
 
 Class IACRLink_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {
+        // Ensure json_key is initialized on the spec object
+        $oid = $args->option_id ?? $args->id;
+        $args->json_key = $args->json_key ?? "iacrlink_{$oid}";
         parent::__construct($conf, $args, "only-form");
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {

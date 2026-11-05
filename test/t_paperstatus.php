@@ -2,7 +2,7 @@
 // t_paperstatus.php -- HotCRP tests
 // Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
 
-#[RequireDb("fresh")]
+#[RequireDb(true)]
 class PaperStatus_Tester {
     /** @var Conf
      * @readonly */
@@ -127,6 +127,66 @@ class PaperStatus_Tester {
         xassert_eqq($paper1c->submission->hash, "2f1bccbf1e0e98004c01ef5b26eb9619f363e38e");
         $paper1 = $this->conf->checked_paper_by_id(1);
         xassert_eqq(sha1($paper1->primary_document()->content()), "2f1bccbf1e0e98004c01ef5b26eb9619f363e38e");
+    }
+
+    function test_document_structural_npages() {
+        $doc = DocumentInfo::make_uploaded_file($this->conf, QrequestFile::make_finfo([
+                "error" => UPLOAD_ERR_OK, "name" => "linear.pdf",
+                "tmp_name" => SiteLoader::resolve("test/sample-linearized.pdf"),
+                "type" => "application/pdf"
+            ]))->set_document_type(DTYPE_SUBMISSION);
+        // page count comes from the PDF structure, no banal run
+        xassert_eqq($doc->npages(new CheckFormat($this->conf, CheckFormat::RUN_NEVER)), 2);
+    }
+
+    function test_import_max_upload_size() {
+        // A ZIP-imported document (and a CLI `savepapers.php x.zip`) is bounded
+        // by the upload-API limit, not the raw `upload_max_filesize` ini value
+        // (2M on the CLI), so normal PDFs are accepted.
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        $imp = new DocumentImporter($paper1, DTYPE_SUBMISSION, 0, new MessageSet);
+
+        $save_api = $this->conf->opt("uploadApiMaxSize");
+        $save_umf = $this->conf->opt("uploadMaxFilesize");
+        $this->conf->set_opt("uploadApiMaxSize", null);
+        $this->conf->set_opt("uploadMaxFilesize", null);
+
+        // no field or deployment limit: the upload-API default applies
+        xassert_eqq($imp->max_upload_size(), Upload_API::MAX_SIZE);
+
+        // an explicit upload-API cap applies
+        $this->conf->set_opt("uploadApiMaxSize", 50 << 20);
+        xassert_eqq($imp->max_upload_size(), 50 << 20);
+
+        // an explicit deployment upload cap constrains it, the ini value alone
+        // does not
+        $this->conf->set_opt("uploadApiMaxSize", null);
+        $this->conf->set_opt("uploadMaxFilesize", "8M");
+        xassert_eqq($imp->max_upload_size(), (int) $this->conf->upload_max_filesize(true));
+
+        $this->conf->set_opt("uploadApiMaxSize", $save_api);
+        $this->conf->set_opt("uploadMaxFilesize", $save_umf);
+    }
+
+    function test_import_content_stream() {
+        // an import callback may replace `content_file` with a stream, as
+        // `DocumentLocator` does for large ZIP entries
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        $doc = $paper1->document(DTYPE_SUBMISSION, 0, true);
+        $content = $doc->content();
+        xassert(is_string($content) && $content !== "");
+        $f = fopen("php://memory", "w+b");
+        fwrite($f, $content);
+        rewind($f);
+        $imp = (new DocumentImporter($paper1, DTYPE_SUBMISSION, 0, new MessageSet))
+            ->on_import(function ($docj) use ($f) {
+                $docj->content_file = $f;
+            });
+        // (the stored hash's algorithm hashes the stream)
+        $ndoc = $imp->upload_document((object) ["content_file" => "paper.pdf", "mimetype" => $doc->mimetype, "hash" => $doc->text_hash()]);
+        // the same content finds the stored copy
+        xassert($ndoc !== null);
+        xassert_eqq($ndoc ? $ndoc->paperStorageId : null, $doc->paperStorageId);
     }
 
     function test_paper_replace_document() {
@@ -493,6 +553,29 @@ class PaperStatus_Tester {
         xassert_eqq($newpaperx->conflict_type($this->u_estrin), CONFLICT_CONTACTAUTHOR);
     }
 
+    function test_save_web_names_convert_to_utf8() {
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->prepare_save_paper_web(new Qrequest("POST", ["title" => "New paper", "abstract" => "This is an abstract\r\n", "has_authors" => "1", "authors:1:name" => "Bobb\xFD Fla\xFF", "authors:1:email" => "flay@_.com", "authors:1:affiliation" => "Caf\xE9", "authors:2:email" => "latin1contact@_.com"]), null));
+        xassert($ps->execute_save());
+        xassert_paper_status($ps);
+        $aus = $this->u_estrin->checked_paper_by_id($ps->paperId)->author_list();
+        xassert_eqq($aus[0]->firstName, "Bobbý");
+        xassert_eqq($aus[0]->lastName, "Flaÿ");
+        xassert_eqq($aus[0]->affiliation, "Café");
+
+        // contact names fill in placeholder accounts
+        $u = $this->conf->fresh_user_by_email("latin1contact@_.com");
+        xassert($u->is_placeholder());
+        xassert_eqq($u->firstName, "");
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->prepare_save_paper_web(new Qrequest("POST", ["title" => "New paper", "abstract" => "This is an abstract\r\n", "has_authors" => "1", "authors:1:name" => "Bobby Flay", "authors:1:email" => "flay@_.com", "has_contacts" => 1, "contacts:1:email" => "latin1contact@_.com", "contacts:1:name" => "Ren\xE9e Contact", "contacts:1:affiliation" => "Caf\xE9", "contacts:1:active" => 1]), null));
+        xassert($ps->execute_save());
+        xassert_paper_status($ps);
+        $u = $this->conf->fresh_user_by_email("latin1contact@_.com");
+        xassert_eqq($u->firstName, "Renée");
+        xassert_eqq($u->affiliation, "Café");
+    }
+
     function test_save_draft_new_paper() {
         $ps = new PaperStatus($this->u_estrin);
         // NB old style of entries
@@ -603,6 +686,61 @@ class PaperStatus_Tester {
         $this->conf->save_refresh_setting("sub_sub", $old_sub_sub);
     }
 
+    // After the deadline, authors may still change contacts, but not PC
+    // conflicts. A PC conflicts field that matches the current state, as the
+    // form always sends, must not block a contact change.
+    function test_save_existing_deadline_pc_conflicts() {
+        $old_sub_sub = $this->conf->setting("sub_sub");
+        $this->conf->save_refresh_setting("sub_sub", Conf::$now - 1000);
+        xassert(!$this->conf->unnamed_submission_round()->time_submit(true));
+
+        $u_diot = $this->conf->checked_user_by_email("christophe.diot@sophia.inria.fr");
+        $u_kohler = $this->conf->checked_user_by_email("kohler@seas.harvard.edu");
+        xassert($u_diot->isPC);
+        xassert(!$u_kohler->isPC);
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert($paper1->has_author($this->u_estrin));
+        xassert_eqq($paper1->conflict_type($u_diot), 0);
+        xassert_eqq($paper1->conflict_type($u_kohler), 0);
+        $pcc = (new PaperExport($this->u_estrin))->paper_json(1)->pc_conflicts;
+        $contacts = [];
+        foreach ($paper1->contact_list() as $au) {
+            $contacts[] = (object) ["email" => $au->email];
+        }
+        $new_contacts = array_merge($contacts, [(object) ["email" => $u_kohler->email]]);
+
+        // PC conflicts cannot change
+        $ps = new PaperStatus($this->u_estrin);
+        xassert(!$ps->save_paper_json((object) ["pid" => 1, "pc_conflicts" => [$u_diot->email => true]]));
+        xassert_str_contains($ps->full_feedback_text(), "deadline has passed");
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert_eqq($paper1->conflict_type($u_diot), 0);
+
+        // not even alongside a contact change
+        $ps = new PaperStatus($this->u_estrin);
+        xassert(!$ps->save_paper_json((object) ["pid" => 1, "pc_conflicts" => [$u_diot->email => true], "contacts" => $new_contacts]));
+        xassert_str_contains($ps->full_feedback_text(), "deadline has passed");
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert_eqq($paper1->conflict_type($u_diot), 0);
+        xassert_eqq($paper1->conflict_type($u_kohler), 0);
+
+        // contacts remain editable, even with the unchanged PC conflicts field
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->save_paper_json((object) ["pid" => 1, "pc_conflicts" => $pcc, "contacts" => $new_contacts]));
+        xassert($ps->has_change_at("contacts"));
+        xassert(!$ps->has_change_at("pc_conflicts"));
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert_eqq($paper1->conflict_type($u_kohler), CONFLICT_CONTACTAUTHOR);
+        xassert_eqq($paper1->conflict_type($u_diot), 0);
+
+        // restore
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["pid" => 1, "contacts" => $contacts]));
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert_eqq($paper1->conflict_type($u_kohler), 0);
+        $this->conf->save_refresh_setting("sub_sub", $old_sub_sub);
+    }
+
     function test_save_finalize_no_edit() {
         // Check that information is not leaked about papers by trying
         // to save them
@@ -621,14 +759,14 @@ class PaperStatus_Tester {
         $paper1 = $this->conf->checked_paper_by_id(1);
         xassert(!$ps->prepare_save_paper_web(new Qrequest("POST", ["title" => "Scalable Timers for Soft State Protocols 2", "status:submit" => 1]), $paper1));
         xassert(!$ps->has_change_at("title"));
-        xassert_eqq($ps->decorated_feedback_text(), "You aren’t allowed to view submission #1\n");
+        xassert_eqq($ps->decorated_feedback_text(), "Submission #1 does not exist, or you’re not allowed to view it\n");
 
         $ps = new PaperStatus($nonpc);
         $paper1 = $this->conf->checked_paper_by_id(1);
         xassert_eqq($paper1->title, "Scalable Timers for Soft State Protocols");
         xassert(!$ps->prepare_save_paper_web(new Qrequest("POST", ["title" => "Scalable Timers for Soft State Protocols", "status:submit" => 1]), $paper1));
         xassert(!$ps->has_change_at("title"));
-        xassert_eqq($ps->decorated_feedback_text(), "You aren’t allowed to view submission #1\n");
+        xassert_eqq($ps->decorated_feedback_text(), "Submission #1 does not exist, or you’re not allowed to view it\n");
 
         $this->conf->save_refresh_setting("sub_sub", $old_sub_sub);
     }
@@ -660,6 +798,200 @@ class PaperStatus_Tester {
         $paper1 = $this->conf->checked_paper_by_id(1);
         xassert_eqq($paper1->outcome, 0);
         xassert_eqq($paper1->timeModified, $modtime);
+    }
+
+    function test_save_final_phase_hidden_decision() {
+        // A user who cannot see the decision must get the same feedback
+        // from a final-phase form save whatever the decision is
+        xassert(!$this->conf->setting("au_seedec"));
+        xassert(!$this->conf->setting("seedec"));
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/name" => "Camera-ready notes",
+            "sf/1/id" => "new",
+            "sf/1/order" => 100,
+            "sf/1/type" => "text",
+            "sf/1/condition" => "phase:final"
+        ]);
+        xassert($sv->execute());
+        $opt = $this->conf->options()->find("Camera-ready notes");
+        xassert($opt && $opt->is_final());
+
+        $u_puneet = $this->conf->checked_user_by_email("puneet@catarina.usc.edu"); // author, not PC
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert($paper1->has_author($u_puneet));
+        xassert($paper1->has_author($this->u_estrin)); // PC author
+        xassert_eqq($paper1->outcome, 0);
+
+        $reqs = [
+            ["status:phase" => "final", "has_final" => 1],
+            ["status:phase" => "final", "has_{$opt->formid}" => 1, $opt->formid => "Thanks"]
+        ];
+        foreach ([$u_puneet, $this->u_estrin] as $user) {
+            foreach ($reqs as $req) {
+                $feedback = $changes = [];
+                foreach (["accepted", "rejected", "unknown"] as $decision) {
+                    $ps = new PaperStatus($this->u_chair);
+                    xassert($ps->save_paper_json((object) ["pid" => 1, "decision" => $decision]));
+                    $paper1 = $user->checked_paper_by_id(1);
+                    xassert($user->allow_edit_paper($paper1));
+                    xassert(!$user->can_view_decision($paper1));
+                    $ps = new PaperStatus($user);
+                    $ps->prepare_save_paper_web(new Qrequest("POST", $req), $paper1);
+                    $feedback[$decision] = $ps->decorated_feedback_text();
+                    $changes[$decision] = $ps->change_list();
+                    xassert_not_str_contains($feedback[$decision], "unknown field");
+                    xassert(!$ps->has_change_at("final"));
+                    xassert(!$ps->has_change_at($opt));
+                    $ps->abort_save();
+                }
+                xassert_eqq($feedback["accepted"], $feedback["unknown"]);
+                xassert_eqq($feedback["rejected"], $feedback["unknown"]);
+                xassert_eqq($changes["accepted"], $changes["unknown"]);
+                xassert_eqq($changes["rejected"], $changes["unknown"]);
+            }
+        }
+
+        $paper1 = $this->conf->checked_paper_by_id(1);
+        xassert_eqq($paper1->outcome, 0);
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => $opt->id,
+            "sf/1/delete" => 1
+        ]);
+        xassert($sv->execute());
+        xassert(!$this->conf->options()->find("Camera-ready notes"));
+    }
+
+    function test_save_final_phase_visible_decision() {
+        // ...but an author who can see the decision can upload a final version
+        $old_final_open = $this->conf->setting("final_open");
+        $old_au_seedec = $this->conf->setting("au_seedec");
+        $prow = $this->make_author_paper("Final-phase form save");
+        $pid = $prow->paperId;
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["pid" => $pid, "decision" => "accepted"]));
+        $this->conf->save_setting("final_open", 1);
+        $this->conf->save_refresh_setting("au_seedec", 1);
+
+        $prow = $this->u_estrin->checked_paper_by_id($pid);
+        xassert($this->u_estrin->can_view_decision($prow));
+        xassert_eqq($prow->phase(), PaperInfo::PHASE_FINAL);
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->prepare_save_paper_web((new Qrequest("POST", ["status:phase" => "final", "has_final" => 1]))->set_file_content("final:file", "%PDF-final\n", null, "application/pdf"), $prow));
+        xassert($ps->has_change_at("final"));
+        xassert_not_str_contains($ps->decorated_feedback_text(), "unknown field");
+        xassert($ps->execute_save());
+        $prow = $this->u_estrin->checked_paper_by_id($pid);
+        xassert_gt($prow->finalPaperStorageId, 1);
+
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["pid" => $pid, "decision" => "unknown"]));
+        $this->conf->save_setting("final_open", $old_final_open);
+        $this->conf->save_refresh_setting("au_seedec", $old_au_seedec);
+    }
+
+    function test_save_final_field_exempt_after_final_deadline() {
+        // A final-phase field with its own edit window can be saved after
+        // the final deadline, when the form offers only “Save changes”
+        $old_final_open = $this->conf->setting("final_open");
+        $old_final_done = $this->conf->setting("final_done");
+        $old_au_seedec = $this->conf->setting("au_seedec");
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/name" => "Final video URL",
+            "sf/1/id" => "new",
+            "sf/1/order" => 100,
+            "sf/1/type" => "text",
+            "sf/1/condition" => "phase:final",
+            "sf/1/edit_condition" => "before:2099-01-01"
+        ]);
+        xassert($sv->execute());
+        $opt = $this->conf->options()->find("Final video URL");
+        xassert($opt && $opt->is_final() && $opt->deadline_exempt());
+
+        $prow = $this->make_author_paper("Final field after final deadline");
+        $pid = $prow->paperId;
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["pid" => $pid, "decision" => "accepted"]));
+        $this->conf->save_setting("final_open", Conf::$now - 86400 * 10);
+        $this->conf->save_setting("final_done", Conf::$now - 86400);
+        $this->conf->save_refresh_setting("au_seedec", 1);
+        $opt = $this->conf->checked_option_by_id($opt->id);
+
+        $prow = $this->u_estrin->checked_paper_by_id($pid);
+        xassert($this->u_estrin->can_view_decision($prow));
+        xassert(!$this->u_estrin->can_edit_paper($prow));
+        xassert($this->u_estrin->can_edit_option($prow, $opt));
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->prepare_save_paper_web(new Qrequest("POST", ["status:phase" => "contacts", "has_{$opt->formid}" => 1, $opt->formid => "https://example.com/v"]), $prow));
+        xassert(!$ps->has_error_at($opt->field_key()));
+        xassert($ps->has_change_at($opt));
+        xassert($ps->execute_save());
+        $prow = $this->u_estrin->checked_paper_by_id($pid);
+        xassert_eqq($prow->option($opt)->data(), "https://example.com/v");
+
+        // non-exempt final fields are still not saved
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->prepare_save_paper_web((new Qrequest("POST", ["status:phase" => "contacts", "has_final" => 1]))->set_file_content("final:file", "%PDF-final\n", null, "application/pdf"), $prow));
+        xassert(!$ps->has_change_at("final"));
+        $ps->abort_save();
+
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["pid" => $pid, "decision" => "unknown"]));
+        $this->conf->save_setting("final_open", $old_final_open);
+        $this->conf->save_setting("final_done", $old_final_done);
+        $this->conf->save_refresh_setting("au_seedec", $old_au_seedec);
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => $opt->id,
+            "sf/1/delete" => 1
+        ]);
+        xassert($sv->execute());
+    }
+
+    function test_submission_document_with_final_version() {
+        // A paper with a final version still has its submission document:
+        // loaded alone, and batched across a list of papers.
+        $root = $this->conf->root_user();
+        $old_final_open = $this->conf->setting("final_open");
+        $old_au_seedec = $this->conf->setting("au_seedec");
+        $this->conf->save_setting("final_open", 1);
+        $this->conf->save_refresh_setting("au_seedec", 1);
+        $pids = [];
+        foreach (["Final A", "Final B"] as $title) {
+            $pid = $this->make_author_paper($title)->paperId;
+            $ps = new PaperStatus($root);
+            xassert($ps->save_paper_json((object) ["pid" => $pid, "decision" => "accepted"]));
+            $ps = new PaperStatus($root);
+            xassert($ps->save_paper_json((object) ["pid" => $pid, "final" => (object) ["content" => "%PDF-final {$title}\n"]]));
+            $pids[] = $pid;
+        }
+
+        $prow = $this->conf->checked_paper_by_id($pids[0]);
+        xassert_gt($prow->finalPaperStorageId, 1);
+        $sub = $prow->document(DTYPE_SUBMISSION);
+        xassert($sub && $sub->documentType === DTYPE_SUBMISSION);
+        xassert_eqq($sub->content(), "%PDF-2");
+        xassert_eqq($prow->document(DTYPE_FINAL)->content(), "%PDF-final Final A\n");
+        // still there after invalidation (as after a save)
+        $prow->invalidate_documents();
+        $sub = $prow->document(DTYPE_SUBMISSION);
+        xassert($sub && $sub->documentType === DTYPE_SUBMISSION);
+
+        $prows = $root->paper_set(["paperId" => $pids]);
+        $nq = Dbl::$nqueries;
+        foreach ($prows as $prow) {
+            xassert_eqq($prow->document(DTYPE_SUBMISSION)->paperStorageId, $prow->paperStorageId);
+        }
+        xassert_eqq(Dbl::$nqueries - $nq, 1);
+
+        foreach ($pids as $pid) {
+            $ps = new PaperStatus($root);
+            xassert($ps->save_paper_json((object) ["pid" => $pid, "decision" => "unknown"]));
+        }
+        $this->conf->save_setting("final_open", $old_final_open);
+        $this->conf->save_refresh_setting("au_seedec", $old_au_seedec);
     }
 
     /** @return PaperInfo */
@@ -958,6 +1290,44 @@ class PaperStatus_Tester {
         $this->conf->save_refresh_setting("sub_sub", $old_sub_sub);
     }
 
+    function test_freeze_revive_as_draft_denied() {
+        // under sub_freeze, withdrawing a submitted paper and reviving it as
+        // a draft is an unsubmit, and is refused like a direct unsubmit
+        $prow = $this->make_author_paper("Frozen revive as draft");
+        $pid = $prow->paperId;
+        $submitted_at = $prow->timeSubmitted;
+        xassert_gt($submitted_at, 0);
+
+        $old_sub_freeze = $this->conf->setting("sub_freeze");
+        $this->conf->save_refresh_setting("sub_freeze", 1);
+        xassert($this->conf->unnamed_submission_round()->freeze);
+        $prow = $this->conf->checked_paper_by_id($pid);
+        xassert(!$this->u_estrin->can_edit_paper($prow));
+        xassert(!$this->u_estrin->can_unsubmit_paper($prow));
+        xassert($this->u_estrin->can_withdraw_paper($prow));
+
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->save_paper_json((object) ["id" => $pid, "status" => (object) ["withdrawn" => true]]));
+        xassert_eqq($this->conf->checked_paper_by_id($pid)->timeSubmitted, -$submitted_at);
+
+        $ps = new PaperStatus($this->u_estrin);
+        xassert(!$ps->save_paper_json((object) ["id" => $pid, "status" => (object) ["withdrawn" => false, "submitted" => false]]));
+        xassert($ps->has_error());
+        $p = $this->conf->checked_paper_by_id($pid);
+        xassert_gt($p->timeWithdrawn, 0);
+        xassert_eqq($p->timeSubmitted, -$submitted_at);
+
+        // reviving as submitted restores the frozen submission unchanged
+        $ps = new PaperStatus($this->u_estrin);
+        xassert($ps->save_paper_json((object) ["id" => $pid, "status" => (object) ["withdrawn" => false]]));
+        $p = $this->conf->checked_paper_by_id($pid);
+        xassert_eqq($p->timeWithdrawn, 0);
+        xassert_eqq($p->timeSubmitted, $submitted_at);
+        xassert(!$this->u_estrin->can_edit_paper($p));
+
+        $this->conf->save_refresh_setting("sub_freeze", $old_sub_freeze);
+    }
+
     function test_resubmission_deadline() {
         // a submitted paper and a draft, both created before any deadline passes
         $submitted = $this->make_author_paper("Resubmission window, submitted");
@@ -1048,6 +1418,32 @@ class PaperStatus_Tester {
         xassert($newpaper->timeSubmitted <= 0);
         xassert($newpaper->timeWithdrawn <= 0);
         xassert_eqq($newpaper->option(1)->value, 10);
+    }
+
+    function test_save_collaborators_length_limit() {
+        $this->conf->save_setting("sub_collab", 1);
+        $this->conf->refresh_settings();
+        $paper1 = $this->conf->checked_paper_by_id(1);
+
+        // an oversized Collaborators value is rejected and not stored: unbounded
+        // collaborators text drives per-request, per-PC-member conflict matching
+        $big = str_repeat("University of California, Berkeley\n", 2000);
+        xassert_gt(strlen($big), 32768);
+        $ps = new PaperStatus($this->u_chair);
+        xassert(!$ps->prepare_save_paper_web(new Qrequest("POST", ["has_collaborators" => 1, "collaborators" => $big]), $paper1));
+        xassert($ps->has_error_at("collaborators"));
+        xassert_array_eqq($ps->change_list(), [], true);
+
+        // a value under the limit is accepted
+        $ok = str_repeat("University of California, Berkeley\n", 100);
+        xassert_lt(strlen($ok), 32768);
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->prepare_save_paper_web(new Qrequest("POST", ["has_collaborators" => 1, "collaborators" => $ok]), $paper1));
+        xassert(!$ps->has_error_at("collaborators"));
+        // ...but do not save, to leave paper 1 unchanged for later tests
+
+        $this->conf->save_setting("sub_collab", null);
+        $this->conf->refresh_settings();
     }
 
     function test_save_new_authors() {
@@ -1499,18 +1895,18 @@ Phil Porras.");
         xassert_eqq(self::pc_conflict_keys($nprow1), [$this->u_estrin->contactId, $this->u_varghese->contactId, $this->u_sally->contactId]);
 
         // author cannot change conflicts
-        $ps = new PaperStatus($this->u_estrin);
+        $ps = (new PaperStatus($this->u_estrin))->set_ignore_unwritable_fields(false);
         $ps->save_paper_json((object) [
             "id" => $this->pid2, "pc_conflicts" => [$this->u_varghese->email => "pinned collaborator"]
         ]);
         xassert($ps->has_problem());
-        xassert_eqq($ps->decorated_feedback_text(), "PC conflicts: Changes ignored\n");
+        xassert_str_contains($ps->decorated_feedback_text(), "PC conflicts:");
 
         $nprow1->invalidate_conflicts();
         xassert_eqq(self::pc_conflict_keys($nprow1), [$this->u_estrin->contactId, $this->u_varghese->contactId, $this->u_sally->contactId]);
 
         // author can list conflicts without warning if no change
-        $ps = new PaperStatus($this->u_estrin);
+        $ps = (new PaperStatus($this->u_estrin))->set_ignore_unwritable_fields(false);
         $ps->save_paper_json((object) [
             "id" => $this->pid2, "pc_conflicts" => [$this->u_varghese->email => "pinned collaborator", $this->u_sally->email => "collaborator"]
         ]);
@@ -2117,21 +2513,20 @@ Phil Porras.");
         $paper3 = $this->u_estrin->checked_paper_by_id(3);
         $doc = $paper3->document(DTYPE_SUBMISSION);
         $cf = new CheckFormat($this->conf, CheckFormat::RUN_NEVER);
-        xassert_eqq($doc->npages($cf), null);  // page count not yet calculated
-        xassert_eqq($doc->npages(), 50);       // once it IS calculated,
-        xassert_eqq($doc->npages($cf), 50);    // it is cached
+        xassert_eqq($doc->npages($cf), 50);    // page count from PDF structure; no banal run
 
         $paper3 = $this->u_estrin->checked_paper_by_id(3);
         $doc = $paper3->document(DTYPE_SUBMISSION);
         xassert_eqq($doc->npages($cf), 50);    // ...even on reload
 
-        // check format checker; this uses result from previous npages()
+        // format checker still needs banal
         $cf_nec = new CheckFormat($this->conf, CheckFormat::RUN_IF_NECESSARY);
         $cf_nec->check_document($doc);
         xassert_eqq(join(" ", $cf_nec->problem_fields()), "pagelimit textblock");
         xassert(!$cf_nec->need_recheck());
-        xassert(!$cf_nec->run_attempted());
+        xassert($cf_nec->run_attempted());
         xassert_eq($paper3->pdfFormatStatus, -$spects);
+        xassert_eqq($doc->npages($cf), 50);
 
         // change the format spec
         ++$spects;
@@ -2179,6 +2574,63 @@ Phil Porras.");
 
         ++$spects;
         $this->conf->save_setting("sub_banal", $spects, "letter;2;;7.5x9in");
+    }
+
+    // With no format spec configured, a truncated cached checker result (for a
+    // document with more than 48 pages) still suffices for page and word counts,
+    // so list rendering does not rerun the checker.
+    function test_banal_nospec_cached_wordcount() {
+        $old_spects = $this->conf->setting("sub_banal");
+        $old_specdata = $this->conf->setting_data("sub_banal");
+        $this->conf->save_setting("sub_banal", null);
+        $this->conf->invalidate_caches("options");
+        xassert_eqq($this->conf->format_spec(DTYPE_SUBMISSION)->timestamp, 0);
+
+        $ps = new PaperStatus($this->conf->root_user());
+        $ps->on_document_import(function ($dj, $dt, $pstatus) {
+            if (is_string($dj->content_file ?? null) && !($dj instanceof DocumentInfo)) {
+                $dj->content_file = SiteLoader::$root . "/" . $dj->content_file;
+            }
+        });
+        $ps->save_paper_json(json_decode("{\"id\":3,\"submission\":{\"content_file\":\"test/sample50pg.pdf\",\"type\":\"application/pdf\"}}"));
+        xassert_paper_status($ps);
+
+        // drop any cached checker result so the first word count runs the checker
+        $paper3 = $this->u_estrin->checked_paper_by_id(3);
+        $doc = $paper3->document(DTYPE_SUBMISSION);
+        $doc->set_prop("banal", null);
+        $doc->save_prop();
+        $paper3 = $this->u_estrin->checked_paper_by_id(3);
+        $doc = $paper3->document(DTYPE_SUBMISSION);
+        $runcount = CheckFormat::$runcount;
+        $cf = new CheckFormat($this->conf, CheckFormat::RUN_IF_NECESSARY);
+        $nw = $doc->nwords($cf);
+        xassert($cf->run_attempted());
+        xassert_eqq(CheckFormat::$runcount, $runcount + 1);
+        xassert_gt($nw, 0);
+        xassert_eqq($doc->npages($cf), 50);
+
+        // the cached result is truncated, but there is no spec to re-verify
+        $paper3 = $this->u_estrin->checked_paper_by_id(3);
+        $doc = $paper3->document(DTYPE_SUBMISSION);
+        $cf = new CheckFormat($this->conf, CheckFormat::RUN_IF_NECESSARY);
+        xassert_eqq($doc->nwords($cf), $nw);
+        xassert(!$cf->run_attempted());
+        xassert(!$cf->need_recheck());
+        xassert_eqq(CheckFormat::$runcount, $runcount + 1);
+
+        // a list showing word count does not rerun the checker either
+        Conf::$blocked_time = 0.0;
+        $col = PaperColumn::make($this->conf, $this->conf->paper_columns("wordcount", $this->u_chair)[0]);
+        $pl = new PaperList("empty", new PaperSearch($this->u_chair, "3"));
+        xassert($col->prepare($pl, FieldRender::CFLIST));
+        xassert(!$col->content_empty($pl, $paper3));
+        xassert_eqq($col->content($pl, $paper3), (string) $nw);
+        xassert_eqq($col->json($pl, $paper3), $nw);
+        xassert_eqq(CheckFormat::$runcount, $runcount + 1);
+
+        $this->conf->save_setting("sub_banal", $old_spects, $old_specdata);
+        $this->conf->invalidate_caches("options");
     }
 
     // Two format-checker runs on the same document must not proceed at once:
@@ -2521,6 +2973,167 @@ Phil Porras.");
         xassert($this->conf->option_by_id(DTYPE_SUBMISSION)->test_editable($newprow));
     }
 
+    function test_deadline_exempt_field() {
+        $conf = $this->conf;
+        $abstract = $conf->option_by_id(PaperOption::ABSTRACTID);
+        $title = $conf->option_by_id(PaperOption::TITLEID);
+        xassert(!$abstract->deadline_exempt());
+        xassert(!$title->deadline_exempt());
+        xassert($conf->option_by_id(PaperOption::CONTACTSID)->deadline_exempt());
+
+        // register a draft and a submission while the deadline is open
+        $old_sub_sub = $conf->setting("sub_sub");
+        $conf->save_refresh_setting("sub_sub", Conf::$now + 100);
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", [
+            "title" => "Draft that will miss the deadline",
+            "abstract" => "Draft abstract",
+            "has_authors" => "1",
+            "authors:1:name" => "Deborah Estrin", "authors:1:email" => "estrin@usc.edu"
+        ]);
+        xassert($ps->prepare_save_paper_web($qreq, null));
+        xassert($ps->execute_save());
+        $draft_pid = $ps->paperId;
+        $draft = $this->u_estrin->checked_paper_by_id($draft_pid);
+        xassert_le($draft->timeSubmitted, 0);
+
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = (new Qrequest("POST", [
+            "status:submit" => 1,
+            "title" => "Submission edited after the deadline",
+            "abstract" => "Submitted abstract",
+            "has_authors" => "1",
+            "authors:1:name" => "Deborah Estrin", "authors:1:email" => "estrin@usc.edu",
+            "has_submission" => 1
+        ]))->set_file_content("submission:file", "%PDF-2", null, "application/pdf");
+        xassert($ps->prepare_save_paper_web($qreq, null));
+        xassert_paper_status($ps);
+        xassert($ps->execute_save());
+        $sub_pid = $ps->paperId;
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert($prow->timeSubmitted > 0);
+
+        // abstract becomes editable for a week after the resubmission deadline
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => "abstract",
+            "sf/1/edit_condition" => "before:resubmit+1w"
+        ]);
+        xassert($sv->execute());
+        $abstract = $conf->option_by_id(PaperOption::ABSTRACTID);
+        $title = $conf->option_by_id(PaperOption::TITLEID);
+        xassert($abstract->deadline_exempt());
+        xassert(!$title->deadline_exempt());
+
+        // deadline passes
+        $conf->save_refresh_setting("sub_sub", Conf::$now - 100);
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert(!$this->u_estrin->can_edit_paper($prow));
+        xassert($this->u_estrin->can_edit_option($prow, $abstract));
+        xassert($this->u_estrin->can_edit_option($prow, $title));
+
+        // abstract can be changed
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["abstract" => "Abstract changed after the deadline"]);
+        xassert($ps->prepare_save_paper_web($qreq, $prow));
+        xassert(!$ps->has_error());
+        xassert($ps->execute_save());
+        xassert($ps->has_change_at("abstract"));
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert_eqq($prow->abstract(), "Abstract changed after the deadline");
+        xassert($prow->timeSubmitted > 0);
+
+        // title cannot
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["title" => "Title changed after the deadline"]);
+        xassert(!$ps->prepare_save_paper_web($qreq, $prow));
+        xassert($ps->has_error_at("status:submitted"));
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert_eqq($prow->title, "Submission edited after the deadline");
+
+        // the draft has missed its own deadline, so the extension does not apply
+        $draft = $this->u_estrin->checked_paper_by_id($draft_pid);
+        xassert(!$this->u_estrin->can_edit_option($draft, $abstract));
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["abstract" => "Draft abstract changed after the deadline"]);
+        xassert($ps->prepare_save_paper_web($qreq, $draft));
+        xassert(!$ps->has_change());
+        $ps = (new PaperStatus($this->u_estrin))->set_ignore_unwritable_fields(false);
+        xassert(!$ps->prepare_save_paper_web($qreq, $draft));
+        xassert($ps->has_error_at("abstract"));
+        $draft = $this->u_estrin->checked_paper_by_id($draft_pid);
+        xassert_eqq($draft->abstract(), "Draft abstract");
+
+        // the extension expires
+        $conf->save_refresh_setting("sub_sub", Conf::$now - 86400 * 8);
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert(!$this->u_estrin->can_edit_option($prow, $abstract));
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["abstract" => "Abstract changed too late"]);
+        xassert($ps->prepare_save_paper_web($qreq, $prow));
+        xassert(!$ps->has_change());
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert_eqq($prow->abstract(), "Abstract changed after the deadline");
+
+        // an open-ended condition is editable indefinitely...
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => "abstract",
+            "sf/1/edit_condition" => "after:submit"
+        ]);
+        xassert($sv->execute());
+        $abstract = $conf->option_by_id(PaperOption::ABSTRACTID);
+        xassert($abstract->deadline_exempt());
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert($this->u_estrin->can_edit_option($prow, $abstract));
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["abstract" => "Abstract changed after submit"]);
+        xassert($ps->prepare_save_paper_web($qreq, $prow));
+        xassert(!$ps->has_error());
+        xassert($ps->execute_save());
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert_eqq($prow->abstract(), "Abstract changed after submit");
+
+        // ...but not on a frozen submission
+        $old_sub_freeze = $conf->setting("sub_freeze");
+        $conf->save_refresh_setting("sub_freeze", 1);
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert($this->u_estrin->perm_edit_paper_state($prow)["frozen"]);
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["abstract" => "Abstract changed while frozen"]);
+        xassert(!$ps->prepare_save_paper_web($qreq, $prow));
+        xassert($ps->has_error_at("status:submitted"));
+        $conf->save_refresh_setting("sub_freeze", $old_sub_freeze);
+
+        // ...or a withdrawn one
+        $conf->qe("update Paper set timeWithdrawn=?, timeSubmitted=-timeSubmitted where paperId=?", Conf::$now, $sub_pid);
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert($prow->timeWithdrawn > 0);
+        xassert($this->u_estrin->perm_edit_paper_state($prow)["withdrawn"]);
+        $ps = new PaperStatus($this->u_estrin);
+        $qreq = new Qrequest("POST", ["abstract" => "Abstract changed while withdrawn"]);
+        xassert(!$ps->prepare_save_paper_web($qreq, $prow));
+        xassert($ps->has_error_at("status:withdrawn"));
+        $prow = $this->u_estrin->checked_paper_by_id($sub_pid);
+        xassert_eqq($prow->abstract(), "Abstract changed after submit");
+
+        // restore
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => "abstract",
+            "sf/1/edit_condition" => ""
+        ]);
+        xassert($sv->execute());
+        xassert(!$conf->option_by_id(PaperOption::ABSTRACTID)->deadline_exempt());
+        $conf->save_refresh_setting("sub_sub", $old_sub_sub);
+        foreach ([$draft_pid, $sub_pid] as $pid) {
+            $conf->qe("delete from Paper where paperId=?", $pid);
+            $conf->qe("delete from PaperConflict where paperId=?", $pid);
+            $conf->qe("delete from PaperOption where paperId=?", $pid);
+            $conf->qe("delete from PaperStorage where paperId=?", $pid);
+        }
+    }
+
     function test_new_paper_random_pids() {
         $this->conf->save_refresh_setting("random_pids", 1);
         $next_pid = $this->conf->fetch_ivalue("select max(paperId)+1 from Paper");
@@ -2656,6 +3269,49 @@ Phil Porras.");
         xassert($sv->execute());
     }
 
+    function test_missing_required_field_reported_once() {
+        // add a required-for-submit field after paper 2 was submitted
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "sf": [
+                {"name": "Count", "id": "new", "order": 100, "type": "numeric", "required": "submit"}
+            ]
+        }');
+        xassert($sv->execute());
+        $o = $this->conf->options()->option_by_key("Count");
+        xassert(!!$o);
+
+        $p2 = $this->conf->checked_paper_by_id(2);
+        $p2au = $this->conf->checked_user_by_email("micke@cdt.luth.se");
+        xassert_gt($p2->timeSubmitted, 0);
+        xassert(!$p2->option($o));
+
+        // the web form sends the field present but empty; the empty value is
+        // refused and the missing old value is re-checked, and the field must
+        // be reported as required exactly once
+        $ps = new PaperStatus($p2au);
+        $x = $ps->save_paper_web(new Qrequest("POST", [
+            "status:submit" => 1,
+            "title" => $p2->title(),
+            "has_opt{$o->id}" => 1,
+            "opt{$o->id}" => ""
+        ]), $p2);
+        xassert_eqq($x, 2);
+        $n = 0;
+        foreach ($ps->message_list() as $mi) {
+            if (str_contains($mi->message, "Entry required to complete")) {
+                ++$n;
+            }
+        }
+        xassert_eqq($n, 1);
+
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => $o->id,
+            "sf/1/delete" => 1
+        ]);
+        xassert($sv->execute());
+    }
+
     function test_implausible_email_no_contact() {
         $bad_email = "implausible@test.invalid";
         xassert(validate_email($bad_email));
@@ -2763,11 +3419,7 @@ Phil Porras.");
             "title" => "Sneaky post-deadline title", "abstract" => "Original abstract.\r\n",
             "authors:1:name" => "Deborah Estrin", "authors:1:email" => "estrin@usc.edu"
         ])->set_user($this->u_estrin);
-        // test_mode 2 routes feedback messages into the page (as in Render_Batch)
-        $old_test_mode = Navigation::$test_mode;
-        Navigation::$test_mode = 2;
         $rc = RenderCapture::make($qreq);
-        Navigation::$test_mode = $old_test_mode;
         $html = Render_Batch::normalize($rc->content);
         MailChecker::clear();
 
@@ -2824,10 +3476,7 @@ Phil Porras.");
             "authors:1:email" => "estrin@usc.edu",
             "has_{$fid}" => 1, $fid => "not a number"
         ])->set_user($this->u_estrin);
-        $old_test_mode = Navigation::$test_mode;
-        Navigation::$test_mode = 2;
         $rc = RenderCapture::make($qreq);
-        Navigation::$test_mode = $old_test_mode;
         $html = Render_Batch::normalize($rc->content);
         MailChecker::clear();
 
@@ -2846,7 +3495,35 @@ Phil Porras.");
         xassert_str_contains($html, "Rejected-field attempted title");
     }
 
+    function test_render_capture_restores_main_user() {
+        // a capture renders as its request's user, then puts back whatever
+        // main user was there before, so later renders and lookups are not
+        // made as the first user rendered
+        $saved = Contact::$main_user;
+        $test_mode = Navigation::$test_mode;
+        try {
+            foreach ([null, $this->u_chair] as $main) {
+                Contact::$main_user = $main;
+                foreach ([$this->u_estrin, $this->u_chair] as $u) {
+                    $qreq = TestQreq::get_page("paper", ["p" => 1])->set_user($u);
+                    $rc = RenderCapture::make($qreq);
+                    xassert($rc->ok());
+                    xassert(Contact::$main_user === $main);
+                    xassert_eqq(Navigation::$test_mode, $test_mode);
+                }
+            }
+        } finally {
+            Contact::$main_user = $saved;
+        }
+    }
+
     function test_invariants_last() {
         ConfInvariants::test_all($this->conf);
+    }
+
+    function finalize() {
+        // restore the default hash method, which this class overrides to sha1
+        $this->conf->save_setting("opt.contentHashMethod", null);
+        $this->conf->refresh_settings();
     }
 }

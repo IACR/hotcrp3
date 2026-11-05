@@ -226,8 +226,15 @@
     },
     {
         "name": "conference_url", "storage": "opt.conferenceSite",
-        "title": "Conference URL",
+        "title": "Public conference URL",
         "type": "url", "required": false, "size": 70, "placeholder": "N/A",
+        "tags": "identity"
+    },
+    {
+        "name": "site_url", "storage": "opt.observedPaperSite",
+        "title": "Site URL",
+        "type": "url", "required": false, "size": 70,
+        "parser_class": "SiteURL_SettingParser",
         "tags": "identity"
     },
     {
@@ -248,12 +255,14 @@
         "name": "email_default_cc", "storage": "opt.emailCc",
         "title": "Default Cc for mail tool",
         "type": "emailheader", "size": 80, "placeholder": "(none)",
+        "parser_class": "SiteContact_SettingParser",
         "tags": "mail identity"
     },
     {
         "name": "email_default_reply_to", "storage": "opt.emailReplyTo",
         "title": "Default Reply-To for mail tool",
         "type": "emailheader", "size": 80, "placeholder": "(none)",
+        "parser_class": "SiteContact_SettingParser",
         "tags": "mail identity"
     },
     {
@@ -1161,14 +1170,14 @@
     {
         "name": "tag_readonly", "storage": "tag_chair",
         "title": "Read-only tags",
-        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "autogrow": true,
+        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "wrap": true, "spellcheck": false,
         "parser_class": "Tags_SettingParser", "initial_value": "accept pcpaper reject",
         "tags": "tags"
     },
     {
         "name": "tag_hidden",
         "title": "Hidden tags",
-        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "autogrow": true,
+        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "wrap": true, "spellcheck": false,
         "parser_class": "Tags_SettingParser",
         "tags": "tags visibility"
     },
@@ -1199,7 +1208,7 @@
         "name_pattern": "tag_style/$/tags",
         "title": "/Tag list",
         "type": "taglist", "subtype": "allow_wildcard_chair", "size": 40,
-        "autogrow": true, "spellcheck": false
+        "wrap": true, "spellcheck": false
     },
 
     {   "name": "tag_badge", "internal": true, "type": "string"   },
@@ -1226,13 +1235,13 @@
     {
         "name_pattern": "badge/$/tags",
         "title": "/Tag list",
-        "type": "taglist", "subtype": "allow_wildcard_chair", "size": 40, "autogrow": true
+        "type": "taglist", "subtype": "allow_wildcard_chair", "size": 40, "wrap": true, "spellcheck": false
     },
 
     {
         "name": "tag_rank",
         "title": "Ranking tags",
-        "type": "taglist", "parser_class": "Tags_SettingParser", "size": 50, "autogrow": true,
+        "type": "taglist", "parser_class": "Tags_SettingParser", "size": 50, "wrap": true, "spellcheck": false,
         "tags": "tags"
     },
     {
@@ -1244,7 +1253,7 @@
     {
         "name": "tag_admin_open", "storage": "tag_sitewide",
         "title": "Open-administration tags",
-        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "autogrow": true,
+        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "wrap": true, "spellcheck": false,
         "parser_class": "Tags_SettingParser",
         "tags": "tags visibility"
     },
@@ -1252,21 +1261,21 @@
     {
         "name": "tag_pc_open", "storage": "tag_conflict_free",
         "title": "Open tags",
-        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "autogrow": true,
+        "type": "taglist", "subtype": "allow_wildcard", "size": 50, "wrap": true, "spellcheck": false,
         "parser_class": "Tags_SettingParser",
         "tags": "tags visibility"
     },
     {
         "name": "tag_vote_allotment", "storage": "tag_vote",
         "title": "Allotment voting tags",
-        "type": "taglist", "subtype": "allotment", "size": 50, "autogrow": true,
+        "type": "taglist", "subtype": "allotment", "size": 50, "wrap": true, "spellcheck": false,
         "parser_class": "Tags_SettingParser",
         "tags": "tags"
     },
     {
         "name": "tag_vote_approval", "storage": "tag_approval",
         "title": "Approval voting tags",
-        "type": "taglist", "size": 50, "autogrow": true,
+        "type": "taglist", "size": 50, "wrap": true, "spellcheck": false,
         "parser_class": "Tags_SettingParser",
         "tags": "tags"
     },
@@ -1295,7 +1304,7 @@
     {
         "name_pattern": "automatic_tag/$/search", "storage": "member.q",
         "title": "/Search",
-        "type": "string", "subtype": "search", "size": 50, "placeholder": "Search", "autogrow": true, "spellcheck": false,
+        "type": "string", "subtype": "search", "size": 50, "placeholder": "Search", "wrap": true, "spellcheck": false,
         "parser_class": "AutomaticTag_SettingParser"
     },
     {   "name_pattern": "automatic_tag/$/query", "alias_pattern": "automatic_tag/$/search"   },

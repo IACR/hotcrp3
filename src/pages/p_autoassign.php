@@ -47,7 +47,7 @@ class Autoassign_Page {
                 continue;
             }
             $this->_pcids[] = $id;
-            if (!$pc->is_dormant()) {
+            if (!$pc->is_disabled()) {
                 $this->_enabled_pcids[] = $id;
             }
             if (($pc->roles & Contact::ROLE_PC) !== 0) {
@@ -106,17 +106,21 @@ class Autoassign_Page {
             }
             unset($qreq->has_pap, $qreq->assign);
         }
-        $search = new PaperSearch($this->user, ["t" => $qreq->t, "q" => $qreq->q]);
+        $search = new PaperSearch($this->user, [
+            "q" => $qreq->q,
+            "t" => $qreq->t,
+            "tsoft" => $this->user->privChair
+        ]);
         if (isset($qreq->asel)) {
-            $this->asel = SearchSelection::make($qreq, $this->user, "asel");
+            $this->asel = SearchSelection::make_papers($qreq, $this->user, "asel");
         } else if (isset($qreq->has_pap) && !isset($qreq->saveassignment)) {
-            $this->asel = SearchSelection::make($qreq, $this->user, "pap");
+            $this->asel = SearchSelection::make_papers($qreq, $this->user, "pap");
         } else {
             $this->asel = new SearchSelection($search->paper_ids());
         }
         $this->asel->reset_default($search);
         if (isset($qreq->has_pap) && isset($qreq->saveassignment)) {
-            $this->ssel = SearchSelection::make($qreq, $this->user, "pap");
+            $this->ssel = SearchSelection::make_papers($qreq, $this->user, "pap");
         } else {
             $this->ssel = $this->asel;
         }
@@ -131,7 +135,7 @@ class Autoassign_Page {
             }
         }
         if (!isset($qreq->pctyp)
-            || !in_array($qreq->pctyp, ["all", "enabled", "listed", "sel"], true)) {
+            || !in_array($qreq->pctyp, ["all", "enabled", "listed", "unlisted", "sel"], true)) {
             if ($this->has_disabled_pc_members()
                 && count($this->_enabled_pcids) > 2) {
                 $qreq->pctyp = "enabled";
@@ -194,8 +198,8 @@ class Autoassign_Page {
         foreach ($this->conf->all_review_fields() as $f) {
             if ($f instanceof Score_ReviewField) {
                 $kw = $f->search_keyword();
-                $opt["+{$kw}"] = $f->name_html . " " . $f->unparse_value($f->nvalues());
-                $opt["-{$kw}"] = $f->name_html . " " . $f->unparse_value(1);
+                $opt["+{$kw}"] = $f->name . " " . $f->unparse_value($f->nvalues());
+                $opt["-{$kw}"] = $f->name . " " . $f->unparse_value(1);
             }
         }
         $opt["random"] = "random completed reviews";
@@ -294,7 +298,7 @@ class Autoassign_Page {
             if (count($rev_rounds) > 1) {
                 echo '&nbsp;', Ht::select("all:round", $rev_rounds, $expected_round);
             } else {
-                echo $expected_round;
+                echo htmlspecialchars($expected_round);
             }
             echo "</div>";
         }
@@ -338,7 +342,7 @@ class Autoassign_Page {
                 }
             }
             if (!empty($selectable_tags)) {
-                $options = make_array("(PC member)", "PC tagged:", ...$selectable_tags);
+                $options = ["(PC member)", "PC tagged:", ...$selectable_tags];
                 array_push($options, "PC member:", "*");
             } else {
                 $options = ["(PC member)", "*"];
@@ -422,10 +426,8 @@ class Autoassign_Page {
             $this->print_pc_selection_link("unlisted", $this->_unlisted_pcids);
         }
         foreach ($this->conf->viewable_user_tags($this->user) as $pctag) {
-            $ltag = strtolower($pctag);
-            if ($ltag !== "pc"
-                && isset($this->_pcids_by_ltag[$ltag]))
-                $this->print_pc_selection_link("#{$pctag}", $this->_pcids_by_ltag[$ltag]);
+            if (($ids = $this->_pcids_by_ltag[strtolower($pctag)] ?? null))
+                $this->print_pc_selection_link("#{$pctag}", $ids);
         }
         $this->print_pc_selection_link("flip", ["flip"]);
         echo ")";
@@ -493,7 +495,7 @@ class Autoassign_Page {
             PaperSearch::limit_selector($conf, PaperSearch::viewable_manager_limits($this->user, $qreq->t), $qreq->t),
             " &nbsp; ", Ht::submit("requery", "List", ["id" => "requery"]);
         if (isset($qreq->requery) || isset($qreq->has_pap)) {
-            $search = (new PaperSearch($this->user, ["t" => $qreq->t, "q" => $qreq->q]))->set_urlbase("autoassign");
+            $search = (new PaperSearch($this->user, ["t" => $qreq->t, "q" => $qreq->q, "tsoft" => $this->user->privChair]))->set_urlbase("autoassign");
             $plist = new PaperList("reviewersSel", $search);
             $plist->set_selection($this->ssel)
                 ->set_table_decor(PaperList::DECOR_HEADER);
@@ -614,7 +616,8 @@ class Autoassign_Page {
             }
         }
 
-        $argv[] = $qreq->a;
+        // `--` ensures remaining arguments are not parsed as options
+        array_push($argv, "--", $qreq->a);
 
         $pfx = "{$qreq->a}:";
         $argmap = (object) [];

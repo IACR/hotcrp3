@@ -89,8 +89,6 @@ class ReviewInfo implements JsonSerializable {
     private $s11;
 
     // sometimes joined
-    /** @var ?bool */
-    public $nameAmbiguous;
     /** @var ?string */
     public $ratingSignature;
 
@@ -105,6 +103,8 @@ class ReviewInfo implements JsonSerializable {
     private $_history;
     /** @var ?Contact */
     private $_reviewer;
+    /** @var ?bool */
+    private $_name_ambiguous; // viewer-independent; use `name_ambiguous_for`
     /** @var ?ReviewDiffInfo */
     private $_diff;
 
@@ -462,8 +462,7 @@ class ReviewInfo implements JsonSerializable {
 
     /** @return bool */
     function is_ghost() {
-        $m = $this->conf->time_review_open() ? self::RF_LIVE : self::RFM_NONEMPTY;
-        return ($this->rflags & $m) === 0;
+        return ($this->rflags & $this->conf->ghost_review_flags()) === 0;
     }
 
     /** @return bool */
@@ -605,11 +604,12 @@ class ReviewInfo implements JsonSerializable {
     }
 
     /** @param int $rflags
+     * @param int $ghost_flags
      * @return string */
-    static function rflags_icon_class_suffix($rflags) {
+    static function rflags_icon_class_suffix($rflags, $ghost_flags) {
         if (($rflags & self::RF_SUBMITTED) !== 0) {
             return "";
-        } else if (($rflags & self::RF_LIVE) === 0) {
+        } else if (($rflags & $ghost_flags) === 0) {
             return " rtghost";
         } else if (($rflags & self::RF_APPROVED) !== 0) {
             return " rtsubrev";
@@ -624,7 +624,7 @@ class ReviewInfo implements JsonSerializable {
         if ($classes !== null) {
             $k = Ht::add_tokens($k, $classes);
         }
-        return $k . self::rflags_icon_class_suffix($this->rflags);
+        return $k . self::rflags_icon_class_suffix($this->rflags, $this->conf->ghost_review_flags());
     }
 
     /** @param ?string $classes
@@ -1132,7 +1132,9 @@ class ReviewInfo implements JsonSerializable {
 
     private function _commit_prop_delete_assignment(Contact $actor, $extra) {
         $action = $extra["action"] ?? ($this->reviewStatus >= ReviewInfo::RS_DRAFTED ? "deleted" : "unassigned");
-        $actor->log_activity_for($this->contactId, "Review {$this->reviewId} {$action}", $this->paperId);
+        if (!($extra["no_log"] ?? false)) {
+            $actor->log_activity_for($this->contactId, "Review {$this->reviewId} {$action}", $this->paperId);
+        }
         $this->conf->qe("delete from ReviewRating where paperId=? and reviewId=?",
             $this->paperId, $this->reviewId);
         // update global settings
@@ -1150,8 +1152,8 @@ class ReviewInfo implements JsonSerializable {
         // update rights
         if (!($extra["no_rights"] ?? false)) {
             Contact::update_rights();
-            $this->reviewer()->update_cdb_roles();
         }
+        $this->reviewer()->update_cdb_roles();
         // run autosearch
         if (!($extra["no_autosearch"] ?? false)) {
             $this->conf->update_automatic_tags($this->paperId, SearchTerm::ABOUT_REVIEWS);
@@ -1210,24 +1212,49 @@ class ReviewInfo implements JsonSerializable {
         return $this;
     }
 
-    /** @param list<ReviewInfo> $rrows */
-    static function check_ambiguous_names($rrows) {
-        // XXXX fuck... this exposes information about whether 2 people with
-        // the same name reviewed a paper, even if only one of their identities
-        // should be visible
-        foreach ($rrows as $i => $rrow) {
-            $rrow->nameAmbiguous = false;
-            $u1 = $rrow->reviewer();
-            for ($j = 0; $j !== $i; ++$j) {
-                $u2 = $rrows[$j]->_reviewer;
-                if ($u1->firstName === $u2->firstName
-                    && $u1->lastName === $u2->lastName
-                    && ($u1->firstName !== "" || $u1->lastName !== "")) {
-                    $rrow->nameAmbiguous = $rrows[$j]->nameAmbiguous = true;
-                    break;
+    /** @return bool */
+    function name_ambiguous_for(Contact $viewer) {
+        if (!$this->prow) {
+            return false;  // should not happen
+        }
+        if ($this->_name_ambiguous === null) {
+            $rrows = $this->prow->all_reviews();
+            $byname = [];
+            foreach ($rrows as $rrow) {
+                $rrow->_name_ambiguous = false;
+                if (!($u = $rrow->reviewer())
+                    || ($n = "{$u->firstName}\0{$u->lastName}") === "\0") {
+                    continue;
+                }
+                if (isset($byname[$n])) {
+                    $byname[$n]->_name_ambiguous = $rrow->_name_ambiguous = true;
+                } else {
+                    $byname[$n] = $rrow;
                 }
             }
+            // `$this` may predate the current review array
+            $this->_name_ambiguous = $rrows[$this->reviewId]->_name_ambiguous ?? false;
         }
+        if (!$this->_name_ambiguous) {
+            return false;
+        } else if ($viewer->is_admin($this->prow)) {
+            return true;
+        }
+        // only disambiguate against reviewers whose identities the viewer
+        // can see
+        $u1 = $this->reviewer();
+        foreach ($this->prow->all_reviews() as $rrow) {
+            if ($rrow->reviewId === $this->reviewId) {
+                continue;
+            }
+            $u2 = $rrow->reviewer();
+            if ($u1->firstName === $u2->firstName
+                && $u1->lastName === $u2->lastName
+                && $viewer->can_view_review_identity($this->prow, $rrow)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** @param ?TextPregexes $reg
@@ -1369,7 +1396,7 @@ class ReviewInfo implements JsonSerializable {
             } else if ($w === "bad" || $w === "-" || $w === "\xE2\x88\x92" /* MINUS */) {
                 $n |= ReviewInfo::RATING_BADMASK;
             } else if ($w !== "") {
-                $re = '/\A' . str_replace('\*', '.*', preg_quote(str_replace("_", "-", $w))) . '\z/';
+                $re = '{\A' . Text::wildcard_pregex(str_replace("_", "-", $w)) . '\z}';
                 $matches = preg_grep($re, self::$rating_match_strings);
                 if (empty($matches) && strpos($w, "*") === false) {
                     return null;

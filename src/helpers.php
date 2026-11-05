@@ -13,8 +13,7 @@ function stoi($s) {
         return null;
     }
     $iv = intval($s);
-    $fv = floatval($s);
-    return $iv == $fv ? $iv : null;
+    return (string) $iv === $s ? $iv : null;
 }
 
 /** @param null|int|float|string $s
@@ -26,8 +25,10 @@ function stonum($s) {
         return null;
     }
     $iv = intval($s);
-    $fv = floatval($s);
-    return $iv == $fv ? $iv : $fv;
+    if ((string) $iv === $s) {
+        return $iv;
+    }
+    return floatval($s);
 }
 
 /** @param null|int|float|string $value
@@ -203,7 +204,7 @@ class JsonResult implements JsonSerializable, ArrayAccess {
      * @return JsonResult */
     static function make_scope_error(Qrequest $qreq, $bits, $ftext = null) {
         $mi = new MessageItem(2, null, $ftext ?? "<0>Method not permitted by scope");
-        return (new JsonResult(401, ["ok" => false, "message_list" => [$mi]]))
+        return (new JsonResult(403, ["ok" => false, "message_list" => [$mi]]))
             ->set_header($qreq->conf()->www_authenticate_header("insufficient_scope", $qreq, $bits));
     }
 
@@ -372,7 +373,8 @@ class JsonResult implements JsonSerializable, ArrayAccess {
         if ($qreq && isset($qreq->pretty)) {
             $pprint = friendly_boolean($qreq->pretty) ?? $pprint;
         }
-        echo json_encode_browser($this->content, ($pprint ? JSON_PRETTY_PRINT : 0) | JSON_UNESCAPED_SLASHES), "\n";
+        // don’t need JSON_HEX_TAG
+        echo json_encode_db($this->content, $pprint ? JSON_PRETTY_PRINT : 0), "\n";
     }
 
     /** @return never

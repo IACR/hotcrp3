@@ -98,7 +98,7 @@
     "name": "assigntags", "post": true,
     "tags": ["Tags"],
     "parameters": "=tagassignment ?=search",
-    "response": "p ?ids ?groups ?search_params"
+    "response": "papers ?ids ?groups ?search_params"
   },
   {
     "name": "autoassign", "post": true,
@@ -154,7 +154,7 @@
   {
     "name": "search", "get": true,
     "tags": ["Search"],
-    "parameters": "q ?t ?qt ?sort ?scoresort ?reviewer ?report ?warn_missing ?hotlist ?f ?format ?session ?<qa ?<qo ?<qx",
+    "parameters": "q ?t ?qt ?sort ?scoresort ?reviewer ?report ?warn_missing ?hotlist ?f ?format ?session ?<qa ?<qo ?<qx ?default_tracker_visibility",
     "response": "ids groups search_params ?hotlist ?fields ?papers ?statistics"
   },
   {
@@ -493,7 +493,7 @@
   {
     "name": "reauth", "post": true,
     "tags": ["Session"],
-    "parameters": "?confirm ?=reason ?=email ?=password ?=totpcode"
+    "parameters": "?confirm ?=email ?=password ?=totpcode"
   },
   {
     "name": "stashmessages", "post": true,

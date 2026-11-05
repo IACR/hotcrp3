@@ -325,4 +325,58 @@ Universidade de Brasilia (UnB)");
         xassert_eqq(AuthorMatcher::fix_collaborators("Danfeng(Daphne)Yao (Virginia Tech, USA)"), "Danfeng(Daphne)Yao (Virginia Tech, USA)");
         xassert_eqq(AuthorMatcher::fix_collaborators("Danfeng(Daphne)Yao (Virginia Tech, USA)", 1), "Danfeng(Daphne)Yao (Virginia Tech, USA)");
     }
+
+    function test_split_line_quotes() {
+        xassert_eqq(AuthorMatcher::fix_collaborators("\"Smith, John\" , \"Doe, Jane\"; \"O\"\"Brien, Pat\",Bob Roberts (Harvard)"),
+            "Smith, John
+Doe, Jane
+O\"Brien, Pat
+Bob Roberts (Harvard)");
+        xassert_eqq(AuthorMatcher::fix_collaborators("\"Smith, John\"\"\", \"\"\"\", \"\", Alice Jones, Some University, Bob Roberts, Other College"),
+            "Smith, John\"
+\"\"
+\"
+Alice Jones (Some University)
+Bob Roberts (Other College)");
+        $q = str_repeat("q", 50);
+        xassert_eqq(AuthorMatcher::fix_collaborators("Al Bo (C),Di Eff (F),Gee Ho (I),\"{$q}\" ,Jo Ko (L)"),
+            "Al Bo (C)
+Di Eff (F)
+Gee Ho (I)
+All ({$q})
+Jo Ko (L)");
+        xassert_eqq(AuthorMatcher::fix_collaborators("Al Bo (C),Di Eff (F),Gee Ho (I),\"Jo Ko (L)"),
+            "Al Bo (C)
+Di Eff (F)
+Gee Ho (I)
+Jo Ko (L)");
+        xassert_eqq(AuthorMatcher::fix_collaborators("Al Bo (C) Di Eff (F) Gee Ho (I) - etc.   Jo Ko (L)", 1),
+            "Al Bo (C)
+Di Eff (F)
+Gee Ho (I) - etc. Jo Ko (L)");
+    }
+
+    function test_split_line_long_quoted() {
+        $q = str_repeat("q", 200000);
+        $s = AuthorMatcher::fix_collaborators("Al Bo (C),Di Eff (F),Gee Ho (I),\"{$q}\" ,Jo Ko (L)");
+        xassert_eqq($s, "Al Bo (C)\nDi Eff (F)\nGee Ho (I)\nAll ({$q})\nJo Ko (L)");
+        $qq = str_repeat("\"\"", 100000);
+        $s = AuthorMatcher::fix_collaborators("Al Bo (C),Di Eff (F),Gee Ho (I),\"{$qq}\" ,Jo Ko (L)");
+        xassert_eqq($s, "Al Bo (C)\nDi Eff (F)\nGee Ho (I)\n\"" . str_repeat("\"", 100000) . "\nJo Ko (L)");
+    }
+
+    function test_unmatched_close_parens() {
+        xassert_eqq(AuthorMatcher::fix_collaborators("John ) Smith"), "John Smith");
+        xassert_eqq(AuthorMatcher::fix_collaborators("John Smith () ) Jr )"), "John Smith Jr");
+    }
+
+    #[RequirePhp("8.5")]
+    function test_unmatched_close_parens_complexity() {
+        // removed parentheses must not leave a long run of spaces, which the
+        // separator regex matches quadratically
+        $t0 = microtime(true);
+        $s = AuthorMatcher::fix_collaborators("John Smith " . str_repeat(") ", 100000) . "x");
+        xassert_eqq($s, "John Smith x");
+        xassert_lt(microtime(true) - $t0, 1.0);
+    }
 }

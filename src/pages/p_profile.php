@@ -179,8 +179,8 @@ class Profile_Page {
 
     /** @return \Generator<MessageItem> */
     private function decorated_message_list(MessageSet $msx, ?UserStatus $us = null) {
-        $ms = (new MessageSet)->set_ignore_duplicates(MessageSet::IGNORE_DUPS_FIELD)
-            ->set_message_formatter($this->conf);
+        $ms = (new MessageSet)->set_message_formatter($this->conf);
+        $has_name_warning = false;
         foreach ($msx->message_list() as $mi) {
             if (($mi->field ?? "") !== ""
                 && (str_ends_with($mi->field, "/context")
@@ -191,10 +191,18 @@ class Profile_Page {
                 && $mi->field
                 && $mi->message !== ""
                 && ($l = $us->field_label($mi->field))
-                && $ms->message_index($mi) === false
                 && $mi->status !== MessageSet::INFORM) {
                 $mi = clone $mi;
-                $mi->message = "<5><a href=\"#{$mi->field}\">{$l}</a>: " . $mi->message_as(5);
+                if (($mi->field === "firstName" || $mi->field === "lastName")
+                    && $mi->message === UserStatus::NAME_MISSING_MESSAGE) {
+                    if ($has_name_warning) {
+                        continue;
+                    }
+                    $has_name_warning = true;
+                    $mi->message = "<5>Please enter <a href=\"#{$mi->field}\">your name</a>";
+                } else {
+                    $mi->message = "<5><a href=\"#{$mi->field}\">{$l}</a>: " . $mi->message_as(5);
+                }
             }
             $ms->append_item($mi);
         }
@@ -247,7 +255,7 @@ class Profile_Page {
                     } else if (strpos($line[$i], " ") !== false
                                && array_search("name", $hdr) === false) {
                         $hdr[] = "name";
-                    } else if (preg_match('/\A(?:pc|chair|sysadmin|admin)\z/i', $line[$i])
+                    } else if (preg_match('/\A(?:pc|unlistedpc|chair|sysadmin|admin)\z/i', $line[$i])
                                && array_search("roles", $hdr) === false) {
                         $hdr[] = "roles";
                     } else if (array_search("name", $hdr) !== false
@@ -519,8 +527,24 @@ class Profile_Page {
     }
 
     function print() {
-        // canonicalize topic
         $this->ustatus->set_user($this->user);
+
+        // maybe redirect to session topic
+        $session_topic = !$this->mode
+            && $this->user === $this->viewer
+            && !$this->viewer->is_actas_user()
+            && $this->viewer->has_email()
+            && $this->qreq->is_getlike();
+        if ($session_topic
+            && !isset($this->qreq->t)
+            && ($pg = $this->qreq->gsession("pg"))
+            && !str_starts_with($pg, "__")
+            && ($g = $this->ustatus->cs()->canonical_group($pg))) {
+            $this->qreq->t = $g;
+            $this->qreq->redirect_self();
+        }
+
+        // canonicalize topic
         $reqtopic = $this->qreq->t ? : "main";
         if (!$this->mode
             && $reqtopic !== "main"
@@ -533,8 +557,14 @@ class Profile_Page {
         if ($this->qreq->t
             && $this->qreq->t !== $this->topic
             && $this->qreq->is_getlike()) {
-            $this->qreq->t = $this->topic === "main" ? null : $this->topic;
+            $this->qreq->t = $this->topic;
             $this->qreq->redirect_self();
+        }
+        if ($session_topic) {
+            $want_pg = $this->topic === "main" ? null : $this->topic;
+            if ($this->qreq->gsession("pg") !== $want_pg) {
+                $this->qreq->set_gsession("pg", $want_pg);
+            }
         }
         $this->ustatus->set_profile_topic($this->topic);
 

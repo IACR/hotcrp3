@@ -63,23 +63,29 @@ class Search_API {
             } else {
                 return JsonResult::make_parameter_error("format");
             }
-            $pl->parse_view($qreq->f, PaperList::VIEWORIGIN_MAX);
+            $pl->parse_view($qreq->f, ViewCommand::ORIGIN_MAX);
         }
         $ih = $pl->ids_and_groups();
         $jr = JsonResult::make_ok();
-        if ($pl->has_message()) {
-            $jr->set("message_list", $pl->message_list());
-        }
         $jr->set("ids", $ih[0]);
         $jr->set("groups", $ih[1]);
         $jr->set("search_params", $pl->encoded_search_params());
         if (friendly_boolean($qreq->hotlist)) {
             $jr->set("hotlist", $pl->session_list_object()->info_string());
         }
+        if (friendly_boolean($qreq->default_tracker_visibility)
+            && $user->is_track_manager()) {
+            $permissionizer = new MeetingTracker_Permissionizer($pl->conf, $ih[0]);
+            $jr->set("default_tracker_visibility", $permissionizer->default_visibility());
+        }
         if ($format > 0) {
-            foreach ($pl->format_json($format, PaperList::VIEWORIGIN_MAX) as $k => $v) {
+            foreach ($pl->format_json($format, ViewCommand::ORIGIN_MAX) as $k => $v) {
                 $jr->set($k, $v);
             }
+        }
+        // column expansion (in `format_json`) can add messages
+        if ($pl->has_message()) {
+            $jr->set("message_list", $pl->message_list());
         }
         $user->set_overrides($old_overrides);
         return $jr;
@@ -103,8 +109,11 @@ class Search_API {
 
     static function apply_search(JsonResult $jr, Contact $user, Qrequest $qreq, $search) {
         $search = ltrim($search);
+        if (strlen($search) > 16384) {
+            return;
+        }
         if (str_starts_with($search, "{")) {
-            $param = json_decode($search, true);
+            $param = (new JsonParser($search))->set_assoc(true)->set_user()->decode();
         } else {
             $pos = str_starts_with($search, "?") ? 1 : 0;
             preg_match_all('/([^&;=\s]*)=([^&;=\s]*)/', $search, $m, PREG_SET_ORDER, $pos);
@@ -114,7 +123,10 @@ class Search_API {
             }
         }
         if (is_array($param) && isset($param["q"])) {
-            $nqreq = new Qrequest("GET", $param);
+            $nqreq = new Qrequest("GET");
+            foreach ($param as $k => $v) {
+                $nqreq->set_req($k, $v);
+            }
             $nqreq->set_user($user)->set_qsession($qreq->qsession());
             $njr = self::make_search_result($user, $nqreq);
             if ($njr->content["ok"]) {
@@ -137,7 +149,7 @@ class Search_API {
         if (!isset($qreq->p)) {
             $ssel = SearchSelection::make_default($qreq, $user);
         } else {
-            $ssel = SearchSelection::make($qreq, $user, "p");
+            $ssel = SearchSelection::make_papers($qreq, $user, "p");
         }
         $action = ListAction::lookup($qreq->action, $user, $qreq, $ssel, ListAction::F_API);
         if ($action instanceof ListAction) {
@@ -155,7 +167,7 @@ class Search_API {
             if (str_starts_with($rf->name, "__")) {
                 continue;
             }
-            $ufs = make_array($rf, ...$cs->members($rf->name));
+            $ufs = [$rf, ...$cs->members($rf->name)];
             foreach ($ufs as $uf) {
                 if (str_starts_with($uf->name, "__")
                     || (isset($uf->allow_if) && !$cs->allowed($uf->allow_if, $uf))

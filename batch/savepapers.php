@@ -28,15 +28,11 @@ class SavePapers_Batch {
     /** @var bool */
     public $any_content_file = false;
     /** @var bool */
-    public $ignore_content_file = false;
-    /** @var bool */
     public $reviews = false;
     /** @var bool */
     public $add_topics = false;
     /** @var bool */
-    public $skip_document_verify = false;
-    /** @var bool */
-    public $skip_document_content = false;
+    public $trust_document_metadata = false;
     /** @var bool */
     public $notify = false;
     /** @var bool */
@@ -87,11 +83,9 @@ class SavePapers_Batch {
         }
         $this->disable_users = isset($arg["disable-users"]);
         $this->any_content_file = isset($arg["any-content-file"]);
-        $this->ignore_content_file = isset($arg["ignore-content-file"]);
+        $this->trust_document_metadata = isset($arg["trust-document-metadata"]);
         $this->add_topics = isset($arg["add-topics"]);
         $this->reviews = isset($arg["r"]);
-        $this->skip_document_verify = isset($arg["skip-document-verify"]);
-        $this->skip_document_content = isset($arg["skip-document-content"]);
         $this->log = !isset($arg["no-log"]);
         $this->dry_run = isset($arg["dry-run"]);
         $this->notify = isset($arg["notify"]);
@@ -114,7 +108,7 @@ class SavePapers_Batch {
     /** @param string $file */
     function set_zipfile($file) {
         assert(!$this->docloc);
-        $this->docloc = new DocumentLocator;
+        $this->docloc = new DocumentLocator($this->conf);
         $this->_ziparchive_json = $this->docloc->set_zipfile($file);
     }
 
@@ -223,15 +217,13 @@ class SavePapers_Batch {
         $this->ps = $this->ps ?? (new PaperStatus($this->user))
             ->set_disable_users($this->disable_users)
             ->set_any_content_file($this->any_content_file)
-            ->set_ignore_content_file($this->ignore_content_file)
+            ->set_trust_document_metadata($this->trust_document_metadata)
             ->set_notify($this->notify)
-            ->set_skip_document_verify($this->skip_document_verify)
-            ->set_skip_document_content($this->skip_document_content)
             ->on_document_import([$this, "on_document_import"]);
 
         if ($this->ps->prepare_save_paper_json($j)) {
             if ($this->dry_run) {
-                $this->ps->abort_save();
+                $this->ps->abort_save(true);
                 $action = $this->ps->has_change() ? "changed" : "unchanged";
                 $pid = true;
             } else {
@@ -243,7 +235,7 @@ class SavePapers_Batch {
             $action = "failed";
             $pid = false;
         }
-        if (!is_bool($pid) && $pidish === "new") {
+        if (!is_bool($pid) && !is_int($pidish)) {
             if (!$this->quiet) {
                 fwrite(STDERR, "-> #{$pid}: ");
             }
@@ -364,14 +356,8 @@ class SavePapers_Batch {
 
     /** @return 0|1|2 */
     function run($content) {
-        $j = $jparser = null;
-        if (!$this->json5) {
-            $j = json_decode($content);
-        }
-        if ($j === null) {
-            $jparser = (new JsonParser)->set_flags($this->json5 ? JsonParser::JSON5 : 0);
-            $j = $jparser->set_input($content)->decode();
-        }
+        $jparser = (new JsonParser($content))->set_flags($this->json5 ? JsonParser::JSON5 : 0);
+        $j = $jparser->decode();
         if ($j === null) {
             fwrite(STDERR, "{$this->errprefix}invalid JSON: " . $jparser->last_error_msg() . "\n");
             ++$this->nerrors;
@@ -380,7 +366,7 @@ class SavePapers_Batch {
             ++$this->nerrors;
         } else {
             $jl = is_object($j) ? [$j] : $j;
-            $j = $content = null; // release references
+            $j = $content = $jparser = null; // release references
             $this->_run_main($jl); // consumes `$jl`
         }
         if ($this->nerrors) {
@@ -404,12 +390,10 @@ class SavePapers_Batch {
             "disable-users,disable Disable newly created users",
             "notify,N Notify new users via email (off by default)",
             "any-content-file Allow any `content_file` in documents",
-            "ignore-content-file Ignore `content_file` in documents",
+            "trust-document-metadata Trust document hashes and CRCs and assume document content is already available",
             "ignore-pid Ignore `pid` JSON elements",
             "match-title Match papers by title if no `pid`",
             "add-topics Add all referenced topics to conference",
-            "skip-document-verify Do not verify document hashes",
-            "skip-document-content Avoid storing document content",
             "json5,5 Allow JSON5 extensions",
             "q,quiet Don’t print progress information",
             "silent Don’t print progress information or submission errors",

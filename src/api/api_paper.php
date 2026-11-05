@@ -113,7 +113,10 @@ class Paper_API extends MessageSet {
     /** @param array<string,mixed> $args
      * @return array{PaperSearch,PaperInfoSet} */
     static function make_search(Contact $user, Qrequest $qreq, $args = []) {
-        $qreq->t = $qreq->t ?? "viewable";
+        if (!isset($qreq->t)) {
+            $qreq->t = "viewable";
+            $qreq->tsoft = $qreq->tsoft ?? "1";
+        }
         $srch = new PaperSearch($user, $qreq);
         if (friendly_boolean($qreq->warn_missing)) {
             $srch->set_warn_missing(true);
@@ -167,7 +170,10 @@ class Paper_API extends MessageSet {
 
         // set parameters
         $this->set_post_param($qreq);
-        $this->docloc = new DocumentLocator;
+        if (!isset($qreq->word_limit)) {
+            $this->pex->set_ignore_soft_word_limits(true);
+        }
+        $this->docloc = new DocumentLocator($this->conf);
 
         // check Content-Type
         if (Mimetype::is_form($qreq->body_content_type() ?? Mimetype::FORM_DATA_TYPE)
@@ -210,6 +216,9 @@ class Paper_API extends MessageSet {
                 $this->disable_users = true;
             }
             if (friendly_boolean($qreq->add_topics)) {
+                if (!$this->user->scope_allows(TokenScope::S_SETTINGS_ADMIN)) {
+                    JsonResult::make_scope_error($qreq, TokenScope::S_SETTINGS_ADMIN, "<0>The `add_topics` parameter requires scope `settings:admin`")->complete();
+                }
                 $this->conf->topic_set()->set_auto_add(true);
                 $this->conf->options()->refresh_topics();
             }
@@ -218,7 +227,7 @@ class Paper_API extends MessageSet {
         // honored is decided per paper (execute_save())
         $this->notify = friendly_boolean($qreq->notify) !== false;
         $this->notify_authors = friendly_boolean($qreq->notify_authors) !== false;
-        $this->notify_reason = $qreq->reason ?? "";
+        $this->notify_reason = convert_to_utf8($qreq->reason ?? "");
         // parse single-paper precondition
         if (isset($qreq->if_unmodified_since)) {
             $t = self::parse_if_unmodified_since($qreq->if_unmodified_since, $this->conf);
@@ -397,7 +406,7 @@ class Paper_API extends MessageSet {
         if ($ok && !$this->dry_run_here) {
             $ok = $ps->execute_save();
         } else {
-            $ps->abort_save();
+            $ps->abort_save($this->dry_run_here);
         }
         foreach ($ps->message_list() as $mi) {
             if ($mi->field

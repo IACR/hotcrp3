@@ -63,9 +63,9 @@ class Home_Page {
             $qreq->unset_csession("freshlogin");
         } else if ($qreq->csession("freshlogin") === true) {
             $qreq->set_csession("freshlogin", "redirect");
-            $qreq->redirect_hoturl("profile", ["redirect" => 1]);
+            $qreq->redirect_hoturl("profile", ["t" => "main", "redirect" => 1]);
         } else {
-            $user->conf->feedback_msg([MessageItem::warning("<5>Please " . $user->conf->hotlink("complete your profile", "profile"))]);
+            $user->conf->feedback_msg([MessageItem::warning("<5>Please " . $user->conf->hotlink("complete your profile", "profile", ["t" => "main"]))]);
         }
     }
 
@@ -161,7 +161,7 @@ class Home_Page {
     }
     static function print_info_site(Contact $user) {
         if (($site = $user->conf->opt("conferenceSite"))
-            && $site !== $user->conf->opt("paperSite")) {
+            && $site !== $user->conf->baseurl()) {
             echo '<li>', Ht::link("Conference site", $site), '</li>';
         }
     }
@@ -192,7 +192,7 @@ class Home_Page {
         }
         echo '<div class="homegrp"><p>Welcome to the ', htmlspecialchars($this->conf->full_name()), " submissions site.";
         if (($site = $this->conf->opt("conferenceSite"))
-            && $site !== $this->conf->opt("paperSite"))
+            && $site !== $this->conf->baseurl())
             echo " For general information, see ", Ht::link(htmlspecialchars($site), $site), ".";
         echo '</p></div>';
     }
@@ -268,54 +268,48 @@ class Home_Page {
         // which review fields to show?
 
         // Information about my reviews
-        $where = [];
-        if ($user->contactId) {
-            $where[] = "PaperReview.contactId=" . $user->contactId;
-        }
-        if (($tokens = $user->review_tokens())) {
-            $where[] = "reviewToken in (" . join(",", $tokens) . ")";
-        }
-        if (!empty($where)) {
-            $rfs = $this->default_review_fields();
-            $q = "select reviewType, reviewSubmitted, reviewNeedsSubmit, timeApprovalRequested, reviewRound";
+        $replist = null;
+        if ($user->has_review()) {
+            $replist = new PaperList("reviewerHome", new PaperSearch($user, ["q" => "re:me"]));
+            $replist->set_table_id_class(null, "pltable-reviewerhome");
+            $rfs = $replist->qopts["scores"] = $this->default_review_fields();
+            $replist->prepare_table_view();
             $missing_rounds = $scores = [];
             foreach ($rfs as $rf) {
-                $q .= ", " . $rf->main_storage;
                 $scores[] = [];
             }
-            $q = "{$q} from PaperReview join Paper using (paperId) where (" . join(" or ", $where) . ") and (reviewSubmitted>0 or timeSubmitted>0)";
-            if (!empty($user->hidden_papers)) {
-                $q .= "and paperId not in (" . join(",", array_keys($user->hidden_papers)) . ")";
-            }
-            $result = $user->conf->qe($q);
-            while (($row = $result->fetch_row())) {
-                if ($row[1] || $row[3] < 0) {
-                    $this->_r_num_submitted += 1;
-                    $this->_r_num_needs_submit += 1;
-                    for ($i = 0; $i !== count($rfs); ++$i) {
-                        if ($row[5 + $i] !== null)
-                            $scores[$i][] = (int) $row[5 + $i];
+            foreach ($replist->unordered_rowset() as $prow) {
+                foreach ($prow->reviews_by_user($user, $user->review_tokens()) as $rrow) {
+                    if ($rrow->is_ghost()) {
+                        continue;
+                    } else if ($rrow->reviewSubmitted
+                               || $rrow->timeApprovalRequested < 0) {
+                        $this->_r_num_submitted += 1;
+                        $this->_r_num_needs_submit += 1;
+                        foreach ($rfs as $i => $rf) {
+                            if (($fv = $rrow->fval($rf)) !== null)
+                                $scores[$i][] = $fv;
+                        }
+                    } else if ($rrow->reviewNeedsSubmit
+                               && $prow->timeSubmitted > 0) {
+                        $this->_r_num_needs_submit += 1;
+                        $missing_rounds[(int) $rrow->reviewRound] = true;
                     }
-                } else if ($row[2]) {
-                    $this->_r_num_needs_submit += 1;
-                    $missing_rounds[(int) $row[4]] = true;
                 }
             }
-            Dbl::free($result);
             $this->_r_unsubmitted_rounds = array_keys($missing_rounds);
             $this->_rf_means = [];
             foreach ($scores as $sarr) {
                 $this->_rf_means[] = ScoreInfo::mean_of($sarr, true);
             }
         }
-        $has_rinfo = $this->_r_num_needs_submit > 0;
 
         // Information about PC reviews
         $npc = $sumpc_submit = $npc_submit = 0;
         $pc_rf_means = [];
         if ($user->isPC || $user->privChair) {
             $rfs = $this->default_review_fields();
-            $q = "select count(reviewId) num_submitted";
+            $q = "select ContactInfo.contactId, count(reviewId) num_submitted";
             $scores = [];
             foreach ($rfs as $rf) {
                 $q .= ", group_concat(coalesce({$rf->main_storage},'')) {$rf->short_id}Scores";
@@ -325,12 +319,19 @@ class Home_Page {
                 where roles!=0 and (roles&" . Contact::ROLE_PC . ")!=0 group by ContactInfo.contactId");
             while (($row = $result->fetch_row())) {
                 ++$npc;
-                if ($row[0]) {
-                    $npc_submit += 1;
-                    $sumpc_submit += (int) $row[0];
-                    for ($i = 0; $i !== count($rfs); ++$i) {
-                        $scores[$i][] = ScoreInfo::mean_of($row[1 + $i], true);
-                    }
+                if (($ns = (int) $row[1]) === 0) {
+                    continue;
+                }
+                $npc_submit += 1;
+                $sumpc_submit += $ns;
+                if ((int) $row[0] === $user->contactId
+                    && $ns > $this->_r_num_submitted) {
+                    // include submitted reviews on withdrawn papers
+                    $this->_r_num_needs_submit += $ns - $this->_r_num_submitted;
+                    $this->_r_num_submitted = $ns;
+                }
+                for ($i = 0; $i !== count($rfs); ++$i) {
+                    $scores[$i][] = ScoreInfo::mean_of($row[$i + 2], true);
                 }
             }
             Dbl::free($result);
@@ -338,6 +339,8 @@ class Home_Page {
                 $pc_rf_means[] = ScoreInfo::mean_of($sarr, true);
             }
         }
+
+        $has_rinfo = $this->_r_num_needs_submit > 0;
 
         echo '<div class="homegrp" id="homerev">';
 
@@ -350,7 +353,7 @@ class Home_Page {
                     $score_texts[] = $conf->_("average {0} score {1}", $rf->name_html, $rf->unparse_computed($this->_rf_means[$i]), $this->_r_num_submitted);
                 }
             }
-            echo $conf->_("You have submitted {n} of <a href=\"{url}\">{na} reviews</a> with {scores:list}.",
+            echo $conf->_5("<5>You have submitted {n} of <a href=\"{url}\">{na} reviews</a> with {scores:list}.",
                 new FmtArg("n", $this->_r_num_submitted), new FmtArg("na", $this->_r_num_needs_submit),
                 new FmtArg("url", $conf->hoturl("search", ["q" => "", "t" => "r"]), 0),
                 new FmtArg("scores", $score_texts)),
@@ -363,7 +366,7 @@ class Home_Page {
                     $score_texts[] = $conf->_("average {0} score {1}", $rf->name_html, $rf->unparse_computed($pc_rf_means[$i]), null);
                 }
             }
-            echo $conf->_("The average PC member has submitted {n:.1f} reviews with {scores:list}.",
+            echo $conf->_5("<5>The average PC member has submitted {n:.1f} reviews with {scores:list}.",
                 new FmtArg("n", $sumpc_submit / $npc), new FmtArg("scores", $score_texts));
             if ($user->isPC || $user->privChair) {
                 echo "&nbsp; <small class=\"nw\">(", $conf->hotlink("details", "users", ["t" => "pc"]), "<span class=\"barsep\">·</span>", $conf->hotlink("graphs", "graph", ["group" => "procrastination"]), ")</small>";
@@ -460,15 +463,11 @@ class Home_Page {
             }
         }
 
-        if ($user->has_review()) {
-            $plist = new PaperList("reviewerHome", new PaperSearch($user, ["q" => "re:me"]));
-            $plist->set_table_id_class(null, "pltable-reviewerhome");
-            if (!$plist->is_empty()) {
-                echo '<div class="fx"><hr class="g">';
-                $plist->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_LIST);
-                $plist->print_table_html();
-                echo '</div>';
-            }
+        if ($replist && !$replist->is_empty()) {
+            echo '<div class="fx"><hr class="g">';
+            $replist->set_table_decor(PaperList::DECOR_HEADER | PaperList::DECOR_LIST);
+            $replist->print_table_html();
+            echo '</div>';
         }
 
         if ($has_rinfo) {
@@ -596,8 +595,8 @@ class Home_Page {
             $d = $conf->unparse_time_with_local_span($dl);
             if (!$sr->time_edit_final(true)) {
                 $deadlines[] = "The <a href=\"{$dlurl}\">deadline</a> for submitting {$sr->prefix}final versions has passed.";
-            } else if ($d <= Conf::$now) {
-                if ($d === $sr->final_done) {
+            } else if ($dl <= Conf::$now) {
+                if ($dl === $sr->final_done) {
                     $dx = " They were required by {$d}.";
                 } else if ($sr->final_done > 0) {
                     $dx = " They were requested by {$d} and are required by " . $conf->unparse_time_with_local_span($sr->final_done) . ".";
@@ -620,10 +619,12 @@ class Home_Page {
         if (($srf & 2) !== 0
             && $sr->time_edit(true, true)) {
             if ($sr->time_edit(false, true)) {
-                $d = $conf->unparse_time_with_local_span($sr->submit);
-                $deadlines[] = "You have until {$d} to update {$sr->prefix}{$conf->snouns[1]}.";
+                if ($sr->submit > 0) {
+                    $d = $conf->unparse_time_with_local_span($sr->submit);
+                    $deadlines[] = "You have until {$d} to update {$sr->prefix}{$conf->snouns[1]}.";
+                }
                 $srf = 2;
-            } else {
+            } else if ($sr->resubmit > 0) {
                 $d = $conf->unparse_time_with_local_span($sr->resubmit);
                 $deadlines[] = "You have until {$d} to revise {$sr->prefix}{$conf->snouns[1]}.";
             }
@@ -635,14 +636,16 @@ class Home_Page {
         }
         if (($srf & 1) !== 0
             && $sr->time_edit(false, true)) {
-            $d = $conf->unparse_time_with_local_span($sr->submit);
-            $deadlines[] = "You have until {$d} to complete {$sr->prefix}draft {$conf->snouns[1]}.";
+            if ($sr->submit > 0) {
+                $d = $conf->unparse_time_with_local_span($sr->submit);
+                $deadlines[] = "You have until {$d} to complete {$sr->prefix}draft {$conf->snouns[1]}.";
+            }
         } else if (($srf & 1) !== 0) {
-            if ($sr->time_submit(true)) {
+            if (!$sr->time_submit(true)) {
+                $deadlines[] = "The <a href=\"{$dlurl}\">deadline</a> to complete {$sr->prefix}draft {$conf->snouns[1]} has passed.";
+            } else if ($sr->submit > 0) {
                 $d = $conf->unparse_time_with_local_span($sr->submit);
                 $deadlines[] = "You have until {$d} to mark {$sr->prefix}{$conf->snouns[1]} as ready for review.";
-            } else {
-                $deadlines[] = "The <a href=\"{$dlurl}\">deadline</a> to complete {$sr->prefix}draft {$conf->snouns[1]} has passed.";
             }
         }
     }

@@ -178,24 +178,25 @@ class Review_API extends MessageSet {
 
         if (isset($qreq->r)) {
             $rloc = $prow->parse_ordinal_id($qreq->r);
-            if ($rloc === false || $rloc === 0) {
-                return JsonResult::make_parameter_error("r");
-            } else if ($rloc < 0) {
+            if ($rloc < 0) {
                 $rrow = $prow->review_by_ordinal(-$rloc);
-            } else {
+            } else if ($rloc > 0) {
                 $rrow = $prow->review_by_id($rloc);
+            } else {
+                $rrow = null;
             }
         } else {
             $rrow = $prow->review_by_user($user)
                 ?? ReviewInfo::make_blank($prow, $user);
         }
-        if (!$rrow || $rrow->reviewId) {
+        if (!$rrow) {
+            $fr = $user->no_review_whynot($prow, $qreq->r);
+        } else if ($rrow->reviewId) {
             $fr = $user->perm_view_review($prow, $rrow);
         } else {
-            $fr = $user->perm_create_review($prow, $user);
+            $fr = $user->perm_view_blank_review_form($prow);
         }
-        if ($fr || !$rrow) {
-            $fr = $fr ?? $prow->failure_reason(["reviewNonexistent" => true]);
+        if ($fr) {
             return new JsonResult($fr->response_code(), [
                 "ok" => false, "message_list" => $fr->message_list(null, 2)
             ]);
@@ -268,7 +269,7 @@ class Review_API extends MessageSet {
             if ($fmt === "form"
                 && $got === count($rrows)
                 && $u
-                && $user->can_create_review($xprow, $u)) {
+                && $user->can_view_blank_review_form($xprow)) {
                 $rrows[] = ReviewInfo::make_blank($xprow, $u);
             }
         }
@@ -422,7 +423,7 @@ class Review_API extends MessageSet {
         // format; otherwise the request body's content type does. An explicit
         // `json` parameter (like `upload`) is an inline JSON payload obeyed
         // regardless of the body, so it skips the text/form body paths.
-        $docloc = new DocumentLocator;
+        $docloc = new DocumentLocator($this->conf);
         $updoc = $docloc->uploaded_document($qreq);
         $bct = $updoc ? $updoc->mimetype : ($qreq->body_content_type() ?? Mimetype::FORM_DATA_TYPE);
 
@@ -501,6 +502,7 @@ class Review_API extends MessageSet {
         $ius_conflict = $this->if_unmodified_since !== null
             && $this->if_unmodified_since < $rrow->reviewModified;
         $conflict = $vtag_conflict || $ius_conflict;
+        $ordid = $rrow->unparse_ordinal_id(); // deletion clears `reviewId`
         if ($conflict) {
             $this->error_at($vtag_conflict ? "if_vtag_match" : "if_unmodified_since",
                 $this->conf->_("<5><strong>Edit conflict</strong>: The review was edited concurrently"));
@@ -512,7 +514,7 @@ class Review_API extends MessageSet {
         }
 
         $this->status_list[] = new Review_API_Status($this->message_count(), $this->dry_run_here,
-            $valid, ["delete"], $conflict, $prow->paperId, $rrow->unparse_ordinal_id());
+            $valid, ["delete"], $conflict, $prow->paperId, $ordid);
         $this->reviews[] = null;
         return $this->post_result();
     }
@@ -602,13 +604,24 @@ class Review_API extends MessageSet {
         $this->prow = $prow;
         $rv = $this->make_rv(false)->set_text(convert_to_utf8($content), $filename);
         $override = friendly_boolean($qreq->override) ?? false;
+        // an upload for a specific review (`r`) saves into that review; the
+        // form itself names only a reviewer
+        $rrow = null;
+        if ($prow !== null) {
+            [$ok, $rrow] = $this->post_target($this->qreq_r);
+            if (!$ok) {
+                $this->single = true;
+                $this->execute_fail();
+                return $this->post_result();
+            }
+        }
         $nmatch = $nother = 0;
         while ($rv->set_req_override($override)->parse_text()) {
             if ($prow === null || $rv->req_pid() === $prow->paperId) {
                 ++$nmatch;
                 $this->reset_item();
                 $this->apply_precondition($rv, null);
-                $this->execute_save($rv, null);
+                $this->execute_save($rv, $rrow);
             } else {
                 // ignore reviews for other submissions, dropping their messages
                 ++$nother;
@@ -769,27 +782,24 @@ class Review_API extends MessageSet {
             return [true, null];
         }
         if (!$this->prow) {
-            // a specific review can only be addressed with a URL paper
+            // a specific review can only be addressed when the paper is too
             $this->error_at("r", "<0>{Submission} required");
             return [false, null];
         }
         $rloc = $this->prow->parse_ordinal_id($r);
-        if ($rloc === false || $rloc === 0) {
-            $this->status = 404;
-            $this->error_at("r", "<0>Review not found");
-            return [false, null];
+        if ($rloc < 0) {
+            $rrow = $this->prow->review_by_ordinal(-$rloc);
+        } else if ($rloc > 0) {
+            $rrow = $this->prow->review_by_id($rloc);
+        } else {
+            $rrow = null;
         }
-        $rrow = $rloc < 0
-            ? $this->prow->review_by_ordinal(-$rloc)
-            : $this->prow->review_by_id($rloc);
-        if (!$rrow) {
-            $this->status = 404;
-            $this->error_at("r", "<0>Review not found");
-            return [false, null];
+        if ($rrow) {
+            $fr = $this->user->perm_view_review($this->prow, $rrow);
+        } else {
+            $fr = $this->user->no_review_whynot($this->prow, $r);
         }
-        // an unviewable review the caller may not know exists reads as
-        // `reviewNonexistent` (404), so this never leaks its existence
-        if (($fr = $this->user->perm_view_review($this->prow, $rrow))) {
+        if ($fr) {
             $this->status = $fr->response_code();
             $fr->append_to($this, "r", MessageSet::ERROR);
             return [false, null];
@@ -839,6 +849,10 @@ class Review_API extends MessageSet {
 
         $prow = $this->prow ?? $rv->saved_prow();
         $rid = null;
+        if (!$prepared && $rv->was_blank()) {
+            $this->warning_at(null, $this->conf->_("<5>Ignored blank reviews for {:list}", ["#{$prow->paperId}"]));
+            $this->inform_at(null, "<0>Fill out the form and upload it again.");
+        }
         if ($this->ivalid && !$this->dry_run_here && $rv->reviewId && $prow) {
             $rid = $rv->review_ordinal_id;
             $rrow2 = $prow->fresh_review_by_id($rv->reviewId);
@@ -878,6 +892,11 @@ class Review_API extends MessageSet {
         // generate result
         $ok = empty($this->status_list)
             || array_find($this->status_list, function ($x) { return !!$x->valid; });
+        // every failure must explain itself: the response drops an empty
+        // `message_list`, so a silent failure would arrive as `{ok: false}` alone
+        if (!$ok && !$this->has_message()) {
+            $this->error_at(null, "<0>Internal error");
+        }
         // 400 status only when nothing was valid
         $status = $this->single ? $this->status : 200;
         if ($this->single && $status === 200 && !$ok && $this->has_error()) {

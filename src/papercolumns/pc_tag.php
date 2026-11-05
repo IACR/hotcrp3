@@ -55,7 +55,8 @@ class Tag_PaperColumn extends PaperColumn {
             return false;
         }
         $tagger = new Tagger($pl->user);
-        if (!($this->etag = $tagger->check($this->dtag, Tagger::NOVALUE | Tagger::ALLOWCONTACTID))) {
+        if (!($this->etag = $tagger->check_syntax($this->dtag, Tagger::NOVALUE | Tagger::ALLOWCONTACTID))
+            || !$pl->user->can_view_tag_somewhere($this->etag)) {
             return false;
         }
         $this->ctag = " {$this->etag}#";
@@ -110,7 +111,7 @@ class Tag_PaperColumn extends PaperColumn {
                     $ml[] = MessageItem::inform("<0>This tag is set automatically");
                 }
             }
-            $pl->column_error_at($this->name, $ml);
+            $pl->column_error_at($this->name, $ml, $this->sword);
             return;
         }
         $xti = null;
@@ -275,12 +276,18 @@ class Tag_PaperColumn extends PaperColumn {
     }
 
     static function expand($name, XtParams $xtp, $xfj, $m) {
-        $tsm = new TagSearchMatcher($xtp->user);
-        $tsm->set_avoid_regex(true);
-        $tsm->add_check_tag($m[2], true);
+        $xtp->mark_priority_barrier($xfj);
+        $tsm = (new TagSearchMatcher($xtp->user))
+            ->set_avoid_regex(true)
+            ->set_allow_star(true);
+        $tsm->add_check_tag($m[2]);
         $dt = $xtp->conf->tags();
         $rs = [];
         foreach ($tsm->expand() as $t) {
+            if (!$xtp->user->can_view_tag_somewhere($t)) {
+                $tsm->error("<0>You don’t have permission to view tag ‘{$t}’");
+                continue;
+            }
             $fj = (array) $xfj;
             $fj["name"] = $m[1] . $t;
             $fj["tag"] = $t;
@@ -289,6 +296,9 @@ class Tag_PaperColumn extends PaperColumn {
             $fj["sort"] = $fj["sort"] ?? true;
             $fj["function"] = $fj["function"] ?? "+Tag_PaperColumn";
             $rs[] = (object) $fj;
+        }
+        if (empty($rs) && !$tsm->has_error()) {
+            $tsm->error("<0>No tag matches ‘{$m[2]}’");
         }
         foreach ($tsm->error_ftexts() as $e) {
             PaperColumn::column_error_at($xtp, $name, $e);

@@ -3,8 +3,9 @@
 // Copyright (c) 2022-2026 Eddie Kohler; see LICENSE.
 
 namespace HotCRP;
-use Conf, Contact, MessageItem, Navigation, NavigationState, Qrequest, Redirection;
-use LoginHelper, TokenInfo, UserSecurityEvent, UserStatus;
+use Conf, Contact, MessageItem, Navigation, NavigationState, Qrequest;
+use Redirection, LoginHelper, TokenInfo, UpdateSession, UserSecurityEvent, UserStatus;
+use Session_API;
 
 class OAuth_Page {
     /** @var Conf */
@@ -15,6 +16,8 @@ class OAuth_Page {
     public $qreq;
     /** @var ?string */
     public $site_uri;
+    /** @var ?string */
+    public $smsg;
     /** @var ?string */
     public $email;
     /** @var ?string */
@@ -27,6 +30,8 @@ class OAuth_Page {
     /** Testing hook: if set, called instead of an actual token request.
      * @var ?callable(OAuthProvider,array<string,string>):(array{int,string}) */
     static public $fetch_function;
+
+    const SIGNIN_LIFETIME = 900;
 
     function __construct(Contact $viewer, Qrequest $qreq) {
         $this->conf = $viewer->conf;
@@ -49,11 +54,17 @@ class OAuth_Page {
         $reauth = friendly_boolean($this->qreq->reauth)
             && $this->viewer->has_email();
 
+        $random_bytes = random_bytes(12 + 6 + ($authi->pkce ? 32 : 0));
+        $nonce_bytes = substr($random_bytes, 0, 12);
+        $smsg = base48_encode(substr($random_bytes, 12, 6));
+        $pkce_bytes = substr($random_bytes, 12 + 6);
+
         $tokdata = [
             "authtype" => $authi->name,
             "session" => $this->qreq->qsid(),
-            "site_uri" => $this->conf->opt("paperSite"),
-            "nonce" => base48_encode(random_bytes(12))
+            "site_uri" => $this->conf->baseurl(),
+            "nonce" => base48_encode($nonce_bytes),
+            "smsg" => $smsg
         ];
         if ($reauth) {
             $tokdata["reauth"] = $this->viewer->email;
@@ -63,6 +74,9 @@ class OAuth_Page {
             // at most.
             $ma = ctype_digit($this->qreq->max_age ?? "") ? intval($this->qreq->max_age) : 0;
             $tokdata["max_age"] = min($ma, 3600);
+        } else if (ctype_digit($this->qreq->max_age ?? "")) {
+            // a sign-in that must be fresh (e.g. for `prompt=login`)
+            $tokdata["max_age"] = min(intval($this->qreq->max_age), 3600);
         }
         if (friendly_boolean($this->qreq->quiet)) {
             $tokdata["quiet"] = true;
@@ -75,20 +89,26 @@ class OAuth_Page {
         }
         if ($authi->pkce) {
             // the verifier stays here; only its hash goes to the provider
-            $tokdata["code_verifier"] = base64url_encode(random_bytes(32));
+            $tokdata["code_verifier"] = base64url_encode($pkce_bytes);
         }
 
         $tok = new TokenInfo($this->conf, TokenInfo::OAUTHSIGNIN);
         $tok->set_contactdb(!!$this->conf->contactdb())
-            ->set_expires_in(600)
+            ->set_expires_in(self::SIGNIN_LIFETIME)
             ->set_token_pattern("hcoa[20]")
             ->assign_data($tokdata)
             ->insert();
         if (!$tok->stored()) {
             return MessageItem::error("<0>Authentication attempt failed");
         }
+        // nonce cookie will be consumed by the OAuth-handling instance
         $this->qreq->set_cookie_opt("hotcrp-oauth-nonce-" . $tokdata["nonce"], "1", [
-            "expires" => Conf::$now + 600, "httponly" => true
+            "expires" => Conf::$now + self::SIGNIN_LIFETIME, "httponly" => true,
+            "path" => self::redirect_uri_path($authi)
+        ]);
+        // smsg cookie will be consumed by our instance
+        $this->qreq->set_cookie_opt("hotcrp-smsg-" . $smsg, "1", [
+            "expires" => Conf::$now + self::SIGNIN_LIFETIME + 60, "httponly" => true
         ]);
         $params = "client_id=" . urlencode($authi->client_id)
             . "&response_type=code"
@@ -110,11 +130,27 @@ class OAuth_Page {
             if (isset($this->qreq->email) && validate_email($this->qreq->email)) {
                 $params .= "&login_hint=" . rawurlencode($this->qreq->email);
             }
-            if (ctype_digit($this->qreq->max_age ?? "")) {
-                $params .= "&max_age=" . $this->qreq->max_age;
+            if (isset($tokdata["max_age"])) {
+                $params .= ($tokdata["max_age"] === 0 ? "&prompt=login" : "")
+                    . "&max_age=" . $tokdata["max_age"];
             }
         }
+        $params .= "&claims=" . rawurlencode('{"id_token":{"auth_time":{"essential":true}}}');
         throw new Redirection(hoturl_add_raw($authi->auth_uri, $params));
+    }
+
+    /** Path scope for the nonce cookie: the directory holding the
+     * `redirect_uri`, which is where the provider will return. That need not
+     * be this site—one site's `redirect_uri` may name another on the same
+     * host—and a cookie scoped to the starting site would not be sent back.
+     * The return leg deletes the cookie using its own `base_path`, which is
+     * this same directory, since `oauth` sits directly under a site's root.
+     * @param OAuthProvider $authi
+     * @return string */
+    static private function redirect_uri_path($authi) {
+        $path = parse_url($authi->redirect_uri, PHP_URL_PATH);
+        $slash = is_string($path) ? strrpos($path, "/") : false;
+        return $slash === false ? "/" : substr($path, 0, $slash + 1);
     }
 
     /** @return MessageItem|list<MessageItem> */
@@ -157,6 +193,7 @@ class OAuth_Page {
         $redirect = $tok->data("redirect") /* XXX obsolete */;
         $this->success_redirect = $tok->data("success_redirect") ?? $redirect;
         $this->failure_redirect = $tok->data("failure_redirect") ?? $redirect;
+        $this->smsg = $tok->data("smsg");
 
         if (($nonce = $tok->data("nonce")) !== null) {
             $noncematch = isset($_COOKIE["hotcrp-oauth-nonce-{$nonce}"]);
@@ -173,9 +210,8 @@ class OAuth_Page {
             return MessageItem::error("<0>Authentication failed");
         } else if (($authi = OAuthProvider::find($this->conf, $tok->data("authtype")))) {
             return $this->instance_response($authi, $tok);
-        } else {
-            return MessageItem::error("<0>OAuth authentication internal error");
         }
+        return MessageItem::error("<0>OAuth authentication internal error");
     }
 
     /** @param OAuthProvider $authi
@@ -259,7 +295,12 @@ class OAuth_Page {
                 MessageItem::inform("<0>HotCRP requires your email to sign you in.")
             ];
         }
-        if (friendly_boolean($jid->email_verified ?? null) === false) {
+        // The email names the account, so it must be verified: the provider
+        // must say so, unless it is configured as trusted regardless.
+        $ev = $jid->email_verified ?? null;
+        if ($ev !== true
+            && $ev !== "true"
+            && !$authi->allow_unverified_email) {
             return [
                 MessageItem::error("<0>The {$authi->title()} authenticator hasn’t verified your email"),
                 MessageItem::inform("<0>HotCRP requires a verified email to sign you in.")
@@ -270,9 +311,8 @@ class OAuth_Page {
         // handle reauthentication requests
         if ($tok->data("reauth")) {
             return $this->instance_reauth($authi, $tok, $jid);
-        } else {
-            return $this->instance_signin($authi, $tok, $jid);
         }
+        return $this->instance_signin($authi, $tok, $jid);
     }
 
     /** @param OAuthProvider $authi
@@ -291,20 +331,24 @@ class OAuth_Page {
                 MessageItem::inform("<0>You must provide reauthentication for {$reauth}.")
             ];
         }
-        // Confirming an account means the user proved it just now, so the
-        // provider must say when it authenticated them. OpenID Connect makes
-        // `auth_time` required in a response to a `max_age` request; without
-        // it, a provider that silently reuses its own session would turn this
-        // into no check at all.
+        // A confirmation is best when the provider says it authenticated the
+        // user just now, in `auth_time`. A provider that relied on its own
+        // session instead vouches for the account right now.
         $max_age = $tok->data("max_age") ?? 0;
         $auth_time = $jid->auth_time ?? null;
-        if (!is_int($auth_time)
-            || $auth_time < Conf::$now - max($max_age, 300)) {
+        if (is_int($auth_time)
+            && $auth_time >= Conf::$now - max($max_age, 300)) {
+            $use->timestamp = min($auth_time, Conf::$now);
+        } else if (($u = $this->conf->user_by_email($reauth)
+                         ?? $this->conf->cdb_user_by_email($reauth))
+                   && $u->can_use_password()) {
             $use->set_success(false)->store($this->qreq);
             return [
                 MessageItem::error("<0>The {$authi->title()} authenticator did not confirm a recent sign-in"),
-                MessageItem::inform("<0>Its response must include an `auth_time` claim no older than {$max_age}s.")
+                MessageItem::inform("<0>Confirm your account with your password instead.")
             ];
+        } else {
+            $use->set_roundtrip_only(true);
         }
         $use->store($this->qreq);
         $this->success = true;
@@ -433,10 +477,18 @@ class OAuth_Page {
 
         $qs = $this->qreq->qsession();
         $qs->open_new_sid();  // prevent session fixation
-        UserSecurityEvent::session_user_add($qs, $user->email);
-        UserSecurityEvent::make($user->email, UserSecurityEvent::TYPE_OAUTH)
-            ->set_subtype($authi->name)
-            ->store($this->qreq);
+        $xuser = $user->contactId ? $user : $user->cdb_user() ?? $user;
+        $xuser->mark_login();
+        $ui = UserSecurityEvent::session_user_add($qs, $user->email);
+        UpdateSession::apply_theme($qs, $ui, $xuser->theme());
+        $use = UserSecurityEvent::make($user->email, UserSecurityEvent::TYPE_OAUTH)
+            ->set_subtype($authi->name);
+        if (is_int($jid->auth_time ?? null)) {
+            $use->timestamp = min($jid->auth_time, Conf::$now);
+        } else {
+            $use->set_roundtrip_only(true);
+        }
+        $use->store($this->qreq);
         $this->success = true;
         return $tok->data("quiet") ? [] : [MessageItem::success("<0>Signed in")];
     }
@@ -456,6 +508,12 @@ class OAuth_Page {
         if ($r) {
             $rnav = NavigationState::make_base($uri);
             $uri = $rnav->resolve_within($r, $this->site_uri) ?? $uri;
+        }
+        // direct the saved messages to the relevant conference
+        if ($this->smsg !== null) {
+            Session_API::store_smsg($this->qreq, $this->smsg, ...$this->conf->claim_saved_messages());
+        } else {
+            $this->conf->saved_messages_commit($this->qreq);
         }
         throw new Redirection($uri);
     }

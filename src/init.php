@@ -3,7 +3,7 @@
 // Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 declare(strict_types=1);
-const HOTCRP_VERSION = "3.4";
+const HOTCRP_VERSION = "3.5";
 
 // All positive review types must be 1 digit
 const REVIEW_META = 5;
@@ -46,7 +46,7 @@ const NAME_MAILQUOTE = 128; // quote name by RFC822
 const NAME_A = 256; // affiliation
 const NAME_PARSABLE = 512; // `last, first` if `first last` would be ambiguous
 
-const TAG_REGEX_NOTWIDDLE = '[a-zA-Z@*_:.][-+a-zA-Z0-9?!@*_:.\/]*';
+const TAG_REGEX_NOTWIDDLE = '[a-zA-Z@*_:.][-+a-zA-Z0-9@*_:.\/]*+(?:\?|!(?!=))*+';
 const TAG_REGEX = '~?~?' . TAG_REGEX_NOTWIDDLE;
 const TAG_MAXLEN = 80;
 const TAG_INDEXBOUND = 2147483646.0;
@@ -182,7 +182,7 @@ function initialize_conf($config_file = null, $confid = null) {
             Conf::set_main_instance(new Conf($Opt, true));
         }
         if (!Conf::$main->dblink) {
-            Multiconference::fail_bad_database();
+            Multiconference::fail_bad_database(Conf::$main);
         }
     }
 
@@ -291,7 +291,7 @@ function initialize_user_preferred_uindex($qreq, $uindex) {
 }
 
 /** @param Qrequest $qreq
- * @param ?array{bearer?:bool} $kwarg
+ * @param ?array{bearer?:bool,viewer?:bool} $kwarg
  * @return ?Contact */
 function initialize_user($qreq, $kwarg = null) {
     $conf = $qreq->conf();
@@ -325,13 +325,12 @@ function initialize_user($qreq, $kwarg = null) {
                 ->complete();
         }
         $qreq->approve_token(); // the bearer token counts as explicit authorization
-        $qreq->set_user($user);
+        $qreq->set_bearer_token($token);
         $qreq->set_qsession(new MemoryQsession($salt, ["u" => $user->email]));
         $user->set_bearer_authorized();
         if (($scope = $token->data("scope")) && is_string($scope)) {
             $user->set_scope($scope);
         }
-        Contact::set_main_user($user);
         $ucounter = $user->contact_counter_for($token->is_cdb, $token->contactId);
         $allow = $ucounter->api_account();
         $ucounter->api_ratelimit_headers();
@@ -339,7 +338,12 @@ function initialize_user($qreq, $kwarg = null) {
             $ucounter->api_fail()->complete();
         }
         $token->update_use(86400)->update(); // mark use once a day
-        return $user->activate($qreq, true);
+        $muser = $user->activate($qreq, true);
+        $qreq->set_user($muser);
+        if ($kwarg["viewer"] ?? true) {
+            $conf->set_viewer($muser);
+        }
+        return $muser;
     }
 
     // set up session
@@ -440,12 +444,12 @@ function initialize_user($qreq, $kwarg = null) {
     $muser = ($conf->fresh_user_by_email($uemail)
               ?? Contact::make_email_cflags($conf, $uemail, 0))
         ->activate($qreq, true, $uindex);
-    Contact::set_main_user($muser);
+    $conf->set_viewer($muser);
     $qreq->set_user($muser);
 
     // author view capability pages should not be indexed
     if ($muser->email === ""
-        && $muser->has_author_view_capability()
+        && $muser->author_view_capability_paper_ids()
         && !$conf->opt("allowIndexPapers")) {
         Navigation::header("X-Robots-Tag: noindex, noarchive");
     }
@@ -469,7 +473,7 @@ function initialize_user($qreq, $kwarg = null) {
             && $login_bounce[2] === $nav->page) {
             foreach ($login_bounce[3] as $k => $v) {
                 if (!isset($qreq[$k]))
-                    $qreq[$k] = $v;
+                    $qreq->set_req($k, $v);
             }
             $qreq->set_annex("after_login", true);
         }

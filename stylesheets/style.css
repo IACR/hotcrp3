@@ -556,12 +556,16 @@ a.pnum:visited, a.ptitle:visited {
 }
 a:hover, a.track:hover,
 a.pnum:hover, a.ptitle:hover,
-button.link:hover, button.q:hover, button.qo:hover,
+button.q:hover, button.qo:hover, .link:hover, .link-hover:hover,
 .js-click-child:hover a.hover-child,
 a:hover .pavfn {
 	color: var(--link-hover-fg);
 	-webkit-text-decoration-color: var(--link-hover-fg);
 	text-decoration-color: var(--link-hover-fg);
+}
+.link-hover:hover {
+	-webkit-text-decoration-line: underline;
+	text-decoration-line: underline;
 }
 a:active, a.track:active, a.noq:active,
 a.pnum:active, a.ptitle:active,
@@ -583,7 +587,7 @@ u.x {
 }
 .ul,
 a.ulh:hover, a.q:hover,
-button.link, button.q:hover,
+.link, button.q:hover,
 .papmode.active:hover > a, .leftmenu-item:hover > a,
 div.js-foldup:hover a.js-foldup,
 div.js-aufoldup:hover a.js-aufoldup,
@@ -592,7 +596,7 @@ div.js-assignment-fold:hover a.js-assignment-fold,
 a:hover u.x {
 	text-decoration: underline;
 }
-button.link.noul {
+.link.noul {
 	text-decoration: inherit;
 }
 tr.pl:hover a.pnum, tr.pl:hover a.ptitle {
@@ -689,6 +693,12 @@ label.checki {
 .entryi > .entry {
 	flex: 1 1 0;
 	flex-basis: min-content;
+}
+.entryi > .entry > textarea:first-child {
+	/* align the label with the first line of text; a textarea's own
+	   baseline is its bottom edge. Offset = border + padding-top +
+	   half the line-height difference (1.4 vs. 1.35) */
+	margin-top: calc(0.025em - 3px);
 }
 .checki, .entryi, .entryg, .break-avoid {
 	-webkit-column-break-inside: avoid;
@@ -1569,6 +1579,13 @@ span.expander.after {
 .btn-x:hover::after {
 	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L31 31M1 31L31 1' style='stroke:%23e8863a' stroke-width='2' /%3E%3C/svg%3E");
 }
+/* the tracker stays light */
+#p-tracker .btn-x::after {
+	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L31 31M1 31L31 1' style='stroke:%23222222' stroke-width='2' /%3E%3C/svg%3E");
+}
+#p-tracker .btn-x:hover::after {
+	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L31 31M1 31L31 1' style='stroke:%23c45500' stroke-width='2' /%3E%3C/svg%3E");
+}
 }
 .closebtn {
 	display: inline-block;
@@ -1858,7 +1875,7 @@ button.link.disabled, button.q.disabled, button.qo.disabled, button.qx.disabled 
 .differs .if-differs {
 	display: block;
 }
-.aabig button, .aabig .btn {
+.aabig button, .aabig .btn, button.btn-big {
 	padding: 4px 9px 4px;
 	min-height: 31px;
 }
@@ -1980,8 +1997,16 @@ button.link.disabled, button.q.disabled, button.qo.disabled, button.qx.disabled 
 	height: 1.2em;
 	vertical-align: -0.22em;
 }
-.move-handle-icon {
-	fill: currentColor;
+.viewas-icon {
+	fill: var(--text);
+	width: 1.125em;
+	height: 0.6875em;
+}
+a:hover .viewas-icon {
+	fill: var(--link-hover-fg);
+}
+a:active .viewas-icon {
+	fill: var(--link-active-fg);
 }
 
 /* Wizard accordion */
@@ -2496,8 +2521,15 @@ th.settings-simplehead {
 .settings-draghandle:hover {
 	opacity: 1 !important;
 }
-.settings-tag-style-table input.tags {
-	width: 25rem;
+table.settings-tag-styles {
+	width: min(100%, 720px); /* .w-text */
+}
+table.settings-tag-styles.demargin {
+	width: calc(min(100%, 720px) + 48px);
+}
+.settings-tag-styles td.lentry {
+	width: 100%;
+	padding-right: 0;
 }
 hr.dropmark {
 	/* Do not use borders and margin, because margin isn't included in parent's
@@ -2967,6 +2999,7 @@ img.dlimg {
 }
 img.sdlimg {
 	position: relative;
+	width: 1em;
 	bottom: -3px;
 	margin-top: -3px;
 }
@@ -3980,22 +4013,22 @@ hr.g, hr.mg, hr.ug {
 }
 @layer theme {
 .sort-ascending::after {
-	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%23444488' /%3E%3C/svg%3E");
-	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%23444488' /%3E%3C/svg%3E") / "sorted";
-}
-.sort-descending::after {
 	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 7H7L4 2Z' style='fill:%23444488' /%3E%3C/svg%3E");
 	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 7H7L4 2Z' style='fill:%23444488' /%3E%3C/svg%3E") / "sorted";
+}
+.sort-descending::after {
+	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%23444488' /%3E%3C/svg%3E");
+	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%23444488' /%3E%3C/svg%3E") / "sorted";
 }
 }
 @layer dark-mode {
 .sort-ascending::after {
-	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%238e91c9' /%3E%3C/svg%3E");
-	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%238e91c9' /%3E%3C/svg%3E") / "sorted";
-}
-.sort-descending::after {
 	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 7H7L4 2Z' style='fill:%238e91c9' /%3E%3C/svg%3E");
 	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 7H7L4 2Z' style='fill:%238e91c9' /%3E%3C/svg%3E") / "sorted";
+}
+.sort-descending::after {
+	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%238e91c9' /%3E%3C/svg%3E");
+	content: url("data:image/svg+xml,%3Csvg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 2H7L4 7Z' style='fill:%238e91c9' /%3E%3C/svg%3E") / "sorted";
 }
 }
 
@@ -4043,8 +4076,8 @@ tr.plx {
 }
 }
 @layer dark-mode {
-.tag-red, .tag-orange, .tag-yellow, .tag-green,
-.tag-blue, .tag-purple, .tag-gray, .tag-white {
+.tagbg.tag-red, .tagbg.tag-orange, .tagbg.tag-yellow, .tagbg.tag-green,
+.tagbg.tag-blue, .tagbg.tag-purple, .tagbg.tag-gray, .tagbg.tag-white {
 	color-scheme: dark;
 }
 }
@@ -5964,19 +5997,63 @@ th.pl_logaction {
 	fill: none;
 	pointer-events: none;
 }
-.hotgraph .x-axis, .hotgraph .y-axis {
+.hg-axis {
 	font-size: smaller;
+	pointer-events: none;
 }
-.widelabel > .tick {
-	font-size: smaller;
-}
-.x-axis path, .x-axis line, .y-axis path, .y-axis line {
+.hg-axis path, .hg-axis line, path.hg-axis {
 	fill: none;
 	stroke: currentColor;
 	shape-rendering: crispEdges;
 }
-.x-axis text, .y-axis text {
+.hg-axis text {
 	fill: currentColor;
+}
+#hotgraph {
+	min-height: 240px;
+}
+@media screen and (max-width: 900px) and (max-height: 450px) {
+#hotgraph {
+	min-height: 80vh;
+}
+}
+svg.hotgraph.pannable {
+	cursor: grab;
+	touch-action: pan-y;
+}
+/* a mark is something to point at, not something to drag by */
+.hotgraph .gcdf, .hotgraph .gdot, .hotgraph .gbar, .hotgraph .gbox,
+.hotgraph .gdot-label, .hotgraph .gdot-hover, .hotgraph .gbar-hover0,
+.hotgraph .gbox-hover {
+	cursor: default;
+}
+svg.hotgraph.panning {
+	cursor: grabbing;
+	touch-action: none;
+}
+.hotgraph-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+.hotgraph-head > h2 {
+	margin-top: 0;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.hotgraph-head-controls {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin-left: auto;
+}
+.hotgraph-zoom {
+	margin-left: 0.5rem;
+}
+.widelabel > .tick {
+	font-size: smaller;
 }
 
 @media print {

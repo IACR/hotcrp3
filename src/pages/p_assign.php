@@ -309,9 +309,8 @@ class Assign_Page {
             }
         }
         echo '</li>';
-        if ((string) $rrow->reason !== ""
-            && $rrow->reason !== "request denied by chair") {
-            echo '<li class="mb-0-last-child">', Ht::format0("reason: " . $rrow->reason), '</li>';
+        if (($r = $rrow->viewable_reason($this->user, $this->prow, true)) !== null) {
+            echo '<li class="mb-0-last-child">', Ht::format0("reason: " . $r), '</li>';
         }
         echo '</ul></div>';
     }
@@ -338,8 +337,10 @@ class Assign_Page {
             if ($rrow->contactId !== $this->user->contactId
                 && $this->user->privChair
                 && $this->user->allow_admin($this->prow)) {
-                $actas = ' ' . Ht::link(Ht::img("viewas.png", "[Act as]", ["title" => "Become user"]),
-                    $this->prow->reviewurl(["actas" => $rrowid->email]));
+                $actast = "Act as " . $this->user->reviewer_text_for($rrowid);
+                $actas = " " . Ht::link(Ht::make_icon("viewas", ["class" => "viewas-icon"]),
+                    $this->prow->reviewurl(["actas" => $rrowid->email]),
+                    ["title" => $actast, "aria-label" => $actast]);
             }
         } else {
             $name = Text::nameo_h($rrowid, NAME_P);
@@ -379,7 +380,8 @@ class Assign_Page {
                 && $rrow->requestedBy == $this->user->contactId)) {
             echo $this->conf->hotform("=assign", [
                     "p" => $this->prow->paperId, "action" => "managerequest",
-                    "email" => $rrowid->email, "round" => $rrow->reviewRound
+                    "email" => $rrowid->email,
+                    "round" => $this->conf->round_name_argument($rrow->reviewRound)
                 ], ["class" => "fx"]);
             if (!isset($rrow->contactId) || !$rrow->contactId) {
                 echo Ht::hidden("given_name", $rrowid->firstName),

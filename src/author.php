@@ -173,7 +173,7 @@ class Author {
      * @return array{string,string,string} */
     static function split_string($s) {
         if (($paren = strpos($s, "(")) !== false) {
-            if (preg_match('/\G([^()]*+)(?:\)|\z)\s*+(?:[\s,;.]*|(?:-+|–|—|[\#:])\s*+(.*))\z/', $s, $m, 0, $paren + 1)) {
+            if (preg_match('/\G([^()]*+)(?:\)|\z)\s*+(?:[\s,;.]*|(?:-+|–|—|[\#:])\s*+(.*))\z/s', $s, $m, 0, $paren + 1)) {
                 return [trim(substr($s, 0, $paren)), trim($m[1]), $m[2] ?? ""];
             }
             $len = strlen($s);
@@ -181,7 +181,7 @@ class Author {
                 $rparen = self::skip_balanced_parens($s, $paren);
                 if ($rparen === $len) {
                     return [trim(substr($s, 0, $paren)), trim(substr($s, $paren + 1)), ""];
-                } else if (preg_match('/\G(?:[\s,:.]*|\s*+(?:-+|–|—|[\#:])\s*+(.*))\z/', $s, $m, 0, $rparen + 1)) {
+                } else if (preg_match('/\G(?:[\s,:.]*|\s*+(?:-+|–|—|[\#:])\s*+(.*))\z/s', $s, $m, 0, $rparen + 1)) {
                     return [trim(substr($s, 0, $paren)), trim(substr($s, $paren + 1, $rparen - $paren - 1)), $m[1] ?? ""];
                 }
                 $paren = strpos($s, "(", $rparen + 1);
@@ -210,7 +210,7 @@ class Author {
             $this->email = $email ?? "";
             $this->_name = $email === null ? $name : null;
         }
-        $this->affiliation = $affiliation;
+        $this->affiliation = simplify_whitespace($affiliation);
         $this->seal_nea();
     }
 
@@ -251,8 +251,8 @@ class Author {
             throw new Exception("invalid Author::make_keyed");
         }
         $arr = is_object($x) ? get_object_vars($x) : $x;
-        $f = $arr["firstName"] ?? $arr["first"] ?? $arr["givenName"] ?? $arr["given"] ?? null;
-        $l = $arr["lastName"] ?? $arr["last"] ?? $arr["familyName"] ?? $arr["family"] ?? null;
+        $f = $arr["given_name"] ?? $arr["firstName"] ?? $arr["first"] ?? $arr["givenName"] ?? $arr["given"] ?? null;
+        $l = $arr["family_name"] ?? $arr["lastName"] ?? $arr["last"] ?? $arr["familyName"] ?? $arr["family"] ?? null;
         $e = $arr["email"] ?? null;
         $a = $arr["affiliation"] ?? null;
         if (($n = $arr["name"] ?? $arr["fullName"] ?? null) !== null) {

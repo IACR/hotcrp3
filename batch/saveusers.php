@@ -63,7 +63,8 @@ class SaveUsers_Batch {
     }
 
     function parse_json($str) {
-        $j = Json::try_decode($str);
+        // a trusted administrative batch tool: no untrusted-input complexity cap
+        $j = Json::decode($str);
         $ja = null;
         if (is_array($j)) {
             $ja = $j;
@@ -78,7 +79,15 @@ class SaveUsers_Batch {
         } else {
             throw new CommandLineException("{$this->filename}: " . (Json::last_error_msg() ?? "JSON parse error"));
         }
+        foreach ($ja as $i => $jx) {
+            if (!is_object($jx)) {
+                fwrite(STDERR, "{$this->filename}: Item {$i}: Expected user object\n");
+                $this->exit_status = 1;
+            }
+        }
+        // JSON users are CSV rows whose values keep their JSON types
         $csv = CsvParser::make_json($ja, true);
+        $this->ustatus->add_csv_synonyms($csv);
         $this->parse_csvp($csv);
     }
 

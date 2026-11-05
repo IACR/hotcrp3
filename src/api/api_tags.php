@@ -124,8 +124,8 @@ class Tags_API {
         $assigner = new AssignmentSet($user);
         $assigner->enable_papers($prow);
         $assigner->parse(join("\n", $x));
-        $mlist = $assigner->message_list();
         $ok = $assigner->execute();
+        $mlist = $assigner->message_list();
 
         // execute
         if (!$ok) {
@@ -170,8 +170,8 @@ class Tags_API {
 
         $assigner = new AssignmentSet($user);
         $assigner->parse(join("\n", $x));
-        $mlist = $assigner->message_list();
         $ok = $assigner->execute();
+        $mlist = $assigner->message_list();
 
         // execute
         if (!$ok) {
@@ -179,7 +179,7 @@ class Tags_API {
         }
         $jr = new JsonResult([
             "ok" => true,
-            "p" => Assign_API::assigned_paper_info($user, $assigner)
+            "papers" => Assign_API::assigned_paper_info($user, $assigner)
         ]);
         if ($qreq->search) {
             Search_API::apply_search($jr, $user, $qreq, $qreq->search);
@@ -189,14 +189,14 @@ class Tags_API {
 
     static function votereport_api(Contact $user, Qrequest $qreq, PaperInfo $prow) {
         $tagger = new Tagger($user);
-        if (!($tag = $tagger->check($qreq->tag, Tagger::NOVALUE))) {
+        if (!($tag = $tagger->check_syntax($qreq->tag, Tagger::NOVALUE))) {
             return JsonResult::make_parameter_error("tag", $tagger->error_ftext());
         }
         if (!$user->can_view_peruser_tag($prow, $tag)) {
             return JsonResult::make_permission_error();
         }
         $votemap = [];
-        preg_match_all('/ (\d+)~' . preg_quote($tag) . '#(\S+)/i', $prow->all_tags_text(), $m);
+        preg_match_all('/ (\d+)~' . preg_quote($tag, '/') . '#(\S+)/i', $prow->all_tags_text(), $m);
         $is_approval = $user->conf->tags()->is_approval($tag);
         $min_vote = $is_approval ? 0 : 0.001;
         for ($i = 0; $i != count($m[0]); ++$i) {

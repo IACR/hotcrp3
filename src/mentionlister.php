@@ -85,7 +85,8 @@ class MentionLister {
                 $au->contactId = $rrow->contactId;
                 $au->status = Author::STATUS_ANONYMOUS_REVIEWER;
                 $rlist[] = new MentionPhrase($au, MentionPhrase::TF_REVIEWER);
-            } else if ($rrow->reviewType === REVIEW_META) {
+            } else if ($rrow->reviewType === REVIEW_META
+                       && $user->can_view_review_assignment($prow, $rrow)) {
                 $au = Author::make_last("Metareviewer");
                 $au->contactId = $rrow->contactId;
                 $au->status = Author::STATUS_ANONYMOUS_REVIEWER;
@@ -148,29 +149,34 @@ class MentionLister {
         }
     }
 
-    /** @param PaperInfo $prow
+    /** @param ?PaperInfo $prow
      * @param Contact $user
      * @param 0|1 $reason
      * @return array<Contact> */
     private function get_pc($prow, $user, $reason) {
+        $conf = $user->conf;
         if (!$prow
             || $reason === self::FOR_PARSE
-            || !$prow->conf->check_track_view_sensitivity()
+            || !$conf->check_track_view_sensitivity()
             || !$user->can_view_user_tags()) {
-            return $user->conf->pc_members();
+            return $conf->viewable_pc_members($user);
         }
         // enumerate track permissions that allow viewing this paper,
         // but leave off permissions this user can't see (e.g. `+~~chair_tag`)
         $relevant_perm = [];
         $unmatched = true;
-        foreach ($prow->conf->track_list() as $tr) {
+        foreach ($conf->track_list() as $tr) {
             if ($tr->is_default ? $unmatched : $prow->has_tag($tr->ltag)) {
                 $unmatched = false;
                 $p = $tr->perm[Track::VIEW];
                 if ($p === null) {
-                    return $prow->conf->pc_members();
-                } else if ($p !== "+none"
-                           && $user->can_view_tag_somewhere(substr($p, 1))) {
+                    return $conf->viewable_pc_members($user);
+                } else if ($p === "+none") {
+                    continue;
+                }
+                $ch = $p[0];
+                if (($ch !== "+" && $ch !== "-")
+                    || $user->can_view_tag_somewhere(substr($p, 1))) {
                     $relevant_perm[] = $p;
                 }
             }
@@ -179,7 +185,7 @@ class MentionLister {
         // or are chairs
         // XXX managerContactId, track admins?
         $allowed = [];
-        foreach ($prow->conf->pc_members() as $pc) {
+        foreach ($conf->viewable_pc_members($user) as $pc) {
             foreach ($relevant_perm as $perm) {
                 if ($pc->has_permission($perm)) {
                     $allowed[] = $pc;
@@ -207,6 +213,13 @@ class MentionLister {
     /** @param Qrequest $qreq
      * @param ?PaperInfo $prow */
     static function mentioncompletion_api(Contact $user, $qreq, $prow) {
+        // a user who can't comment gets no paper-specific names, except an
+        // author, who may still write a response
+        if ($prow
+            && $user->new_comment_flags($prow) === 0
+            && !$prow->has_author($user)) {
+            $prow = null;
+        }
         $mlister = new MentionLister($user, $prow, CommentInfo::CTVIS_AUTHOR, self::FOR_COMPLETION);
         $comp = $aunames = [];
         foreach ($mlister->lists() as $key => $mlist) {

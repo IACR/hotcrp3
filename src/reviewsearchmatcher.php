@@ -224,7 +224,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
                 return null;
             }
         } else {
-            $re = '/\A' . str_replace('\*', '.*', preg_quote($word)) . '\z/is';
+            $re = '{\A' . Text::wildcard_pregex($word) . '\z}i';
             $r = array_keys(preg_grep($re, $conf->defined_rounds()));
         }
         if ($neg) {
@@ -396,7 +396,7 @@ class ReviewSearchMatcher extends ContactCountMatcher {
             }
         }
         if ($this->rate_bits > 0) {
-            $where[] = "exists (select * from ReviewRating where paperId={$table_name}.paperId and reviewId={$table_name}.reviewId)";
+            $where[] = "exists (select * from ReviewRating where paperId={$table_name}.paperId and reviewId={$table_name}.reviewId)=1";
         }
         if ($this->requester !== null) {
             $where[] = "requestedBy=" . $this->requester;

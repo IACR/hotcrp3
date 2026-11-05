@@ -29,6 +29,12 @@ class Authorize_Tester {
     private $_documents = [];
     /** @var ?string */
     private $_last_error;
+    /** The browser session of the flow under test. `authorize_outcome` starts a
+     * fresh one when a new authorization begins and reuses it otherwise, so the
+     * confirm/re-view steps share the session that minted the code — as one
+     * browser would. A code is bound to its minting session (`ssecret`).
+     * @var ?Qsession */
+    private $_qs;
 
     const MDOC_CLIENT_ID = "https://mdoc.example.com/client.json";
     const MDOC_REDIRECT_URI = "http://127.0.0.1:5173/callback";
@@ -143,7 +149,10 @@ class Authorize_Tester {
         $this->_last_client_id = $jr->client_id;
         $this->_last_client_secret = $jr->client_secret;
 
-        // Step 2: Begin authorization request (Authorize_Page::go without ComponentSet)
+        // Step 2: Begin authorization request (Authorize_Page::go without ComponentSet).
+        // Mint and confirm share one session, as a single browser would: the
+        // code is bound to the session that created it.
+        $qs = new MemoryQsession;
         $state = base48_encode(random_bytes(16));
         $args = [
             "client_id" => $this->_last_client_id,
@@ -156,7 +165,7 @@ class Authorize_Tester {
         if (isset($rest["scope"])) {
             $args["scope"] = $rest["scope"];
         }
-        $qreq = TestQreq::user_get($user, $args)->set_page("authorize");
+        $qreq = TestQreq::user_get($user, $args, $qs)->set_page("authorize");
         Qrequest::set_main_request($qreq);
 
         $code = null;
@@ -181,7 +190,7 @@ class Authorize_Tester {
             // account: the grant speaks as the bot, the chair authorizes it
             $confirm["authbot"] = $rest["authbot"];
         }
-        $qreq = TestQreq::user_post($user, $confirm)->set_page("authorize");
+        $qreq = TestQreq::user_post($user, $confirm, $qs)->set_page("authorize");
         Qrequest::set_main_request($qreq);
 
         try {
@@ -529,7 +538,7 @@ class Authorize_Tester {
         xassert_eqq($jr->get("email"), "chair@_.com");
 
         $jr = call_api_result("=account", $token, ["enable" => 1, "email" => "mgbaker@cs.stanford.edu"]);
-        xassert_eqq($jr->response_code(), 401);
+        xassert_eqq($jr->response_code(), 403);
 
         // token that requested limited rights from read/write scope
         // has only those rights
@@ -539,7 +548,7 @@ class Authorize_Tester {
         xassert_eqq($jr->get("email"), "chair@_.com");
 
         $jr = call_api_result("=account", $token, ["enable" => 1, "email" => "mgbaker@cs.stanford.edu"]);
-        xassert_eqq($jr->response_code(), 401);
+        xassert_eqq($jr->response_code(), 403);
     }
 
     function test_refresh_token_scope() {
@@ -584,6 +593,20 @@ class Authorize_Tester {
                 xassert_neqq($detail, null);
             }
         }
+    }
+
+    function test_oauthregister_refuses_oversized_body() {
+        // a normal-sized registration succeeds
+        $jr = call_api("=oauthregister", $this->u_empty, TestQreq::post_json(["redirect_uris" => ["https://dloop.com/"]]));
+        xassert(isset($jr->client_id));
+
+        // dynamic client registration is unauthenticated; an oversized body
+        // must be refused before json_decode (HC-116-class hash-collision DoS)
+        $big = '{"redirect_uris":["https://x/cb"],"junk":"' . str_repeat("a", 20000) . '"}';
+        xassert_gt(strlen($big), 16384);
+        $jr = call_api("=oauthregister", $this->u_empty, TestQreq::post_json($big));
+        xassert_eqq($jr->error ?? null, "invalid_request");
+        xassert(!isset($jr->client_id));
     }
 
     #[RequireClass("Uri\\Rfc3986\\Uri")]
@@ -641,6 +664,9 @@ class Authorize_Tester {
 
         $verifier = base48_encode(random_bytes(32));
 
+        // Mint and confirm share one session, as a single browser would.
+        $qs = new MemoryQsession;
+
         // Step 1: Begin authorization request
         $state = base48_encode(random_bytes(16));
         $args = [
@@ -655,12 +681,17 @@ class Authorize_Tester {
         if (isset($rest["nonce"])) {
             $args["nonce"] = $rest["nonce"];
         }
+        foreach (["max_age", "prompt", "login_hint"] as $k) {
+            if (isset($rest[$k])) {
+                $args[$k] = $rest[$k];
+            }
+        }
         if (!($rest["no_pkce"] ?? false)) {
             $args["code_challenge_method"] = $rest["code_challenge_method"] ?? "S256";
             $args["code_challenge"] = $args["code_challenge_method"] === "plain"
                 ? $verifier : base64url_encode(hash("sha256", $verifier, true));
         }
-        $qreq = TestQreq::user_get($user, $args)->set_page("authorize");
+        $qreq = TestQreq::user_get($user, $args, $qs)->set_page("authorize");
         Qrequest::set_main_request($qreq);
 
         // test_mode 2 routes page feedback messages into the page, where the
@@ -696,8 +727,21 @@ class Authorize_Tester {
         }
 
         // Step 2: Confirm authorization request
-        $qreq = TestQreq::user_post($user, ["code" => $code, "authconfirm" => "1"])
+        $qreq = TestQreq::user_post($user, ["code" => $code, "authconfirm" => "1"], $qs)
             ->set_page("authorize");
+        if (isset($rest["auth_time"])) {
+            // (`auth_roundtrip`: a provider round trip that didn't say when
+            // it authenticated the user)
+            $rt = $rest["auth_roundtrip"] ?? false;
+            $use = UserSecurityEvent::make($user->email,
+                $rt ? UserSecurityEvent::TYPE_OAUTH : UserSecurityEvent::TYPE_PASSWORD,
+                $rest["auth_reason"] ?? UserSecurityEvent::REASON_SIGNIN);
+            $use->timestamp = $rest["auth_time"];
+            if ($rt) {
+                $use->set_subtype("p")->set_roundtrip_only(true);
+            }
+            $use->store($qreq);
+        }
         Qrequest::set_main_request($qreq);
 
         Navigation::$test_mode = 2;
@@ -767,8 +811,15 @@ class Authorize_Tester {
      * @param array<string,mixed> $param
      * @param Contact $user
      * @return array{'code'|'redirect'|'page'|'none',?string} */
-    private function authorize_outcome($param, $user) {
-        $qreq = TestQreq::user_get($user, $param)->set_page("authorize");
+    private function authorize_outcome($param, $user, $qs = null) {
+        if ($qs !== null) {
+            $this->_qs = $qs;
+        } else if (isset($param["client_id"]) || $this->_qs === null) {
+            // a new authorization begins in a fresh browser session; a bare
+            // `?code=` re-view reuses the session that minted the code
+            $this->_qs = new MemoryQsession;
+        }
+        $qreq = TestQreq::user_get($user, $param, $this->_qs)->set_page("authorize");
         Qrequest::set_main_request($qreq);
         // test_mode 2 routes page feedback into the page, where the output
         // buffer absorbs it
@@ -853,7 +904,7 @@ class Authorize_Tester {
         if ($jr) {
             xassert_eqq($jr->_token->data("scope"), "read");
             xassert_eqq(call_api_result("=account", $jr->_token,
-                ["enable" => 1, "email" => "mgbaker@cs.stanford.edu"])->response_code(), 401);
+                ["enable" => 1, "email" => "mgbaker@cs.stanford.edu"])->response_code(), 403);
         }
 
         $this->set_default_document();
@@ -889,6 +940,799 @@ class Authorize_Tester {
         // account on it; a HotCRP email is permanent, so it serves
         xassert_eqq($payload->sub ?? null, "chair@_.com");
         xassert_eqq($payload->exp ?? null, ($payload->iat ?? 0) + 86400);
+    }
+
+    /** `auth_time` answers a question only a client that sent `max_age` asked,
+     * so it is reported to that client and not volunteered to others. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_id_token_auth_time() {
+        $t = Conf::$now - 60;
+        $rest = ["scope" => "openid read", "auth_time" => $t,
+                 "auth_reason" => UserSecurityEvent::REASON_REAUTH];
+
+        // nothing asked, nothing said
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair, $rest);
+        xassert_neqq($jr, null);
+        if ($jr) {
+            $payload = (new HotCRP\JWTParser)->validate($jr->id_token);
+            xassert_neqq($payload, null);
+            xassert_eqq($payload->auth_time ?? null, null);
+        }
+
+        // `max_age` asks, so the confirmation's own time is reported
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+            $rest + ["max_age" => "600"]);
+        xassert_neqq($jr, null);
+        if ($jr) {
+            $payload = (new HotCRP\JWTParser)->validate($jr->id_token);
+            xassert_neqq($payload, null);
+            xassert_eqq($payload->auth_time ?? null, $t);
+        }
+    }
+
+    /** A client that asks for a fresh sign-in must not be handed a code just
+     * because some session is open. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_authorize_max_age_requires_confirmation() {
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+            ["scope" => "openid read", "max_age" => "600"]);
+        xassert_eqq($jr, null);
+        xassert_str_contains($this->_failure ?? "", "login_required");
+    }
+
+    /** `prompt=login` asks for a window of zero, but a confirmation that has
+     * just succeeded has to satisfy it, or there is no way through. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_authorize_prompt_login_accepts_fresh_confirmation() {
+        // inside the floor `prompt=login` is clamped to, whatever it is set to
+        $t = Conf::$now - intdiv(HotCRP\Authorize_Page::MAX_AGE_MIN_BOUND, 2);
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+            ["scope" => "openid read", "prompt" => "login",
+             "auth_time" => $t, "auth_reason" => UserSecurityEvent::REASON_REAUTH]);
+        xassert_neqq($jr, null);
+        if (!$jr) {
+            return;
+        }
+        $payload = (new HotCRP\JWTParser)->validate($jr->id_token);
+        xassert_neqq($payload, null);
+        xassert_eqq($payload->auth_time ?? null, $t);
+    }
+
+    /** A sign-in moments ago, such as one made to answer this very request,
+     * satisfies `prompt=login`; an older one does not. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_authorize_prompt_login_accepts_recent_signin() {
+        $t = Conf::$now - 60;
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+            ["scope" => "openid read", "prompt" => "login", "auth_time" => $t]);
+        xassert_neqq($jr, null);
+        if ($jr) {
+            $payload = (new HotCRP\JWTParser)->validate($jr->id_token);
+            xassert_eqq($payload->auth_time ?? null, $t);
+        }
+
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+            ["scope" => "openid read", "prompt" => "login", "auth_time" => Conf::$now - 600]);
+        xassert_eqq($jr, null);
+        xassert_str_contains($this->_failure ?? "", "login_required");
+    }
+
+    /** A provider round trip that didn't say when the user authenticated
+     * doesn't answer a client's `max_age`. With no password to fall back on,
+     * the client hears `login_required` at once, rather than the user being
+     * sent around again. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_authorize_max_age_refuses_unattested_signin() {
+        xassert(!$this->u_chair->can_use_password());
+        foreach ([UserSecurityEvent::REASON_SIGNIN, UserSecurityEvent::REASON_REAUTH] as $reason) {
+            $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+                ["scope" => "openid read", "max_age" => "600", "auth_time" => Conf::$now - 10,
+                 "auth_reason" => $reason, "auth_roundtrip" => true]);
+            xassert_eqq($jr, null);
+            xassert_str_contains($this->_failure ?? "", "login_required");
+            // the same sign-in, attested, is enough
+            $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+                ["scope" => "openid read", "max_age" => "600", "auth_time" => Conf::$now - 10,
+                 "auth_reason" => $reason]);
+            xassert_neqq($jr, null);
+        }
+    }
+
+    /** `login_hint` names the account to authenticate, so the consent page
+     * offers that account and no other. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_authorize_login_hint_limits_accounts() {
+        // the hinted account is the one signed in: business as usual
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI, $this->u_chair,
+            ["scope" => "openid read", "login_hint" => $this->u_chair->email]);
+        xassert_neqq($jr, null);
+
+        // the hinted account is someone else: this session cannot serve it, so
+        // the page has nothing to offer and sends the user to sign in
+        $verifier = base48_encode(random_bytes(32));
+        $qreq = TestQreq::user_get($this->u_chair, [
+            "client_id" => self::MDOC_CLIENT_ID,
+            "redirect_uri" => self::MDOC_REDIRECT_URI,
+            "response_type" => "code",
+            "state" => base48_encode(random_bytes(16)),
+            "scope" => "openid read",
+            "login_hint" => $this->u_mgbaker->email,
+            "code_challenge_method" => "S256",
+            "code_challenge" => base64url_encode(hash("sha256", $verifier, true))
+        ])->set_page("authorize");
+        Qrequest::set_main_request($qreq);
+        $redir = null;
+        $old_test_mode = Navigation::$test_mode;
+        Navigation::$test_mode = 2;
+        ob_start();
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $qreq))->go();
+        } catch (Redirection $r) {
+            $redir = $r->url;
+        } finally {
+            ob_end_clean();
+            Navigation::$test_mode = $old_test_mode;
+        }
+        xassert_str_contains($redir ?? "", "signin");
+        xassert_str_contains($redir ?? "", "mgbaker");
+    }
+
+    /** Pressing an account's button is the consent; a confirmation demanded
+     * in the middle of it interrupts that consent rather than replacing it, so
+     * finishing the confirmation finishes the authorization. */
+    function test_confirmation_resumes_the_consent_it_interrupted() {
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read",
+            "max_age" => "600"
+        ];
+        [$how, $code] = $this->authorize_outcome($param, $this->u_chair);
+        xassert_eqq($how, "code");
+
+        // the consent post: nothing confirms this session, so one is demanded
+        $vq = TestQreq::user_post($this->u_chair,
+            ["authconfirm" => 1, "code" => $code, "authemail" => $this->u_chair->email],
+            $this->_qs)
+            ->set_page("authorize");
+        Qrequest::set_main_request($vq);
+        $err = null;
+        $old_test_mode = Navigation::$test_mode;
+        Navigation::$test_mode = 2;
+        ob_start();
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $vq))->go();
+        } catch (JsonCompletion $jc) {
+            $err = $jc->result->content["error"] ?? null;
+        } catch (PageCompletion $pc) {
+        } finally {
+            ob_end_clean();
+        }
+        xassert_eqq($err, "login_required");
+
+        // the confirmation lands, and the consent finishes without being
+        // asked for a second time
+        $vq2 = TestQreq::user_get($this->u_chair, ["code" => $code], $this->_qs)->set_page("authorize");
+        Qrequest::set_main_request($vq2);
+        UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_PASSWORD,
+            UserSecurityEvent::REASON_REAUTH)->store($vq2);
+        $redir = null;
+        ob_start();
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $vq2))->go();
+        } catch (Redirection $r) {
+            $redir = $r->url;
+        } catch (JsonCompletion $jc) {
+        } catch (PageCompletion $pc) {
+        } finally {
+            ob_end_clean();
+            Navigation::$test_mode = $old_test_mode;
+        }
+        xassert_str_starts_with($redir ?? "", "https://conf1.example.com/cb");
+        xassert_str_contains($redir ?? "", "code=");
+    }
+
+    /** Install a navigation whose `query` is `$param`, as a real request would
+     * have, and return the one it replaced.
+     *
+     * `TestQreq` puts parameters in the `Qrequest` only; `Navigation::get()` is
+     * process-wide and carries no query, so code that reflects the request's own
+     * query string sees nothing without this.
+     * @param string $page
+     * @param array $param
+     * @return NavigationState */
+    private function push_navigation_query($page, $param) {
+        $old = Navigation::get();
+        Navigation::set(NavigationState::make_base(
+            $old->server . $old->base_path, $page . "?" . http_build_query($param)));
+        return $old;
+    }
+
+    /** @return array{string,?string} */
+    private function authorize_go($qreq) {
+        Qrequest::set_main_request($qreq);
+        $old_test_mode = Navigation::$test_mode;
+        Navigation::$test_mode = 2;
+        ob_start();
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $qreq))->go();
+            return ["none", null];
+        } catch (JsonCompletion $jc) {
+            return ["code", $jc->result->content["code"] ?? null];
+        } catch (Redirection $redir) {
+            return ["redirect", $redir->url];
+        } catch (PageCompletion $pc) {
+            return ["page", trim(preg_replace('/\s+/', " ", strip_tags(ob_get_contents())))];
+        } finally {
+            ob_end_clean();
+            Navigation::$test_mode = $old_test_mode;
+        }
+    }
+
+    /** @return array{string,?string} */
+    private function authorize_run($param, $qs) {
+        return $this->authorize_go(TestQreq::user_get($this->u_chair, $param, $qs)
+            ->set_page("authorize"));
+    }
+
+    /** @param array<string,mixed> $post extra fields the consent form posts,
+     *   e.g. the prefilled `scope` field a real browser submits
+     * @return array{string,?string} */
+    private function authorize_confirm($code, $qs, $post = []) {
+        return $this->authorize_go(TestQreq::apply_user($this->u_chair,
+            TestQreq::post(["authconfirm" => 1, "code" => $code] + $post), $qs)
+            ->set_page("authorize"));
+    }
+
+    /** Drive a consent post with a real ComponentSet, so `print_reauth_exit`
+     * reaches the branch that decides where a confirmation happens.
+     * @return array{string,?string} */
+    private function authorize_confirm_with_cs($code, $qs) {
+        $qreq = TestQreq::apply_user($this->u_chair,
+            TestQreq::post(["authconfirm" => 1, "code" => $code]), $qs)
+            ->set_page("authorize");
+        Qrequest::set_main_request($qreq);
+        $cs = $this->conf->page_components($this->u_chair, $qreq);
+        $old_test_mode = Navigation::$test_mode;
+        Navigation::$test_mode = 2;
+        ob_start();
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $qreq, $cs))->go();
+            return ["none", null];
+        } catch (Redirection $redir) {
+            return ["redirect", $redir->url];
+        } catch (JsonCompletion $jc) {
+            return ["json", json_encode($jc->result->content)];
+        } catch (PageCompletion $pc) {
+            return ["page", null];
+        } finally {
+            ob_end_clean();
+            Navigation::$test_mode = $old_test_mode;
+        }
+    }
+
+    /** @return string */
+    private function max_age_code($qs) {
+        [$how, $code] = $this->authorize_run([
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read",
+            "max_age" => "600"
+        ], $qs);
+        xassert_eqq($how, "code");
+        return $code;
+    }
+
+    /** A confirmation happens wherever the account authenticates. An account
+     * that signed in here is asked here; one that signed in through a provider
+     * is sent back to that provider, with no intervening page whose only
+     * content would be a button to leave it. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_confirmation_goes_to_the_authenticator() {
+        // signed in with a password: the confirmation is asked for on this site
+        $qs = new MemoryQsession;
+        UserSecurityEvent::session_user_add($qs, $this->u_chair->email);
+        [$how, $url] = $this->authorize_confirm_with_cs($this->max_age_code($qs), $qs);
+        xassert_eqq($how, "redirect");
+        xassert_str_contains($url ?? "", "authorize");
+        xassert_str_contains($url ?? "", "code=");
+        xassert(!str_contains($url ?? "", "reauth=1"));
+
+        // signed in through a provider: sent to that provider, and told to come
+        // back to the code this consent belongs to
+        $this->conf->set_opt("oAuthProviders", [(object) [
+            "name" => "p", "client_id" => "C", "client_secret" => "S",
+            "auth_uri" => "https://idp.example.com/auth",
+            "token_uri" => "https://idp.example.com/token",
+            "redirect_uri" => "https://conf.example.com/oauth"
+        ]]);
+        $this->conf->refresh_settings();
+        try {
+            $qs = new MemoryQsession;
+            UserSecurityEvent::session_user_add($qs, $this->u_chair->email);
+            $code = $this->max_age_code($qs);
+            $sqreq = TestQreq::user_get($this->u_chair, [], $qs);
+            $use = UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_OAUTH)
+                ->set_subtype("p");
+            // old enough that it no longer satisfies the window, but still the
+            // sign-in that says how this account authenticates
+            $use->timestamp = Conf::$now - 1000;
+            $use->store($sqreq);
+
+            [$how, $url] = $this->authorize_confirm_with_cs($code, $qs);
+            xassert_eqq($how, "redirect");
+            xassert_str_contains($url ?? "", "oauth");
+            xassert_str_contains($url ?? "", "reauth=1");
+            // the round trip returns to the code, so the consent can resume
+            xassert_str_contains(urldecode($url ?? ""), "code={$code}");
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** An account that signed in through a provider but also has a password
+     * may confirm with either; once the provider fails to confirm a recent
+     * sign-in, it is not sent back there automatically. */
+    function test_oauth_confirmation_offers_password() {
+        $this->set_test_oauth_provider();
+        $u = $this->u_chair;
+        try {
+            $u->change_password("confirm-test-password");
+            $u = $this->conf->fresh_user_by_email($u->email);
+            xassert($u->can_use_password());
+            $qs = new MemoryQsession;
+            UserSecurityEvent::session_user_add($qs, $u->email);
+            $qreq = TestQreq::user_get($u, [], $qs)->set_page("profile");
+            Qrequest::set_main_request($qreq);
+            $use = UserSecurityEvent::make($u->email, UserSecurityEvent::TYPE_OAUTH)
+                ->set_subtype("p");
+            $use->timestamp = Conf::$now - 1000;
+            $use->store($qreq);
+
+            $ac = $u->authentication_checker($qreq, "profile_security");
+            ob_start();
+            $ac->print();
+            $html = ob_get_clean();
+            xassert_str_contains($html, "k-reauth-password");
+            xassert_str_contains($html, "reauth=1");
+            xassert_str_contains($ac->authenticator_url("/x") ?? "", "reauth=1");
+
+            UserSecurityEvent::make($u->email, UserSecurityEvent::TYPE_OAUTH,
+                    UserSecurityEvent::REASON_REAUTH)
+                ->set_subtype("p")->set_success(false)->store($qreq);
+            $ac = $u->authentication_checker($qreq, "profile_security");
+            xassert_eqq($ac->authenticator_url("/x"), null);
+        } finally {
+            $this->u_chair->change_password("");
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+        xassert(!$this->conf->fresh_user_by_email($this->u_chair->email)->can_use_password());
+    }
+
+    /** A round trip doesn't replace a confirmation whose time a provider
+     * attested, so it can still answer a client's `max_age`. */
+    function test_roundtrip_does_not_replace_attested_event() {
+        $u = $this->u_chair;
+        $qs = new MemoryQsession;
+        UserSecurityEvent::session_user_add($qs, $u->email);
+        $qreq = TestQreq::user_get($u, [], $qs);
+        $use = UserSecurityEvent::make($u->email, UserSecurityEvent::TYPE_OAUTH,
+                UserSecurityEvent::REASON_REAUTH)->set_subtype("p");
+        $use->timestamp = Conf::$now - 100;
+        $use->store($qreq);
+        UserSecurityEvent::make($u->email, UserSecurityEvent::TYPE_OAUTH,
+                UserSecurityEvent::REASON_REAUTH)
+            ->set_subtype("p")->set_roundtrip_only(true)->store($qreq);
+        $rts = [];
+        foreach (UserSecurityEvent::session_list_by_email($qs, $u->email) as $usex) {
+            $rts[] = $usex->roundtrip_only;
+        }
+        xassert_eqq($rts, [false, true]);
+        $ac = $u->authentication_checker($qreq, "authorize")
+            ->set_max_age(600)->set_require_attested(true);
+        xassert($ac->test());
+
+        // an attested confirmation does replace a round trip
+        UserSecurityEvent::make($u->email, UserSecurityEvent::TYPE_OAUTH,
+                UserSecurityEvent::REASON_REAUTH)->set_subtype("p")->store($qreq);
+        $rts = [];
+        foreach (UserSecurityEvent::session_list_by_email($qs, $u->email) as $usex) {
+            $rts[] = $usex->roundtrip_only;
+        }
+        xassert_eqq($rts, [false]);
+    }
+
+    /** A provider that just vouched for an account without saying when it
+     * authenticated the user won't say on a second try. An account with no
+     * password can't confirm any other way, so the client is told
+     * `login_required` rather than the user being sent around again. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_unattested_confirmation_ends_with_login_required() {
+        $this->conf->set_opt("oAuthProviders", [(object) [
+            "name" => "p", "client_id" => "C", "client_secret" => "S",
+            "auth_uri" => "https://idp.example.com/auth",
+            "token_uri" => "https://idp.example.com/token",
+            "redirect_uri" => "https://conf.example.com/oauth"
+        ]]);
+        $this->conf->refresh_settings();
+        try {
+            xassert(!$this->u_chair->can_use_password());
+            $qs = new MemoryQsession;
+            UserSecurityEvent::session_user_add($qs, $this->u_chair->email);
+            $code = $this->max_age_code($qs);
+            $sqreq = TestQreq::user_get($this->u_chair, [], $qs);
+            $use = UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_OAUTH)
+                ->set_subtype("p");
+            $use->timestamp = Conf::$now - 1000;
+            $use->store($sqreq);
+            UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_OAUTH,
+                    UserSecurityEvent::REASON_REAUTH)
+                ->set_subtype("p")->set_roundtrip_only(true)->store($sqreq);
+
+            [$how, $url] = $this->authorize_confirm_with_cs($code, $qs);
+            xassert_eqq($how, "redirect");
+            xassert_str_starts_with($url ?? "", "https://conf1.example.com/cb");
+            parse_str(parse_url($url ?? "", PHP_URL_QUERY) ?? "", $q);
+            xassert_eqq($q["error"] ?? null, "login_required");
+            xassert(!str_contains($url ?? "", "reauth=1"));
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** Render the authorize page for `$param` with a ComponentSet, returning
+     * its HTML.
+     * @return string */
+    private function authorize_page_html($param, $qs) {
+        $qreq = TestQreq::user_get($this->u_chair, $param, $qs)->set_page("authorize");
+        Qrequest::set_main_request($qreq);
+        $cs = $this->conf->page_components($this->u_chair, $qreq);
+        $page = new HotCRP\Authorize_Page($this->u_chair, $qreq, $cs);
+        // the `authorize/form/*` callbacks would otherwise construct their own
+        $cs->set_callable("HotCRP\\Authorize_Page", $page);
+        $old_test_mode = Navigation::$test_mode;
+        Navigation::$test_mode = 2;
+        ob_start();
+        try {
+            $page->go();
+        } catch (Redirection $r) {
+        } catch (JsonCompletion $jc) {
+        } catch (PageCompletion $pc) {
+        } finally {
+            $html = ob_get_clean();
+            Navigation::$test_mode = $old_test_mode;
+        }
+        return $html;
+    }
+
+    /** A checker that cannot confirm the account says so and offers a way out,
+     * rather than leaving a page that asks for a confirmation it will not
+     * show. Reachable when the provider an account signed in with is no longer
+     * configured on the site. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_unconfirmable_account_is_not_a_dead_end() {
+        $qs = new MemoryQsession;
+        UserSecurityEvent::session_user_add($qs, $this->u_chair->email);
+        $code = $this->max_age_code($qs);
+
+        // signed in through a provider this site no longer configures
+        $sqreq = TestQreq::user_get($this->u_chair, [], $qs);
+        $use = UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_OAUTH)
+            ->set_subtype("departed");
+        $use->timestamp = Conf::$now - 1000;
+        $use->store($sqreq);
+
+        [$how, $url] = $this->authorize_confirm_with_cs($code, $qs);
+        xassert_eqq($how, "redirect");
+        // no authenticator to send them to, so back to the page
+        xassert_str_contains($url ?? "", "code=");
+
+        $html = $this->authorize_page_html(
+            ["code" => $code, "authemail" => $this->u_chair->email], $qs);
+        xassert_str_contains($html, "cannot be confirmed using this session");
+        xassert_str_contains($html, "Sign out");
+        // and it does not promise a confirmation it cannot offer
+        xassert(!str_contains($html, "asks you to confirm your account"));
+    }
+
+    /** A `login_hint` naming a signed-in account other than the one the request
+     * landed on is addressed by a redirect to that account's session slot, not
+     * refused as a selection the user has to make. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_prompt_none_addresses_a_hinted_account() {
+        $qs = new MemoryQsession;
+        UserSecurityEvent::session_user_add($qs, $this->u_chair->email);
+        $uindex = UserSecurityEvent::session_user_add($qs, $this->u_mgbaker->email);
+        xassert($uindex > 0);
+
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read",
+            "prompt" => "none", "login_hint" => $this->u_mgbaker->email,
+            // an OpenID parameter this endpoint ignores: it must survive the
+            // redirect, or the request the client sent is not the one replayed
+            "ui_locales" => "en-US"
+        ];
+        $onav = $this->push_navigation_query("authorize", $param);
+        $how = $detail = null;
+        try {
+            $qreq = TestQreq::user_get($this->u_chair, $param, $qs)->set_page("authorize");
+            [$how, $detail] = $this->authorize_go($qreq);
+        } finally {
+            Navigation::set($onav);
+        }
+
+        // not `account_selection_required` — the account was named, so the
+        // request is sent to its slot
+        xassert_eqq($how, "redirect");
+        xassert_str_contains($detail ?? "", "u/{$uindex}/authorize");
+        // and it carries the request's own parameters, not a chosen subset
+        xassert_str_contains($detail ?? "", "prompt=none");
+        xassert_str_contains($detail ?? "", "login_hint=");
+        xassert_str_contains($detail ?? "", "client_id=confclient");
+        xassert_str_contains($detail ?? "", "redirect_uri=");
+        xassert_str_contains($detail ?? "", "ui_locales=en-US");
+    }
+
+    /** A bot grant interrupted by a freshness challenge resumes as the bot.
+     * The grantee is replayed from the code, not from the request that landed
+     * the confirmation, so the account the chair chose is the one that ends up
+     * bound. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_confirmation_resumes_a_bot_consent() {
+        $bot = $this->make_bot("resumebot@" . Contact::BOT_EMAIL_DOMAIN);
+        $qs = new MemoryQsession;
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read",
+            "max_age" => "600"
+        ];
+
+        [$how, $code] = $this->authorize_run($param, $qs);
+        xassert_eqq($how, "code");
+
+        // the chair picks the bot, but nothing confirms this session yet
+        $vq = TestQreq::apply_user($this->u_chair, TestQreq::post([
+            "authconfirm" => 1, "code" => $code, "authbot" => $bot->email
+        ]), $qs)->set_page("authorize");
+        [$how, $detail] = $this->authorize_go($vq);
+        xassert_eqq($how, "code"); // JSON `login_required`, no ComponentSet here
+        $tok = TokenInfo::find($code, $this->conf);
+        xassert_eqq($tok ? $tok->data("consented_grantee") : null, $bot->email);
+
+        // the confirmation lands, and the interrupted consent finishes as the bot
+        $vq2 = TestQreq::user_get($this->u_chair, ["code" => $code], $qs)
+            ->set_page("authorize");
+        UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_PASSWORD,
+            UserSecurityEvent::REASON_REAUTH)->store($vq2);
+        [$how, $detail] = $this->authorize_go($vq2);
+        xassert_eqq($how, "redirect");
+        xassert_str_starts_with($detail ?? "", "https://conf1.example.com/cb");
+
+        $tok = TokenInfo::find($code, $this->conf);
+        xassert_neqq($tok, null);
+        if ($tok) {
+            xassert_eqq($tok->data("email"), $bot->email);
+            xassert_eqq($tok->data("authorized_by"), $this->u_chair->email);
+        }
+
+        $this->delete_bot($bot);
+    }
+
+    /** A consent interrupted by a freshness challenge resumes with the scope
+     * the person chose on the consent form, not the scope of whatever request
+     * lands the confirmation. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_confirmation_resumes_the_consented_scope() {
+        $qs = new MemoryQsession;
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "openid read",
+            "max_age" => "600"
+        ];
+        [$how, $code] = $this->authorize_run($param, $qs);
+        xassert_eqq($how, "code");
+
+        // the chair narrows the scope, but nothing confirms this session yet
+        $vq = TestQreq::apply_user($this->u_chair, TestQreq::post([
+            "authconfirm" => 1, "code" => $code, "scope" => "tag:read"
+        ]), $qs)->set_page("authorize");
+        [$how, $detail] = $this->authorize_go($vq);
+        xassert_eqq($how, "code");
+        $tok = TokenInfo::find($code, $this->conf);
+        xassert_eqq($tok ? $tok->data("consented_scope") : null, "tag:read");
+        xassert_eqq($tok ? $tok->data("email") : null, null);
+
+        // the confirmation lands carrying a wider scope, which is ignored
+        $vq2 = TestQreq::user_get($this->u_chair, ["code" => $code, "scope" => "read"], $qs)
+            ->set_page("authorize");
+        UserSecurityEvent::make($this->u_chair->email, UserSecurityEvent::TYPE_PASSWORD,
+            UserSecurityEvent::REASON_REAUTH)->store($vq2);
+        [$how, $detail] = $this->authorize_go($vq2);
+        xassert_eqq($how, "redirect");
+        xassert_str_starts_with($detail ?? "", "https://conf1.example.com/cb");
+        $tok = TokenInfo::find($code, $this->conf);
+        xassert_eqq($tok ? $tok->data("email") : null, $this->u_chair->email);
+        xassert_eqq($tok ? $tok->data("scope") : null, "openid tag:read");
+    }
+
+    /** A remembered authorization is for the account that granted it. A silent
+     * request must not be able to redirect it to another account by naming one:
+     * `authbot` is a parameter of the consent form's post, and replaying a
+     * consent must not re-read it from whatever query provoked the replay. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_silent_consent_cannot_name_a_different_grantee() {
+        $bot = $this->make_bot("silentbot@" . Contact::BOT_EMAIL_DOMAIN);
+        $qs = new MemoryQsession;
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read"
+        ];
+
+        // the chair grants this client for their own account
+        [$how, $code] = $this->authorize_run($param, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs);
+        xassert_eqq($how, "redirect");
+
+        // the same request, answered silently, but naming a bot as grantee
+        [$how, $detail] = $this->authorize_run(
+            $param + ["prompt" => "none", "authbot" => $bot->email], $qs);
+        xassert_eqq($how, "redirect");
+        parse_str(parse_url($detail ?? "", PHP_URL_QUERY) ?? "", $rparam);
+        xassert_eqq($rparam["error"] ?? null, null);
+        xassert_neqq($rparam["code"] ?? null, null);
+
+        // the code speaks as the chair, who consented — not as the bot
+        $tok = TokenInfo::find($rparam["code"] ?? "", $this->conf);
+        xassert_neqq($tok, null);
+        if ($tok) {
+            xassert_eqq($tok->data("email"), $this->u_chair->email);
+            xassert_eqq($tok->data("authorized_by"), null);
+        }
+
+        $this->delete_bot($bot);
+    }
+
+    /** An authorization this account already granted answers a later
+     * `prompt=none` request, which is the only way such a request can succeed
+     * on a site that would otherwise have to show a consent page. */
+    #[RequireClass("Uri\\Rfc3986\\Uri")]
+    function test_prompt_none_uses_a_recorded_authorization() {
+        $qs = new MemoryQsession;
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read"
+        ];
+
+        // nothing granted yet, so a silent request still has to ask
+        [$how, $detail] = $this->authorize_run($param + ["prompt" => "none"], $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "consent_required");
+
+        // grant it the ordinary way
+        [$how, $code] = $this->authorize_run($param, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs);
+        xassert_eqq($how, "redirect");
+        xassert_str_starts_with($detail ?? "", "https://conf1.example.com/cb");
+
+        // the same request is now answered without showing anything
+        [$how, $detail] = $this->authorize_run($param + ["prompt" => "none"], $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), null);
+        xassert_str_contains($detail ?? "", "code=");
+
+        // a wider scope is not what was agreed to
+        [$how, $detail] = $this->authorize_run(
+            ["scope" => "read paper:write"] + $param + ["prompt" => "none"], $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "consent_required");
+
+        // the stored consent scope is canonical (`review:read tag:read`), so a
+        // `prompt=none` request that spells the same scope in another order
+        // (`tag:read review:read`) must still match it. The consent form posts
+        // its prefilled scope field, which is what canonicalizes the stored
+        // scope.
+        $nc = ["scope" => "tag:read review:read"] + $param;
+        [$how, $code] = $this->authorize_run($nc, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs, ["scope" => "tag:read review:read"]);
+        xassert_eqq($how, "redirect");
+        [$how, $detail] = $this->authorize_run($nc + ["prompt" => "none"], $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), null);
+        xassert_str_contains($detail ?? "", "code=");
+
+        // a grant mixing general rights with a submission selector answers a
+        // silent request for the same scope
+        $ms = ["scope" => "read paper:write#5"] + $param;
+        [$how, $code] = $this->authorize_run($ms, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs, ["scope" => "read paper:write#5"]);
+        xassert_eqq($how, "redirect");
+        [$how, $detail] = $this->authorize_run($ms + ["prompt" => "none"], $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), null);
+        xassert_str_contains($detail ?? "", "code=");
+
+        // a recorded `openid all` grant answers a silent `openid all` request,
+        // and the code it returns still carries `openid`
+        $oa = ["scope" => "openid all"] + $param;
+        [$how, $code] = $this->authorize_run($oa, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs, ["scope" => "all"]);
+        xassert_eqq($how, "redirect");
+        xassert_eqq(TokenInfo::find($code, $this->conf)->data("scope"), "openid all");
+        [$how, $detail] = $this->authorize_run($oa + ["prompt" => "none"], $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), null);
+        xassert(preg_match('/[?&]code=([^&]*)/', $detail ?? "", $m));
+        xassert_eqq(TokenInfo::find(urldecode($m[1]), $this->conf)->data("scope"), "openid all");
+
+        // a grant confirmed without a posted scope field is recorded
+        // canonically too, so a silent request that orders or repeats its
+        // OIDC scopes differently still matches it
+        $pr = ["scope" => "profile openid tag:read"] + $param;
+        [$how, $code] = $this->authorize_run($pr, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs);
+        xassert_eqq($how, "redirect");
+        xassert_eqq(TokenInfo::find($code, $this->conf)->data("scope"), "openid profile tag:read");
+        foreach (["openid profile tag:read", "tag:read profile openid profile"] as $sc) {
+            [$how, $detail] = $this->authorize_run(["scope" => $sc] + $param + ["prompt" => "none"], $qs);
+            xassert_eqq($how, "redirect");
+            xassert_eqq($this->redirect_error($detail), null, $sc);
+            xassert_str_contains($detail ?? "", "code=");
+        }
+    }
+
+    /** `prompt=none` forbids interaction, so each condition the consent page
+     * would have resolved has to come back named, not lumped together. */
+    function test_prompt_none_names_what_is_missing() {
+        $param = [
+            "client_id" => "confclient",
+            "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read",
+            "prompt" => "none"
+        ];
+
+        // nobody signed in
+        [$how, $detail] = $this->authorize_outcome($param, $this->u_empty);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "login_required");
+
+        // signed in, but this site never recorded consent, so the page is
+        // still needed
+        [$how, $detail] = $this->authorize_outcome($param, $this->u_chair);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "consent_required");
+
+        // signed in, but not recently enough for the window asked for
+        [$how, $detail] = $this->authorize_outcome($param + ["max_age" => "600"], $this->u_chair);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "login_required");
+
+        // a hint for an account this session cannot serve is the same as
+        // having no account at all
+        [$how, $detail] = $this->authorize_outcome(
+            $param + ["login_hint" => $this->u_mgbaker->email], $this->u_chair);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "login_required");
+
+        // `none` rules out interaction, so it cannot ask for some
+        [$how, $detail] = $this->authorize_outcome(
+            ["prompt" => "none login"] + $param, $this->u_chair);
+        xassert_eqq($how, "redirect");
+        xassert_eqq($this->redirect_error($detail), "invalid_request");
     }
 
     /** An ID token is proof for this site only if this site is its whole
@@ -991,6 +1835,18 @@ class Authorize_Tester {
             $this->u_chair, ["scope" => "read", "client_id" => self::OIDC_CLIENT_ID]);
         xassert_eqq($jr, null);
         xassert_eqq($this->_last_error, "invalid_scope");
+
+        // other OpenID Connect scopes without `openid` are refused too...
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI,
+            $this->u_chair, ["scope" => "email profile", "client_id" => self::OIDC_CLIENT_ID]);
+        xassert_eqq($jr, null);
+        xassert_eqq($this->_last_error, "invalid_scope");
+
+        // ...but `openid` in any position, with others, signs in
+        $jr = $this->metadata_document_result(self::MDOC_REDIRECT_URI,
+            $this->u_chair, ["scope" => "profile email openid", "client_id" => self::OIDC_CLIENT_ID]);
+        xassert_neqq($jr, null);
+        xassert_neqq($jr->id_token ?? null, null);
     }
 
     #[RequireClass("Uri\\Rfc3986\\Uri")]
@@ -1442,19 +2298,20 @@ class Authorize_Tester {
      * binding that user's account to a client the attacker controls
      * (RFC 6749 §10.12). */
     function test_authconfirm_requires_valid_post() {
-        // an attacker registers a client and, from their own account, obtains
-        // a code that is not yet bound to anyone
+        // a client is registered, and one browser session obtains a code that
+        // is not yet bound to anyone. Mint and confirm share that session.
         $jr = call_api("=oauthregister", $this->u_empty,
             TestQreq::post_json(["redirect_uris" => ["https://dro.com/"]]));
         xassert(isset($jr->client_id));
-        $qreq = TestQreq::user_get($this->u_mgbaker, [
+        $qs = new MemoryQsession;
+        $qreq = TestQreq::user_get($this->u_chair, [
             "client_id" => $jr->client_id, "redirect_uri" => "https://dro.com/",
             "response_type" => "code", "state" => "S", "scope" => "read"
-        ])->set_page("authorize");
+        ], $qs)->set_page("authorize");
         Qrequest::set_main_request($qreq);
         $code = null;
         try {
-            (new HotCRP\Authorize_Page($this->u_mgbaker, $qreq))->go();
+            (new HotCRP\Authorize_Page($this->u_chair, $qreq))->go();
         } catch (JsonCompletion $jc) {
             $code = $jc->result->content["code"] ?? null;
         }
@@ -1463,22 +2320,22 @@ class Authorize_Tester {
             return;
         }
 
-        // a signed-in victim is made to issue a GET: no redirect, no binding
-        $vq = TestQreq::user_get($this->u_chair, ["authconfirm" => 1, "code" => $code])
+        // a GET in that same session does not confirm: no redirect, no binding
+        $vq = TestQreq::user_get($this->u_chair, ["authconfirm" => 1, "code" => $code], $qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert(!$this->authconfirm_redirects($vq));
         xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), null);
 
         // nor does a POST without the form's post token
-        $vq = TestQreq::apply_user($this->u_chair, TestQreq::unapproved_post(["authconfirm" => 1, "code" => $code]))
+        $vq = TestQreq::apply_user($this->u_chair, TestQreq::unapproved_post(["authconfirm" => 1, "code" => $code]), $qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert(!$this->authconfirm_redirects($vq));
         xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), null);
 
         // the real form, which posts with a token, still works
-        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         $url = null;
@@ -1491,6 +2348,59 @@ class Authorize_Tester {
         xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), "chair@_.com");
     }
 
+    /** A code is bound to the browser session that created it: another session,
+     * even a signed-in one, can neither view nor confirm it. Otherwise a
+     * signed-in user could mint a code and relay its first-party link to a
+     * victim, whose one consent click would bind the victim to the attacker's
+     * code (OAuth authorization-code fixation). */
+    function test_code_bound_to_minting_session() {
+        $client_id = $this->register_client("https://dall.com/");
+        $args = [
+            "client_id" => $client_id, "redirect_uri" => "https://dall.com/",
+            "response_type" => "code", "state" => "S", "scope" => "read"
+        ];
+
+        // session A mints a code
+        $qsA = new MemoryQsession;
+        $qreq = TestQreq::user_get($this->u_chair, $args, $qsA)->set_page("authorize");
+        Qrequest::set_main_request($qreq);
+        $code = null;
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $qreq))->go();
+        } catch (JsonCompletion $jc) {
+            $code = $jc->result->content["code"] ?? null;
+        }
+        xassert_neqq($code, null);
+
+        // a different signed-in session cannot even view the code's consent page
+        $qsB = new MemoryQsession;
+        $gqB = TestQreq::user_get($this->u_chair, ["code" => $code], $qsB)->set_page("authorize");
+        Qrequest::set_main_request($gqB);
+        xassert(!$this->authconfirm_redirects($gqB));
+        xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), null);
+
+        // nor can it confirm the code with a valid POST: no binding, no redirect
+        $vqB = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $qsB)
+            ->set_page("authorize");
+        Qrequest::set_main_request($vqB);
+        xassert(!$this->authconfirm_redirects($vqB));
+        xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), null);
+
+        // the minting session still can confirm it
+        $vqA = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $qsA)
+            ->set_page("authorize");
+        Qrequest::set_main_request($vqA);
+        $url = null;
+        try {
+            (new HotCRP\Authorize_Page($this->u_chair, $vqA))->go();
+        } catch (Redirection $redir) {
+            $url = $redir->url;
+        }
+        xassert_neqq($url, null);
+        xassert_str_starts_with($url ?? "", "https://dall.com/");
+        xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), "chair@_.com");
+    }
+
     /** The consent form's scope field limits what the client asked for, as its
      * description says; it cannot widen the grant, and it is user input. */
     function test_authconfirm_scope_limits_only() {
@@ -1498,19 +2408,20 @@ class Authorize_Tester {
             $jr = call_api("=oauthregister", $this->u_empty,
                 TestQreq::post_json(["redirect_uris" => ["https://dall.com/"]]));
             xassert(isset($jr->client_id));
-            $qreq = TestQreq::user_get($this->u_mgbaker, [
+            $qs = new MemoryQsession;
+            $qreq = TestQreq::user_get($this->u_chair, [
                 "client_id" => $jr->client_id, "redirect_uri" => "https://dall.com/",
                 "response_type" => "code", "state" => "S", "scope" => "read"
-            ])->set_page("authorize");
+            ], $qs)->set_page("authorize");
             Qrequest::set_main_request($qreq);
             $code = null;
             try {
-                (new HotCRP\Authorize_Page($this->u_mgbaker, $qreq))->go();
+                (new HotCRP\Authorize_Page($this->u_chair, $qreq))->go();
             } catch (JsonCompletion $jc) {
                 $code = $jc->result->content["code"] ?? null;
             }
             xassert_neqq($code, null);
-            $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "scope" => $form_scope])
+            $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "scope" => $form_scope], $qs)
                 ->set_page("authorize");
             Qrequest::set_main_request($vq);
             $err = $url = null;
@@ -1580,7 +2491,7 @@ class Authorize_Tester {
             $href = html_entity_decode($m[1]);
         }
         xassert_neqq($href, null);
-        xassert_eqq($this->redirect_error($href ?? ""), "interaction_required");
+        xassert_eqq($this->redirect_error($href ?? ""), "consent_required");
 
         // a client this site's administrator registered names a redirect URI
         // this site chose to trust, so it is answered either way
@@ -1593,15 +2504,14 @@ class Authorize_Tester {
         [$how, $detail] = $this->authorize_outcome($cparam, $this->u_empty);
         xassert_eqq($how, "redirect");
         xassert_str_starts_with($detail ?? "", "https://conf1.example.com/cb");
-        xassert_eqq($this->redirect_error($detail), "interaction_required");
+        xassert_eqq($this->redirect_error($detail), "login_required");
 
         // and the user can authorize the bounce themselves: Cancel on the
         // consent form is a CSRF-protected POST, so it answers the client
         unset($param["prompt"]);
         [$how, $code] = $this->authorize_outcome($param, $this->u_chair);
         xassert_eqq($how, "code");
-        $vq = TestQreq::user_post($this->u_chair,
-            ["authconfirm" => 1, "code" => $code, "cancel" => 1])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "cancel" => 1], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         $url = null;
@@ -1612,6 +2522,24 @@ class Authorize_Tester {
         }
         xassert_str_starts_with($url ?? "", "https://dro.com/");
         xassert_eqq($this->redirect_error($url ?? ""), "access_denied");
+
+        // once this session has consented to the client at this redirect URI,
+        // the user has vouched for the destination, so a silent request's
+        // error goes back to the client
+        $qs = new MemoryQsession;
+        unset($param["prompt"]);
+        [$how, $code] = $this->authorize_run($param, $qs);
+        xassert_eqq($how, "code");
+        [$how, $detail] = $this->authorize_confirm($code, $qs);
+        xassert_eqq($how, "redirect");
+        [$how, $detail] = $this->authorize_run(["scope" => "read paper:write", "prompt" => "none"] + $param, $qs);
+        xassert_eqq($how, "redirect");
+        xassert_str_starts_with($detail ?? "", "https://dro.com/");
+        xassert_eqq($this->redirect_error($detail ?? ""), "consent_required");
+        // ...but not for another self-registered client
+        $client_id = $this->register_client("https://dall.com/");
+        [$how, ] = $this->authorize_run(["client_id" => $client_id, "redirect_uri" => "https://dall.com/", "prompt" => "none"] + $param, $qs);
+        xassert_eqq($how, "page");
     }
 
     /** An authorization code is a database row, so an anonymous request must
@@ -1682,14 +2610,14 @@ class Authorize_Tester {
         };
 
         // the grant
-        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert_eqq($status($vq), 303);
 
         // and the error responses that answer the same form
         [$how, $code] = $this->authorize_outcome($param, $this->u_chair);
-        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "cancel" => 1])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "cancel" => 1], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert_eqq($status($vq), 303);
@@ -1761,7 +2689,7 @@ class Authorize_Tester {
         ], $this->u_chair);
         xassert_eqq($how, "code");
 
-        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "cancel" => 1])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "cancel" => 1], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         $url = null;
@@ -1796,7 +2724,7 @@ class Authorize_Tester {
         if ($form_scope !== null) {
             $param["scope"] = $form_scope;
         }
-        $vq = TestQreq::user_post($this->u_chair, $param)
+        $vq = TestQreq::user_post($this->u_chair, $param, $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         $old_test_mode = Navigation::$test_mode;
@@ -1913,6 +2841,42 @@ class Authorize_Tester {
         xassert(!TokenScope::scope_str_contains($scope, "write"));
         $jr = $this->redeem_code($rcode, $ruri);
         xassert_eqq($this->find_token($jr->access_token)->data("scope"), "read");
+
+        // full API scope keeps sign-in too, whichever word spells it
+        foreach (["openid all" => "all", "openid *" => "*", "openid admin" => "admin",
+                  "openid email profile all" => "all"] as $req => $field) {
+            $param["scope"] = $req;
+            [$how, $code] = $this->authorize_outcome($param, $this->u_chair);
+            xassert_eqq($how, "code");
+            $rcode = $this->confirm_code($code, $field);
+            $scope = TokenInfo::find($code, $this->conf)->data("scope");
+            xassert_eqq($scope, str_replace(" {$field}", " all", $req));
+            $jr = $this->redeem_code($rcode, $ruri);
+            xassert(isset($jr->id_token));
+            xassert_eqq($this->find_token($jr->access_token)->data("scope"), "all");
+        }
+
+        // ...and narrowing full scope keeps it as well
+        $param["scope"] = "openid all";
+        [$how, $code] = $this->authorize_outcome($param, $this->u_chair);
+        $rcode = $this->confirm_code($code, "read");
+        xassert_eqq(TokenInfo::find($code, $this->conf)->data("scope"), "openid read");
+        $jr = $this->redeem_code($rcode, $ruri);
+        xassert(isset($jr->id_token));
+        xassert_eqq($this->find_token($jr->access_token)->data("scope"), "read");
+
+        // the code exchange takes no `scope`: one sent cannot widen the grant
+        $param["scope"] = "openid read";
+        [$how, $code] = $this->authorize_outcome($param, $this->u_chair);
+        $rcode = $this->confirm_code($code, "read");
+        $jr = call_api("=oauthtoken", $this->u_empty, TestQreq::post([
+            "grant_type" => "authorization_code", "code" => $rcode,
+            "redirect_uri" => $ruri, "scope" => "all",
+            "client_id" => $this->_last_client_id,
+            "client_secret" => $this->_last_client_secret
+        ]));
+        xassert(isset($jr->access_token));
+        xassert_eqq($this->find_token($jr->access_token)->data("scope"), "read");
     }
 
     /** Users reload and go back. None of that may cost them a working grant.
@@ -1962,6 +2926,20 @@ class Authorize_Tester {
         xassert(!!$this->find_token($atok)->is_active());
     }
 
+    function test_namedsearch_needs_scope() {
+        $otok = $this->dynamic_client_token("https://dall.com/", $this->u_chair, ["scope" => "openid"]);
+        xassert_eqq($otok->data("scope"), "none");
+        $jr = call_api_result("namedsearch", $otok, []);
+        xassert_eqq($jr->response_code(), 403);
+        xassert_str_contains($jr->header("WWW-Authenticate") ?? "", 'scope="other:read"');
+        xassert_eqq(call_api_result("namedformula", $otok, [])->response_code(), 403);
+
+        // a token that carries `other:read` reads them
+        $rtok = $this->dynamic_client_token("https://dall.com/", $this->u_chair, ["scope" => "other:read"]);
+        xassert_eqq(call_api_result("namedsearch", $rtok, [])->response_code(), 200);
+        xassert_eqq(call_api_result("namedformula", $rtok, [])->response_code(), 200);
+    }
+
     /** Changing conference settings is administration, not writing, so it
      * needs `settings:admin`. `write` keeps meaning “write anything I can
      * write”, and still reads settings. */
@@ -1969,20 +2947,20 @@ class Authorize_Tester {
         $wtok = $this->dynamic_client_token("https://dall.com/", $this->u_chair, ["scope" => "write"]);
         xassert_eqq(call_api_result("settings", $wtok, [])->response_code(), 200);
         $jr = call_api_result("=settings", $wtok, []);
-        xassert_eqq($jr->response_code(), 401);
+        xassert_eqq($jr->response_code(), 403);
         // the refusal names the scope to ask for
         xassert_str_contains($jr->header("WWW-Authenticate") ?? "", 'scope="settings:admin"');
 
         $atok = $this->dynamic_client_token("https://dall.com/", $this->u_chair, ["scope" => "settings:admin"]);
-        xassert_neqq(call_api_result("=settings", $atok, [])->response_code(), 401);
+        xassert_neqq(call_api_result("=settings", $atok, [])->response_code(), 403);
 
         // settings is its own family: administering everything else is not
         // enough, and reading is a separate grant from `read`
         $otok = $this->dynamic_client_token("https://dall.com/", $this->u_chair, ["scope" => "other:admin"]);
-        xassert_eqq(call_api_result("=settings", $otok, [])->response_code(), 401);
+        xassert_eqq(call_api_result("=settings", $otok, [])->response_code(), 403);
         $rtok = $this->dynamic_client_token("https://dall.com/", $this->u_chair, ["scope" => "settings:read"]);
         xassert_eqq(call_api_result("settings", $rtok, [])->response_code(), 200);
-        xassert_eqq(call_api_result("=settings", $rtok, [])->response_code(), 401);
+        xassert_eqq(call_api_result("=settings", $rtok, [])->response_code(), 403);
     }
 
     /** A 401 has to say how to authenticate (RFC 6750 §3). This is the 401 a
@@ -1996,7 +2974,7 @@ class Authorize_Tester {
         Qrequest::set_main_request($qreq);
         $jr = null;
         try {
-            initialize_user($qreq, ["bearer" => true]);
+            initialize_user($qreq, ["bearer" => true, "viewer" => false]);
         } catch (JsonCompletion $jc) {
             $jr = $jc->result;
         }
@@ -2285,7 +3263,54 @@ class Authorize_Tester {
         // ...and real selectors are unaffected
         xassert_eqq(TokenScope::unparse(TokenScope::parse("all#12", null)), "all#12");
         xassert_eqq(TokenScope::unparse(TokenScope::parse("submission:admin#r1", null)), "submission:admin#r1");
-        xassert_eqq(TokenScope::unparse(TokenScope::parse("openid read#3", null)), "read#3");
+        // an OIDC scope grants no API access, but is retained by the round-trip
+        xassert_eqq(TokenScope::unparse(TokenScope::parse("openid read#3", null)), "openid read#3");
+    }
+
+    /** OpenID Connect scopes unparse in a fixed order, once each, so equal
+     * requests spelled differently compare equal. */
+    function test_oidc_scopes_are_canonical() {
+        $canon = function ($s) {
+            return TokenScope::unparse(TokenScope::parse($s, null));
+        };
+        xassert_eqq($canon("profile openid read"), "openid profile read");
+        xassert_eqq($canon("read profile openid"), "openid profile read");
+        xassert_eqq($canon("openid openid all"), "openid all");
+        xassert_eqq($canon("phone address profile email openid"),
+                    "openid email profile address phone");
+        xassert_eqq($canon("email profile email"), "email profile");
+        xassert_eqq($canon("email"), "email");
+        xassert_eqq($canon("openid none"), "openid");
+        xassert_eqq($canon("profile * openid"), "openid profile all");
+        xassert_eqq($canon("admin email"), "email all");
+        xassert_eqq($canon("profile openid read#3"), "openid profile read#3");
+
+        // full API scope with no OIDC scope is still null
+        xassert_eqq(TokenScope::parse("all", null), null);
+        xassert_eqq(TokenScope::parse("* admin", null), null);
+
+        // OIDC scopes grant no API access
+        $ts = TokenScope::parse("openid email profile address phone", null);
+        xassert(!$ts->allows_some(TokenScope::S_SUB_READ));
+        xassert_eqq($ts->any_bits(), 0);
+
+        // intersection takes OIDC scopes from the left operand, canonically
+        xassert_eqq(TokenScope::unparse(TokenScope::intersect(
+            TokenScope::parse("profile openid all", null), "read")), "openid profile read");
+        xassert_eqq(TokenScope::unparse(TokenScope::intersect(
+            TokenScope::parse("read", null), "openid email read")), "read");
+        // ...and removing them leaves the API scope
+        xassert_eqq(TokenScope::unparse(
+            TokenScope::parse("phone openid read", null)->without_oidc()), "read");
+        xassert_eqq(TokenScope::unparse(
+            TokenScope::parse("email openid", null)->without_oidc()), "none");
+
+        // every OIDC scope splits out as OIDC
+        xassert_eqq(TokenScope::scope_str_split_openid("read email openid profile address phone all"),
+                    ["email openid profile address phone", "read all"]);
+        xassert(TokenScope::scope_str_all_openid("openid email profile"));
+        xassert(TokenScope::scope_str_all_openid("phone"));
+        xassert(!TokenScope::scope_str_all_openid("openid read"));
     }
 
     /** A disabled provider hides its sign-in button. It must not still
@@ -2369,11 +3394,12 @@ class Authorize_Tester {
         }
     }
 
-    /** Confirming an account means the user proved it just now. The provider
-     * must say when it authenticated them, and the window must be fixed when
-     * the request starts — otherwise a silent SSO round trip, with a `max_age`
-     * of the attacker's choosing, satisfies the gate that guards email changes
-     * and password changes. */
+    /** Confirming an account means the user proved it just now. A provider
+     * that says it authenticated them recently confirms it; the window is
+     * fixed when the request starts, so a `max_age` of the attacker's choosing
+     * can't widen it. A provider that doesn't say when (some never sign users
+     * in again on request) still vouches for an account that has no password,
+     * as a round trip; an account with a password must use it instead. */
     function test_reauth_requires_a_fresh_auth_time() {
         $this->conf->set_opt("oAuthProviders", [(object) [
             "name" => "p", "client_id" => "C", "client_secret" => "S",
@@ -2385,7 +3411,7 @@ class Authorize_Tester {
         $this->conf->refresh_settings();
         $old = HotCRP\OAuth_Page::$fetch_function;
 
-        /** @return array{bool,array} */
+        /** @return array{bool,array,?bool} */
         $run = function ($startargs, $auth_time) {
             $q1 = TestQreq::user_get($this->u_chair, $startargs + ["reauth" => 1])
                 ->set_page("oauth");
@@ -2415,35 +3441,478 @@ class Authorize_Tester {
             $oap = new HotCRP\OAuth_Page($this->u_chair, $q2);
             $oap->response();
             unset($_COOKIE["hotcrp-oauth-nonce-" . $ap["nonce"]]);
-            return [$oap->success, $ap];
+            $rt = null;
+            foreach (UserSecurityEvent::session_list_by_email($qs, "chair@_.com", true) as $use) {
+                if ($use->reason === UserSecurityEvent::REASON_REAUTH) {
+                    $rt = $use->roundtrip_only;
+                    break;
+                }
+            }
+            return [$oap->success, $ap, $rt];
         };
 
         try {
             // the request asks the provider to authenticate again and to say when
-            [$ok, $ap] = $run(["max_age" => "600"], Conf::$now);
+            [$ok, $ap, $rt] = $run(["max_age" => "600"], Conf::$now);
             xassert($ok);
+            xassert($rt === false);
             xassert_eqq($ap["prompt"] ?? null, "login");
             xassert_eqq($ap["max_age"] ?? null, "600");
 
-            // a provider that omits `auth_time` confirms nothing
-            [$ok, ] = $run(["max_age" => "600"], null);
-            xassert(!$ok);
+            // without a password, a provider that omits `auth_time`, or gives
+            // a stale one, confirms the account as a round trip
+            xassert(!$this->u_chair->can_use_password());
+            [$ok, , $rt] = $run(["max_age" => "600"], null);
+            xassert($ok);
+            xassert($rt === true);
+            [$ok, , $rt] = $run(["max_age" => "600"], Conf::$now - 4000);
+            xassert($ok);
+            xassert($rt === true);
 
-            // nor does a stale one
-            [$ok, ] = $run(["max_age" => "600"], Conf::$now - 4000);
-            xassert(!$ok);
-
-            // and the window cannot be widened from the request
-            [$ok, $ap] = $run(["max_age" => "999999"], Conf::$now - 100000);
+            // the window cannot be widened from the request
+            [, $ap, $rt] = $run(["max_age" => "999999"], Conf::$now - 100000);
             xassert_eqq($ap["max_age"] ?? null, "3600");
-            xassert(!$ok);
+            xassert($rt === true);
 
             // omitting `max_age` gives the tightest window, not the loosest
-            [$ok, $ap] = $run([], Conf::$now - 100000);
+            [, $ap, $rt] = $run([], Conf::$now - 100000);
             xassert_eqq($ap["max_age"] ?? null, "0");
+            xassert($rt === true);
+
+            // with a password, only a recent `auth_time` confirms
+            $this->u_chair->change_password("reauth-test-password");
+            xassert($this->conf->fresh_user_by_email("chair@_.com")->can_use_password());
+            [$ok, ] = $run(["max_age" => "600"], null);
             xassert(!$ok);
+            [$ok, ] = $run(["max_age" => "600"], Conf::$now - 4000);
+            xassert(!$ok);
+            [$ok, , $rt] = $run(["max_age" => "600"], Conf::$now - 60);
+            xassert($ok);
+            xassert($rt === false);
         } finally {
             HotCRP\OAuth_Page::$fetch_function = $old;
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+            $this->u_chair->change_password("");
+        }
+    }
+
+    /** An account whose password is only in the contact database, as is
+     * typical, still has a password: a provider round trip that doesn't say
+     * when the user authenticated can't confirm it. */
+    function test_reauth_sees_contactdb_password() {
+        $cdb = $this->conf->contactdb();
+        if (!$cdb) {
+            return;
+        }
+        $email = "cdbonly.reauth@_.com";
+        $this->conf->qe("delete from ContactInfo where email=?", $email);
+        Dbl::qe($cdb, "delete from ContactInfo where email=?", $email);
+        Dbl::qe($cdb, "insert into ContactInfo set email=?, firstName='Cdb', lastName='Only', password=''", $email);
+        $this->conf->invalidate_caches("cdb");
+        $this->set_test_oauth_provider();
+        $old = HotCRP\OAuth_Page::$fetch_function;
+        try {
+            $this->conf->cdb_user_by_email($email)->change_password("cdb-only-password");
+            $this->conf->invalidate_caches("cdb");
+            xassert(!$this->conf->user_by_email($email));
+            xassert($this->conf->cdb_user_by_email($email)->can_use_password());
+
+            $viewer = Contact::make_email($this->conf, $email);
+            $q1 = TestQreq::user_get($viewer, ["authtype" => "p", "reauth" => 1, "max_age" => "600"])
+                ->set_page("oauth");
+            $qs = $q1->qsession();
+            Qrequest::set_main_request($q1);
+            $auth = null;
+            try {
+                (new HotCRP\OAuth_Page($viewer, $q1))->start();
+            } catch (Redirection $redir) {
+                $auth = $redir->url;
+            }
+            parse_str(parse_url($auth ?? "", PHP_URL_QUERY) ?? "", $ap);
+            HotCRP\OAuth_Page::$fetch_function = function ($authi, $param) use ($ap, $email) {
+                $c = ["iss" => "https://idp.example.com", "aud" => "C",
+                      "exp" => Conf::$now + 600, "iat" => Conf::$now,
+                      "nonce" => $ap["nonce"], "sub" => "u1",
+                      "email" => $email, "email_verified" => true];
+                return [200, json_encode(["id_token" => HotCRP\JWTParser::make_plaintext((object) $c)])];
+            };
+            $_COOKIE["hotcrp-oauth-nonce-" . $ap["nonce"]] = "1";
+            $q2 = TestQreq::user_get($viewer, ["code" => "C", "state" => $ap["state"]], $qs)
+                ->set_page("oauth");
+            Qrequest::set_main_request($q2);
+            $oap = new HotCRP\OAuth_Page($viewer, $q2);
+            $oap->response();
+            unset($_COOKIE["hotcrp-oauth-nonce-" . $ap["nonce"]]);
+            xassert(!$oap->success);
+        } finally {
+            HotCRP\OAuth_Page::$fetch_function = $old;
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+            Dbl::qe($cdb, "delete from ContactInfo where email=?", $email);
+            $this->conf->invalidate_caches("cdb");
+        }
+    }
+
+    /** A signed-out user asked for a fresh sign-in (`prompt=login`, `max_age`)
+     * carries that request to the sign-in page, whose provider buttons pass it
+     * to the provider. */
+    function test_signin_carries_requested_freshness() {
+        $param = [
+            "client_id" => "confclient", "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read"
+        ];
+        $signin_max_age = function ($param) {
+            [$how, $url] = $this->authorize_outcome($param, $this->u_empty);
+            xassert_eqq($how, "redirect");
+            xassert_str_contains($url ?? "", "signin");
+            parse_str(parse_url($url ?? "", PHP_URL_QUERY) ?? "", $q);
+            return $q["max_age"] ?? null;
+        };
+        xassert_eqq($signin_max_age($param + ["prompt" => "login"]), "0");
+        xassert_eqq($signin_max_age($param + ["max_age" => "600"]), "600");
+        xassert_eqq($signin_max_age($param), null);
+
+        $this->conf->set_opt("oAuthProviders", [(object) [
+            "name" => "p", "client_id" => "C", "client_secret" => "S",
+            "issuer" => "https://idp.example.com", "button_html" => "Provider",
+            "auth_uri" => "https://idp.example.com/auth",
+            "token_uri" => "https://idp.example.com/token",
+            "redirect_uri" => "https://conf.example.com/oauth"
+        ]]);
+        $this->conf->refresh_settings();
+        try {
+            $qreq = TestQreq::user_get($this->u_empty, ["max_age" => "0"])->set_page("signin");
+            ob_start();
+            (new Signin_Page)->print_signin_form_oauth($this->u_empty, $qreq);
+            $html = ob_get_clean();
+            xassert_str_contains($html, "max_age=0");
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** Every sign-in asks the provider for `auth_time` through the `claims`
+     * parameter, which some providers require. */
+    function test_oauth_requests_auth_time_claim() {
+        $this->set_test_oauth_provider();
+        $provider_params = function ($user, $startargs) {
+            $qreq = TestQreq::user_get($user, $startargs + ["authtype" => "p"])->set_page("oauth");
+            Qrequest::set_main_request($qreq);
+            $url = null;
+            try {
+                (new HotCRP\OAuth_Page($user, $qreq))->start();
+            } catch (Redirection $redir) {
+                $url = $redir->url;
+            }
+            parse_str(parse_url($url ?? "", PHP_URL_QUERY) ?? "", $ap);
+            return $ap;
+        };
+        try {
+            $want = ["id_token" => ["auth_time" => ["essential" => true]]];
+            // every sign-in asks, including an ordinary one
+            $ap = $provider_params($this->u_empty, []);
+            xassert_eqq(json_decode($ap["claims"] ?? "null", true), $want);
+            // as does a sign-in that must be fresh
+            $ap = $provider_params($this->u_empty, ["max_age" => "0"]);
+            xassert_eqq(json_decode($ap["claims"] ?? "null", true), $want);
+            // and so does a reauthentication
+            $ap = $provider_params($this->u_chair, ["reauth" => 1, "max_age" => "600"]);
+            xassert_eqq($ap["prompt"] ?? null, "login");
+            xassert_eqq(json_decode($ap["claims"] ?? "null", true), $want);
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** Confirming an account goes to the provider the user signed in with,
+     * not the site's first provider. */
+    function test_oauth_reauth_uses_signin_provider() {
+        $provider = function ($name) {
+            return (object) [
+                "name" => $name, "client_id" => "C{$name}", "client_secret" => "S",
+                "issuer" => "https://id{$name}.example.com",
+                "auth_uri" => "https://id{$name}.example.com/auth",
+                "token_uri" => "https://id{$name}.example.com/token",
+                "redirect_uri" => "https://conf.example.com/oauth"
+            ];
+        };
+        $this->conf->set_opt("oAuthProviders", [$provider("p"), $provider("q")]);
+        $this->conf->refresh_settings();
+        $u = $this->u_chair;
+        try {
+            xassert(!$u->can_use_password());
+            $qs = new MemoryQsession;
+            UserSecurityEvent::session_user_add($qs, $u->email);
+            $qreq = TestQreq::user_get($u, [], $qs)->set_page("profile");
+            Qrequest::set_main_request($qreq);
+            $use = UserSecurityEvent::make($u->email, UserSecurityEvent::TYPE_OAUTH)
+                ->set_subtype("q");
+            $use->timestamp = Conf::$now - 1000;
+            $use->store($qreq);
+
+            $ac = $u->authentication_checker($qreq, "profile_security");
+            $url = $ac->authenticator_url("/x") ?? "";
+            parse_str(parse_url($url, PHP_URL_QUERY) ?? "", $param);
+            xassert_eqq($param["reauth"] ?? null, "1");
+            xassert_eqq($param["authtype"] ?? null, "q");
+            ob_start();
+            $ac->print();
+            xassert_str_contains(ob_get_clean(), "authtype=q");
+
+            // following that link starts sign-in at provider `q`
+            $oqreq = TestQreq::user_get($u, $param, $qs)->set_page("oauth");
+            Qrequest::set_main_request($oqreq);
+            $dest = null;
+            try {
+                (new HotCRP\OAuth_Page($u, $oqreq))->start();
+            } catch (Redirection $redir) {
+                $dest = $redir->url;
+            }
+            xassert_str_starts_with($dest ?? "", "https://idq.example.com/auth?");
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** Sign in through a test OAuth provider "p" as `$email`, in session `$qs`
+     * (a new one if null).
+     * @param string $email
+     * @param array<string,string> $startargs
+     * @param ?int $auth_time
+     * @param ?Qsession $qs
+     * @param array<string,mixed> $claims ID token claims to add (null removes)
+     * @return array{bool,array,Qsession,MessageItem|list<MessageItem>|null} */
+    private function oauth_signin($email, $startargs, $auth_time, $qs = null, $claims = []) {
+        $q1 = TestQreq::user_get($this->u_empty, $startargs + ["authtype" => "p"], $qs)
+            ->set_page("oauth");
+        $qs = $q1->qsession();
+        Qrequest::set_main_request($q1);
+        $auth = null;
+        try {
+            (new HotCRP\OAuth_Page($this->u_empty, $q1))->start();
+        } catch (Redirection $redir) {
+            $auth = $redir->url;
+        }
+        parse_str(parse_url($auth ?? "", PHP_URL_QUERY) ?? "", $ap);
+        $old = HotCRP\OAuth_Page::$fetch_function;
+        HotCRP\OAuth_Page::$fetch_function = function ($authi, $param) use ($ap, $auth_time, $email, $claims) {
+            $c = ["iss" => "https://idp.example.com", "aud" => "C",
+                  "exp" => Conf::$now + 600, "iat" => Conf::$now,
+                  "nonce" => $ap["nonce"], "sub" => "u1",
+                  "email" => $email, "email_verified" => true];
+            if ($auth_time !== null) {
+                $c["auth_time"] = $auth_time;
+            }
+            foreach ($claims as $k => $v) {
+                if ($v === null) {
+                    unset($c[$k]);
+                } else {
+                    $c[$k] = $v;
+                }
+            }
+            return [200, json_encode(["id_token" => HotCRP\JWTParser::make_plaintext((object) $c)])];
+        };
+        $_COOKIE["hotcrp-oauth-nonce-" . $ap["nonce"]] = "1";
+        try {
+            $q2 = TestQreq::user_get($this->u_empty, ["code" => "C", "state" => $ap["state"]], $qs)
+                ->set_page("oauth");
+            Qrequest::set_main_request($q2);
+            $oap = new HotCRP\OAuth_Page($this->u_empty, $q2);
+            $ml = $oap->response();
+        } finally {
+            unset($_COOKIE["hotcrp-oauth-nonce-" . $ap["nonce"]]);
+            HotCRP\OAuth_Page::$fetch_function = $old;
+        }
+        return [$oap->success, $ap, $qs, $ml];
+    }
+
+    /** @param array<string,mixed> $extra */
+    private function set_test_oauth_provider($extra = []) {
+        $this->conf->set_opt("oAuthProviders", [(object) ([
+            "name" => "p", "client_id" => "C", "client_secret" => "S",
+            "issuer" => "https://idp.example.com",
+            "auth_uri" => "https://idp.example.com/auth",
+            "token_uri" => "https://idp.example.com/token",
+            "redirect_uri" => "https://conf.example.com/oauth"
+        ] + $extra)]);
+        $this->conf->refresh_settings();
+    }
+
+    /** A silent request at an empty session slot goes to the slot holding the
+     * session's one account. */
+    function test_prompt_none_at_empty_slot() {
+        $param = [
+            "client_id" => "confclient", "redirect_uri" => "https://conf1.example.com/cb",
+            "response_type" => "code", "state" => "S", "scope" => "read", "prompt" => "none"
+        ];
+        $qs = new MemoryQsession("emptyslot", ["us" => ["", $this->u_chair->email], "u" => $this->u_chair->email]);
+        [$how, $url] = $this->authorize_outcome($param, $this->u_empty, $qs);
+        xassert_eqq($how, "redirect");
+        xassert_str_ends_with(parse_url($url ?? "", PHP_URL_PATH) ?? "", "u/1/authorize");
+
+        // a POSTed request is redirected so the browser re-POSTs it
+        $qreq = TestQreq::apply_user($this->u_empty, TestQreq::post($param), $qs)->set_page("authorize");
+        Qrequest::set_main_request($qreq);
+        $old_test_mode = Navigation::$test_mode;
+        Navigation::$test_mode = 2;
+        ob_start();
+        $redir = null;
+        try {
+            (new HotCRP\Authorize_Page($this->u_empty, $qreq))->go();
+        } catch (Redirection $redir) {
+        } catch (PageCompletion | JsonCompletion $unused) {
+        } finally {
+            ob_end_clean();
+            Navigation::$test_mode = $old_test_mode;
+        }
+        xassert($redir !== null);
+        xassert_eqq($redir ? $redir->status : null, 307);
+        xassert_str_ends_with(parse_url($redir ? $redir->url : "", PHP_URL_PATH) ?? "", "u/1/authorize");
+    }
+
+    /** A provider's email claim names the account, so it must come with a
+     * positive `email_verified`, unless the provider is configured with
+     * `allow_unverified_email`. */
+    function test_oauth_signin_requires_verified_email() {
+        $email = "verify@hotcrp-oauth.org";
+        $run = function ($ev) use ($email) {
+            [$ok, , , $ml] = $this->oauth_signin($email, [], null, null, ["email_verified" => $ev]);
+            $this->conf->qe("delete from ContactInfo where email=?", $email);
+            return $ok;
+        };
+        try {
+            $this->set_test_oauth_provider();
+            xassert($run(true));
+            xassert($run("true"));
+            foreach ([false, "false", 0, "yes", 1] as $ev) {
+                xassert(!$run($ev), json_encode($ev));
+            }
+            [$ok, , , $ml] = $this->oauth_signin($email, [], null, null, ["email_verified" => null]);
+            xassert(!$ok);
+            xassert_str_contains(json_encode($ml), "verified");
+
+            $this->set_test_oauth_provider(["allow_unverified_email" => true]);
+            xassert($run(null));
+            xassert($run(true));
+            xassert($run(false));
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+            $this->conf->qe("delete from ContactInfo where email=?", $email);
+        }
+    }
+
+    /** With several providers configured, each sign-in button uses its own. */
+    function test_oauth_provider_by_name() {
+        $mk = function ($name, $host) {
+            return (object) [
+                "name" => $name, "client_id" => "C{$name}", "client_secret" => "S",
+                "issuer" => "https://{$host}", "auth_uri" => "https://{$host}/auth",
+                "token_uri" => "https://{$host}/token", "redirect_uri" => "https://conf.example.com/oauth"
+            ];
+        };
+        $this->conf->set_opt("oAuthProviders", [$mk("a", "idp-a.example.com"), $mk("b", "idp-b.example.com")]);
+        $this->conf->refresh_settings();
+        try {
+            foreach (["a" => "idp-a.example.com", "b" => "idp-b.example.com"] as $name => $host) {
+                $authi = HotCRP\OAuthProvider::find($this->conf, $name);
+                xassert_eqq($authi ? $authi->name : null, $name);
+                xassert_eqq($authi ? $authi->auth_uri : null, "https://{$host}/auth");
+            }
+            // no name picks the first provider
+            xassert_eqq(HotCRP\OAuthProvider::find($this->conf, null)->name ?? null, "a");
+            xassert_eqq(HotCRP\OAuthProvider::find($this->conf, "c"), null);
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** A provider sign-in counts as fresh only as of the provider's own
+     * `auth_time`; a provider that silently reuses its session doesn't
+     * satisfy `prompt=login` or `max_age`. */
+    function test_signin_records_provider_auth_time() {
+        $this->set_test_oauth_provider();
+        $email = "freshy@hotcrp-oauth.org";
+        $run = function ($startargs, $auth_time) use ($email) {
+            [$ok, $ap, $qs] = $this->oauth_signin($email, $startargs, $auth_time);
+            $use = UserSecurityEvent::session_latest_signin_by_email($qs, $email);
+            return [$ok, $ap, $use ? $use->timestamp : null, $use ? $use->roundtrip_only : null];
+        };
+
+        try {
+            // a fresh sign-in asks the provider to authenticate again
+            [$ok, $ap, $ts] = $run(["max_age" => "0"], Conf::$now);
+            xassert($ok);
+            xassert_eqq($ap["prompt"] ?? null, "login");
+            xassert_eqq($ap["max_age"] ?? null, "0");
+            xassert_eqq($ts, Conf::$now);
+
+            // a provider that reused an old session signs the user in, but
+            // the sign-in is as old as the provider says
+            [$ok, , $ts] = $run(["max_age" => "0"], Conf::$now - 4000);
+            xassert($ok);
+            xassert_eqq($ts, Conf::$now - 4000);
+
+            // asked for `auth_time` and given none, the sign-in is a round
+            // trip, which doesn't answer a client's `max_age`
+            [$ok, , $ts, $rt] = $run(["max_age" => "0"], null);
+            xassert($ok);
+            xassert_eqq($ts, Conf::$now);
+            xassert($rt === true);
+
+            // an ordinary sign-in: no prompt; the provider's time is kept
+            [$ok, $ap, $ts] = $run([], null);
+            xassert($ok);
+            xassert_eqq($ap["prompt"] ?? null, null);
+            xassert_eqq($ts, Conf::$now);
+            [$ok, , $ts] = $run([], Conf::$now - 100);
+            xassert_eqq($ts, Conf::$now - 100);
+        } finally {
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+            $this->conf->qe("delete from ContactInfo where email=?", $email);
+        }
+    }
+
+    /** A provider sign-in applies the account's saved theme to its session
+     * slot, as a password sign-in does. */
+    function test_oauth_signin_applies_theme() {
+        $this->set_test_oauth_provider();
+        $u = $this->conf->checked_user_by_email($this->u_mgbaker->email);
+        $old_theme = $u->data("theme");
+        $u->save_data("theme", "dark");
+        try {
+            [$ok, , $qs] = $this->oauth_signin($u->email, [], null);
+            xassert($ok);
+            $ui = Contact::session_index_by_email($qs, $u->email);
+            xassert_ge($ui, 0);
+            xassert_eqq(($qs->get("themes") ?? [])[$ui] ?? null, "dark");
+        } finally {
+            $u->save_data("theme", $old_theme);
+            $this->conf->set_opt("oAuthProviders", null);
+            $this->conf->refresh_settings();
+        }
+    }
+
+    /** A provider sign-in is a sign-in: it marks the account active. */
+    function test_oauth_signin_marks_login() {
+        $this->set_test_oauth_provider();
+        $email = $this->u_mgbaker->email;
+        $old = $this->conf->fetch_ivalue("select lastLogin from ContactInfo where email=?", $email);
+        $this->conf->qe("update ContactInfo set lastLogin=? where email=?", Conf::$now - 40 * 86400, $email);
+        $this->conf->invalidate_caches("users");
+        try {
+            [$ok, , ] = $this->oauth_signin($email, [], null);
+            xassert($ok);
+            xassert_eqq($this->conf->fetch_ivalue("select lastLogin from ContactInfo where email=?", $email), Conf::$now);
+        } finally {
+            $this->conf->qe("update ContactInfo set lastLogin=? where email=?", $old, $email);
+            $this->conf->invalidate_caches("users");
             $this->conf->set_opt("oAuthProviders", null);
             $this->conf->refresh_settings();
         }
@@ -2516,11 +3985,12 @@ class Authorize_Tester {
         $this->conf->refresh_settings();
 
         $authorize = function ($rest) {
+            $this->_qs = new MemoryQsession;
             $qreq = TestQreq::user_get($this->u_chair, $rest + [
                 "client_id" => "nosecret-client",
                 "redirect_uri" => "https://nosecret.example.com/cb",
                 "response_type" => "code", "state" => "S", "scope" => "read"
-            ])->set_page("authorize");
+            ], $this->_qs)->set_page("authorize");
             Qrequest::set_main_request($qreq);
             $code = $err = null;
             try {
@@ -2531,7 +4001,7 @@ class Authorize_Tester {
                 $err = $this->redirect_error($redir->url);
             }
             if ($code !== null) {
-                $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code])
+                $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $this->_qs)
                     ->set_page("authorize");
                 Qrequest::set_main_request($vq);
                 try {
@@ -2783,6 +4253,11 @@ class Authorize_Tester {
         xassert_eqq(substr_count($this->_last_page_html ?? "", "</form>"), 1);
         xassert_eqq($html("confclient", "https://conf1.example.com/cb", "openid"), "none");
         xassert_eqq(substr_count($this->_last_page_html ?? "", "</form>"), 1);
+        // every OIDC scope stays out of the box
+        xassert_eqq($html("confclient", "https://conf1.example.com/cb", "profile openid email read"),
+                    "read");
+        xassert_eqq($html("confclient", "https://conf1.example.com/cb", "openid email profile"),
+                    "none");
         // a dynamic client's registration scope is not this request's scope
         xassert_eqq($html($this->register_client("https://dall.com/"),
                           "https://dall.com/", "write"), "write");
@@ -2794,8 +4269,7 @@ class Authorize_Tester {
             "state" => "S", "scope" => "openid read"
         ], $this->u_chair);
         xassert_eqq($how, "code");
-        $vq = TestQreq::user_post($this->u_chair,
-            ["authconfirm" => 1, "code" => $code, "scope" => "openid read"])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code, "scope" => "openid read"], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         try {
@@ -2934,9 +4408,11 @@ class Authorize_Tester {
             ], $this->u_chair);
         };
 
-        // a scope naming no submission subset is fine
-        [$how, ] = $go("read");
-        xassert_eqq($how, "code");
+        // a scope naming no submission subset is fine, including full scope
+        foreach (["read", "all", "openid all", "openid"] as $scope) {
+            [$how, ] = $go($scope);
+            xassert_eqq($how, "code", $scope);
+        }
 
         // one that names a paper, a tag, or a search is not
         foreach (["submission:admin#12", "read submission:admin#hot",
@@ -3112,7 +4588,7 @@ class Authorize_Tester {
         $jr = call_api_result("share", $this->bearer_token($this->u_chair, "read"),
             TestQreq::get(["p" => 1]), $prow);
         xassert_eqq($jr->status, 403);
-        $jr = call_api_result("=share", $this->bearer_token($this->u_chair, "submission:admin"),
+        $jr = call_api_result("=share", $this->bearer_token($this->u_chair, "submission:admin paper:read"),
             TestQreq::post(["p" => 1, "share" => 1]), $prow);
         xassert_eqq($jr->status ?? 200, 200);
         xassert_neqq($jr->content["token"] ?? null, null);
@@ -3120,7 +4596,7 @@ class Authorize_Tester {
         $jr = call_api_result("share", $this->bearer_token($this->u_chair, "read"),
             TestQreq::get(["p" => 1]), $prow);
         xassert_eqq($jr->status, 403);
-        $jr = call_api_result("share", $this->bearer_token($this->u_chair, "submission:admin"),
+        $jr = call_api_result("share", $this->bearer_token($this->u_chair, "submission:admin paper:read"),
             TestQreq::get(["p" => 1]), $prow);
         xassert_neqq($jr->content["token"] ?? null, null);
     }
@@ -3147,7 +4623,7 @@ class Authorize_Tester {
         // the slot now resolves to someone else than the button named
         $vq = TestQreq::user_post($this->u_chair, [
             "authconfirm" => 1, "code" => $code, "authemail" => $this->u_mgbaker->email
-        ])->set_page("authorize");
+        ], $this->_qs)->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert(!$this->authconfirm_redirects($vq));
         xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), null);
@@ -3155,7 +4631,7 @@ class Authorize_Tester {
         // the button the user actually pressed still works
         $vq = TestQreq::user_post($this->u_chair, [
             "authconfirm" => 1, "code" => $code, "authemail" => "CHAIR@_.com"
-        ])->set_page("authorize");
+        ], $this->_qs)->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert($this->authconfirm_redirects($vq));
         xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), "chair@_.com");
@@ -3178,7 +4654,7 @@ class Authorize_Tester {
     /** Fetch protected resource metadata as if `$url` had been requested.
      * @return string */
     private function well_known($url) {
-        $base = NavigationState::make_base($this->conf->opt("paperSite"));
+        $base = NavigationState::make_base($this->conf->baseurl());
         // `make_base` splits `$rest` at its first "/", so it must not start with one
         $nav = NavigationState::make_base($base->server . "/",
             substr($url, strlen($base->server) + 1));
@@ -3196,7 +4672,7 @@ class Authorize_Tester {
     }
 
     function test_protected_resource_metadata() {
-        $site = $this->conf->opt("paperSite");
+        $site = $this->conf->baseurl();
         $base = NavigationState::make_base($site);
         $wk = $base->server . "/.well-known/oauth-protected-resource";
         $get = function ($suffix = "") use ($wk, $base) {
@@ -3931,10 +5407,12 @@ class Authorize_Tester {
     /** Obtain an authorization code for `$client_id` as `$user`.
      * @return ?string */
     private function authorization_code($client_id, $redirect_uri, $user, $scope = "read") {
+        // mint in a fresh browser session; the confirm step reuses it
+        $this->_qs = new MemoryQsession;
         $qreq = TestQreq::user_get($user, [
             "client_id" => $client_id, "redirect_uri" => $redirect_uri,
             "response_type" => "code", "state" => "S", "scope" => $scope
-        ])->set_page("authorize");
+        ], $this->_qs)->set_page("authorize");
         Qrequest::set_main_request($qreq);
         try {
             (new HotCRP\Authorize_Page($user, $qreq))->go();
@@ -4021,7 +5499,7 @@ class Authorize_Tester {
         xassert_eqq($gid, substr($codetok->salt, 4, Authorization_Token::GRANT_ID_LENGTH));
 
         // consent logs that identifier
-        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert($this->authconfirm_redirects($vq));
@@ -4157,7 +5635,7 @@ class Authorize_Tester {
 
         $vq = TestQreq::user_post($this->u_chair, [
             "authconfirm" => 1, "code" => $code, "authbot" => $bot->email
-        ])->set_page("authorize");
+        ], $this->_qs)->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert($this->authconfirm_redirects($vq));
 
@@ -4206,7 +5684,7 @@ class Authorize_Tester {
             xassert_neqq($code, null);
             $vq = TestQreq::user_post($user, [
                 "authconfirm" => 1, "code" => $code, "authbot" => $authbot
-            ])->set_page("authorize");
+            ], $this->_qs)->set_page("authorize");
             Qrequest::set_main_request($vq);
             $redirected = $this->authconfirm_redirects($vq, $user);
             return [$redirected, TokenInfo::find($code, $this->conf)->data("email")];
@@ -4241,12 +5719,12 @@ class Authorize_Tester {
         xassert_neqq($code, null);
         $vq = TestQreq::user_post($this->u_chair, [
             "authconfirm" => 1, "code" => $code, "authbot" => $bot->email
-        ])->set_page("authorize");
+        ], $this->_qs)->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert(!$this->authconfirm_redirects($vq));
         xassert_eqq(TokenInfo::find($code, $this->conf)->data("email"), null);
         // and the chair's own authorization of that client still works
-        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code])
+        $vq = TestQreq::user_post($this->u_chair, ["authconfirm" => 1, "code" => $code], $this->_qs)
             ->set_page("authorize");
         Qrequest::set_main_request($vq);
         xassert($this->authconfirm_redirects($vq));

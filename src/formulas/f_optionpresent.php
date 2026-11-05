@@ -19,9 +19,9 @@ class OptionPresent_Fexpr extends Fexpr {
     function compile(FormulaCompiler $state) {
         $id = $this->option->id;
         $ovp = "\$optpresent" . ($id < 0 ? "m" . -$id : $id);
-        if ($state->ensure_defined($ovp)) {
+        if ($state->ensure_gvar($ovp)) {
             $ovv = $state->prow_option_value($this->option);
-            $state->gstmt[] = "{$ovp} = {$ovv} && {$ovv}->option->value_present({$ovv});";
+            $state->gstmt[] = "{$ovp} = {$ovv} && {$ovv}->present();";
         }
         return $ovp;
     }

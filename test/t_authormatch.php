@@ -36,6 +36,16 @@ class AuthorMatch_Tester {
         xassert_eqq(Author::split_string("D. Thin (Captain Poop): (Whatever)"), ["D. Thin", "Captain Poop", "(Whatever)"]);
         xassert_eqq(Author::split_string("D. (The Man) Thin (Captain Poop (Esquire)) - yes"), ["D. (The Man) Thin", "Captain Poop (Esquire)", "yes"]);
         xassert_eqq(Author::split_string("G.-Y. (Ken (Butt)) Lueh (France (Crap) Telecom)- Inc."), ["G.-Y. (Ken (Butt)) Lueh", "France (Crap) Telecom", "Inc."]);
+        // trailing text may span lines
+        xassert_eqq(Author::split_string("D. Thin (Captain Poop) - yes\nno"), ["D. Thin", "Captain Poop", "yes\nno"]);
+        xassert_eqq(Author::split_string("D. (The Man) Thin (Captain Poop (Esquire)) - yes\nno"), ["D. (The Man) Thin", "Captain Poop (Esquire)", "yes\nno"]);
+    }
+
+    #[RequirePhp("8.5")]
+    function test_split_string_complexity() {
+        $t0 = microtime(true);
+        xassert_eqq(strlen(Author::split_string(str_repeat("()-", 100000) . "\n")[0]), 0);
+        xassert_lt(microtime(true) - $t0, 1.0);
     }
 
     function test_initials() {
@@ -112,6 +122,57 @@ class AuthorMatch_Tester {
         xassert_eqq(!!$aum->test("Peter Deutsch"), false);
         xassert_eqq(!!$aum->test("L. Deutsch"), true);
         xassert_eqq(!!$aum->test("Lon Deutsch"), true);
+    }
+
+    function test_initials_no_redos() {
+        // the initials first-name regex must not backtrack quadratically on a
+        // run of one letter followed by a non-boundary (HC-107); each match is
+        // cheap, so repeat as the per-line collaborator loop does
+        $aum = AuthorMatcher::make_string_guess("J. J. Garcia-Luna-Aceves");
+        $subj = Author::make_string_guess("J" . str_repeat("j", 900) . "0 Garcia-Luna-Aceves");
+        $t0 = microtime(true);
+        for ($i = 0; $i !== 2000; ++$i) {
+            xassert_eqq(!!$aum->test($subj), false);
+        }
+        xassert_lt(microtime(true) - $t0, 1.0);
+    }
+
+    #[RequirePhp("8.5")]
+    function test_repeated_affiliation_words() {
+        // repeating a word with alternates must not take quadratic time
+        $t0 = microtime(true);
+        $aum = AuthorMatcher::make_affiliation("USC " . str_repeat("uc ", 8000));
+        xassert_eqq(!!$aum->test("Butt (University of Southern California)"), true);
+        xassert_eqq(!!$aum->test("Butt (Rice)"), false);
+        xassert_lt(microtime(true) - $t0, 1.0);
+    }
+
+    function test_many_last_name_words() {
+        $ws = [];
+        for ($i = 0; $i !== 800; ++$i) {
+            $ws[] = "w{$i}";
+        }
+        $aum = AuthorMatcher::make_collaborator_line(join(" ", $ws) . ", J Q (zz)");
+        $ln = str_repeat("x", 100000) . " " . join(" ", $ws);
+        xassert_eqq($aum->test(Author::make_nae("Bob", $ln, "", "")), 0);
+        xassert_eqq($aum->test(Author::make_nae("J Q", $ln, "", "")), AuthorMatcher::MATCH_NAME);
+        xassert_eqq($aum->test(Author::make_nae("J Q", str_replace(" w3 ", " ", $ln), "", "")), 0);
+
+        $aum = AuthorMatcher::make_string_guess("J. J. Garcia-Luna-Aceves");
+        xassert_eqq(!!$aum->test("J. J. Garcia-Luna-Aceves"), true);
+        xassert_eqq(!!$aum->test("J. J. Aceves-Garcia-Luna"), true);
+        xassert_eqq(!!$aum->test("J. J. Garcia-Luna"), false);
+    }
+
+    #[RequirePhp("8.5")]
+    function test_many_last_name_words_complexity() {
+        // match time must not be (last name words) x (tested name length)
+        $aum = AuthorMatcher::make_collaborator_line(str_repeat("a ", 5400) . ", J Q (zz)");
+        $ln = str_repeat("x", 100000) . " a";
+        $t0 = microtime(true);
+        xassert_eqq($aum->test(Author::make_nae("Bob", $ln, "", "")), 0);
+        xassert_eqq($aum->test(Author::make_nae("J Q", $ln, "", "")), AuthorMatcher::MATCH_NAME);
+        xassert_lt(microtime(true) - $t0, 0.5);
     }
 
     function test_affiliation_alternates() {
@@ -219,6 +280,24 @@ class AuthorMatch_Tester {
         //xassert_eqq(!!$aum->test("All (University of Illinois)", true), true);
         xassert_eqq(!!$aum->test("All (University of Illinois Chicago)", false), true);
         xassert_eqq(!!$aum->test("All (University of Illinois Chicago)", true), true);
+    }
+
+    function test_author_keyed_round_trip() {
+        // the JSON form an export writes (`given_name`, `family_name`) reads
+        // back as the same author
+        foreach ([Author::make_string("Ada Lovelace (Analytical Engines Ltd.)"),
+                  Author::make_string("Grace Hopper <grace@navy.mil>"),
+                  Author::make_keyed(["firstName" => "Jean", "lastName" => "van der Berg"])] as $au) {
+            $j = Author::unparse_nea_json_for($au);
+            $au2 = Author::make_keyed($j);
+            xassert_eqq($au2->firstName, $au->firstName);
+            xassert_eqq($au2->lastName, $au->lastName);
+            xassert_eqq($au2->email, $au->email);
+            xassert_eqq($au2->affiliation, $au->affiliation);
+            $au3 = Author::make_keyed((object) $j);
+            xassert_eqq($au3->firstName, $au->firstName);
+            xassert_eqq($au3->lastName, $au->lastName);
+        }
     }
 
     function test_author_parentheses() {

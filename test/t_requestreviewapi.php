@@ -342,10 +342,13 @@ class RequestReviewAPI_Tester {
     }
 
     function test_acceptdecline_hide_review_existence_from_outsider() {
-        // a PC member with no assignment on #20 and no ability to view its
-        // reviews should likewise not be able to probe review ids
+        // a PC member conflicted with #20 cannot see its review assignments,
+        // so must not be able to probe review ids
+        xassert_assign($this->u_chair, "paper,action,email\n{$this->pid},conflict,marina@poema.ru\n");
         $prow = $this->conf->checked_paper_by_id($this->pid);
         $u_outsider = $this->conf->checked_user_by_email("marina@poema.ru");
+        $rrow = $prow->review_by_id($this->hidden_rid);
+        xassert(!$u_outsider->can_view_review_assignment($prow, $rrow));
         foreach (["=acceptreview", "=declinereview", "=claimreview"] as $fn) {
             $hit = $this->observable($fn, $u_outsider,
                 ["r" => (string) $this->hidden_rid], $prow);
@@ -353,6 +356,7 @@ class RequestReviewAPI_Tester {
                 ["r" => "99999"], $prow);
             xassert_eqq($hit, $miss);
         }
+        xassert_assign($this->u_chair, "paper,action,email\n{$this->pid},clearconflict,marina@poema.ru\n");
     }
 
     // When a review is actually created for a brand-new reviewer, the reviewer's
@@ -361,6 +365,208 @@ class RequestReviewAPI_Tester {
     // invariant, so a future change making account *creation* produce
     // placeholders (harmless for a dry_run) still yields real users once a
     // review materializes.
+
+    function test_requestreview_needs_account() {
+        // a review-accept link grants access to that review, but not the
+        // reviewer’s right to request further reviews
+        $conf = $this->conf;
+        $email = "linkholder-probe@example.edu";
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $anon = Contact::make($conf);
+        $anon->set_capability("@ra{$this->pid}", $this->u_hidden->contactId);
+        $prow = $conf->checked_paper_by_id($this->pid, $anon);
+        xassert($this->u_hidden->can_request_review($prow, null, true));
+        xassert(!$anon->can_request_review($prow, null, true));
+        $jr = call_api_result("=requestreview", $anon,
+            ["email" => $email, "given_name" => "Link", "family_name" => "Holder"], $prow);
+        xassert_eqq($jr->status, 403);
+        $t = json_encode($jr->content["message_list"] ?? [], JSON_UNESCAPED_UNICODE);
+        xassert_str_contains($t, "aren’t allowed to request reviews");
+        xassert_not_str_contains($t, "deadline");
+        xassert(!$conf->fresh_user_by_email($email));
+        if (($u = $conf->fresh_user_by_email($email))) {
+            $conf->qe("delete from PaperReview where contactId=?", $u->contactId);
+            $conf->qe("delete from ContactInfo where contactId=?", $u->contactId);
+        }
+
+        // ...including when its holder is signed in
+        $holder = $conf->fresh_user_by_email("van@ee.lbl.gov");
+        xassert(!$holder->isPC);
+        $holder->set_capability("@ra{$this->pid}", $this->u_hidden->contactId);
+        $prow = $conf->checked_paper_by_id($this->pid, $holder);
+        xassert(!$prow->has_conflict($holder));
+        xassert($holder->can_edit_review($prow, $prow->review_by_user($this->u_hidden)));
+        xassert(!$holder->can_request_review($prow, null, true));
+        $jr = call_api_result("=requestreview", $holder,
+            ["email" => $email, "given_name" => "Link", "family_name" => "Holder"], $prow);
+        xassert_eqq($jr->status, 403);
+        $t = json_encode($jr->content["message_list"] ?? [], JSON_UNESCAPED_UNICODE);
+        xassert_str_contains($t, "aren’t allowed to request reviews");
+        xassert(!$conf->fresh_user_by_email($email));
+        if (($u = $conf->fresh_user_by_email($email))) {
+            $conf->qe("delete from PaperReview where contactId=?", $u->contactId);
+            $conf->qe("delete from ContactInfo where contactId=?", $u->contactId);
+        }
+
+        // other users without request rights get the same reason
+        $whynot = $this->u_author->perm_request_review($prow, null, true);
+        xassert_str_contains(json_encode($whynot->message_list(), JSON_UNESCAPED_UNICODE),
+                             "aren’t allowed to request reviews");
+    }
+
+    function test_only_managers_choose_review_rounds() {
+        // a non-manager may name only the default round, or (when requesting)
+        // the round of their own review; other rounds’ deadlines may differ
+        $conf = $this->conf;
+        $keys = ["tag_rounds", "rev_roundtag", "pcrev_soft_1", "pcrev_hard_1"];
+        $old = [];
+        foreach ($keys as $k) {
+            $old[$k] = [$conf->setting($k), $conf->setting_data($k)];
+        }
+        $wrong_round = function ($whynot) {
+            return $whynot && ($whynot["wrongReviewRound"] ?? false);
+        };
+        try {
+            // R1, the assignment round, is closed; R2 and round 0 are open
+            $conf->save_setting("tag_rounds", 1, "R1 R2");
+            $conf->save_setting("rev_roundtag", 1, "R1");
+            $conf->save_setting("pcrev_soft_1", Conf::$now - 200);
+            $conf->save_refresh_setting("pcrev_hard_1", Conf::$now - 100);
+            xassert_eqq($conf->assignment_round(false), 1);
+            xassert_eqq($conf->round_number("R2"), 2);
+            $prow = $conf->checked_paper_by_id($this->pid);
+
+            // creating a review: only the default round
+            $u = $this->u_control;
+            xassert(!$prow->has_reviewer($u) && !$prow->has_conflict($u));
+            foreach ([null, 1, 0, 2] as $r) {
+                xassert(!$u->can_create_review($prow, $u, $r), "create round " . json_encode($r));
+            }
+            xassert($wrong_round($u->perm_create_review($prow, $u, 0)));
+            xassert($wrong_round($u->perm_create_review($prow, $u, 2)));
+            xassert($this->u_chair->can_create_review($prow, $u, 0));
+            xassert($this->u_chair->can_create_review($prow, $u, 2));
+
+            // requesting a review: the default round, or the requester’s own
+            $u = $this->u_prober;
+            xassert_eqq($prow->review_by_user($u)->reviewRound, 0);
+            xassert(!$u->can_request_review($prow, null, true));
+            xassert(!$u->can_request_review($prow, 2, true));
+            xassert($wrong_round($u->perm_request_review($prow, 2, true)));
+            xassert($u->can_request_review($prow, 0, true));
+            xassert($this->u_chair->can_request_review($prow, 2, true));
+
+            // a review-accept link lends its review’s round, not round 0
+            $conf->qe("update PaperReview set reviewRound=1 where reviewId=?", $this->hidden_rid);
+            $holder = $conf->fresh_user_by_email($this->u_control->email);
+            $holder->set_capability("@ra{$this->pid}", $this->u_hidden->contactId);
+            $hprow = $conf->checked_paper_by_id($this->pid, $holder);
+            xassert(!$holder->can_request_review($hprow, 0, true));
+            xassert($wrong_round($holder->perm_request_review($hprow, 0, true)));
+
+            // with the assignment round open, the default round works
+            $conf->save_refresh_setting("pcrev_hard_1", Conf::$now + 100);
+            $prow = $conf->checked_paper_by_id($this->pid);
+            xassert($this->u_control->can_create_review($prow, $this->u_control, null));
+            xassert($this->u_control->can_create_review($prow, $this->u_control, 1));
+            xassert($this->u_prober->can_request_review($prow, null, true));
+            xassert($this->u_prober->can_request_review($prow, 1, true));
+        } finally {
+            $conf->qe("update PaperReview set reviewRound=0 where reviewId=?", $this->hidden_rid);
+            foreach ($old as $k => $vd) {
+                $conf->save_setting($k, $vd[0], $vd[1]);
+            }
+            $conf->refresh_settings();
+        }
+    }
+
+    function test_approve_proposal_round_by_number() {
+        // the assign page’s approval form names the proposal’s round by number
+        $conf = $this->conf;
+        $keys = ["tag_rounds", "rev_roundtag"];
+        $old = [];
+        foreach ($keys as $k) {
+            $old[$k] = [$conf->setting($k), $conf->setting_data($k)];
+        }
+        $email = "proposal-round@_.com";
+        try {
+            $conf->save_setting("tag_rounds", 1, "R1 R2");
+            $conf->save_refresh_setting("rev_roundtag", 1, "R1");
+            xassert_eqq($conf->round_number("R2"), 2);
+            $prow = $conf->checked_paper_by_id($this->pid);
+            $args = ["email" => $email, "given_name" => "Proposal", "family_name" => "Round", "affiliation" => "Fart", "approvereview" => 1];
+
+            // nonexistent rounds are rejected, by name or number
+            foreach (["7", "R7"] as $r) {
+                $jr = call_api_result("=requestreview", $this->u_chair, $args + ["round" => $r], $prow);
+                xassert_eqq($jr->status, 400);
+            }
+
+            foreach (["2", "R2", "0", "unnamed"] as $r) {
+                $this->clear_requests();
+                $conf->qe("insert into ReviewRequest set paperId=?, email=?, firstName=?, lastName=?, affiliation=?, requestedBy=?, timeRequested=?, reason=?, reviewRound=?",
+                    $this->pid, $email, "Proposal", "Round", "Fart",
+                    $this->u_prober->contactId, Conf::$now, "", $conf->round_number($r));
+                $jr = call_api_result("=requestreview", $this->u_chair, $args + ["round" => $r], $prow);
+                xassert_eqq($jr->status ?? 200, 200);
+                $u = $conf->checked_user_by_email($email);
+                $rrow = $conf->checked_paper_by_id($this->pid)->review_by_user($u);
+                xassert($rrow !== null);
+                xassert_eqq($rrow->reviewRound, ctype_digit($r) ? (int) $r : $conf->round_number($r));
+            }
+        } finally {
+            $this->clear_requests();
+            foreach ($old as $k => $vd) {
+                $conf->save_setting($k, $vd[0], $vd[1]);
+            }
+            $conf->refresh_settings();
+        }
+    }
+
+    function test_review_link_refused_to_conflicted_user() {
+        // a review-accept link lends its reviewer’s role only to holders
+        // without a conflict on the submission
+        $conf = $this->conf;
+        $rrow = $conf->checked_paper_by_id($this->pid)->review_by_id($this->hidden_rid);
+        $tok = ReviewAccept_Capability::make($rrow, true);
+        $sibling = (new TokenInfo($conf, TokenInfo::REVIEWACCEPT))
+            ->set_review($rrow)
+            ->set_user_id($rrow->contactId)
+            ->set_expires_in(86400)
+            ->set_token_pattern("hcra{$rrow->reviewId}[16]")
+            ->insert();
+        try {
+            // a conflicted holder gets nothing from the link, and is told why
+            $author = $conf->fresh_user_by_email($this->u_author->email);
+            $old_test_mode = Navigation::$test_mode;
+            Navigation::$test_mode = 2;
+            $conf->saved_messages_begin();
+            $author->apply_capability_text($tok->salt);
+            $msgs = json_encode($conf->claim_saved_messages(), JSON_UNESCAPED_UNICODE);
+            Navigation::$test_mode = $old_test_mode;
+            xassert_eqq($author->reviewer_capability($this->pid), null);
+            $prow = $conf->checked_paper_by_id($this->pid, $author);
+            xassert($prow->has_conflict($author));
+            xassert(!$author->can_view_review($prow, $prow->review_by_id($this->hidden_rid)));
+            xassert(!$author->can_request_review($prow, null, true));
+            xassert_str_contains($msgs, "conflict");
+            xassert_not_str_contains($msgs, $this->u_hidden->email);
+            // ...and doesn't use up the link or its siblings
+            xassert_eqq(TokenInfo::find($tok->salt, $conf)->timeUsed, 0);
+            xassert(TokenInfo::find($sibling->salt, $conf)->is_active());
+
+            // a holder without a conflict, signed in or not, acts as the reviewer
+            foreach ([$conf->fresh_user_by_email($this->u_control->email), Contact::make($conf)] as $u) {
+                $u->apply_capability_text($tok->salt);
+                xassert_eqq($u->reviewer_capability($this->pid), $this->u_hidden->contactId);
+                $prow = $conf->checked_paper_by_id($this->pid, $u);
+                xassert($u->can_view_review($prow, $prow->review_by_id($this->hidden_rid)));
+            }
+        } finally {
+            $conf->qe("delete from Capability where salt>=? and salt<?",
+                "hcra{$rrow->reviewId}@", "hcra{$rrow->reviewId}~");
+        }
+    }
 
     function test_requestreview_creates_nonplaceholder_reviewer() {
         $conf = $this->conf;
@@ -394,5 +600,60 @@ class RequestReviewAPI_Tester {
         xassert(!$u->is_placeholder());
         $conf->qe("delete from PaperReview where paperId=? and contactId=?", $this->pid, $u->contactId);
         $conf->qe("delete from ContactInfo where contactId=?", $u->contactId);
+    }
+
+    function test_retractreview_cannot_remove_promoted_primary() {
+        // HC-171: a non-admin requester must not be able to retract a review the
+        // chair has promoted into a primary/secondary/meta assignment.
+        $conf = $this->conf;
+        $prow = $conf->checked_paper_by_id($this->pid);
+        $u_victim = $conf->checked_user_by_email("lixia@cs.ucla.edu");
+        $conf->qe("delete from PaperReview where paperId=? and contactId=?", $this->pid, $u_victim->contactId);
+        $prow->load_reviews(true);
+
+        // estrin (a PC reviewer on #20) requests lixia (PC): creates a PC review
+        // whose requestedBy is estrin
+        $qreq = (new Qrequest("POST", ["email" => $u_victim->email]))->approve_token();
+        $jr = RequestReview_API::requestreview($this->u_prober, $qreq, $prow);
+        xassert($jr->content["ok"] ?? false);
+        $prow->load_reviews(true);
+        $rrow = $prow->fresh_review_by_user($u_victim);
+        xassert(!!$rrow);
+        xassert_eqq($rrow->reviewType, REVIEW_PC);
+        xassert_eqq($rrow->requestedBy, $this->u_prober->contactId);
+
+        // the chair promotes lixia to PRIMARY; ownership resets to the chair
+        $this->u_chair->assign_review($this->pid, $u_victim, REVIEW_PRIMARY);
+        $prow->load_reviews(true);
+        $rrow = $prow->fresh_review_by_user($u_victim);
+        xassert_eqq($rrow->reviewType, REVIEW_PRIMARY);
+        xassert_eqq($rrow->requestedBy, $this->u_chair->contactId);
+
+        // the original requester can no longer retract the chair's assignment
+        $qreq = (new Qrequest("POST", ["email" => $u_victim->email]))->approve_token();
+        $jr = RequestReview_API::retractreview($this->u_prober, $qreq, $prow);
+        xassert(!($jr->content["ok"] ?? false));
+        $prow->load_reviews(true);
+        $rrow = $prow->fresh_review_by_user($u_victim);
+        xassert(!!$rrow);
+        xassert_eqq($rrow->reviewType, REVIEW_PRIMARY);
+
+        // control: an unpromoted review the requester made can still be retracted
+        $u_v2 = $conf->checked_user_by_email("van@ee.lbl.gov");
+        $conf->qe("delete from PaperReview where paperId=? and contactId=?", $this->pid, $u_v2->contactId);
+        $prow->load_reviews(true);
+        $qreq = (new Qrequest("POST", ["email" => $u_v2->email]))->approve_token();
+        RequestReview_API::requestreview($this->u_prober, $qreq, $prow);
+        $prow->load_reviews(true);
+        xassert(!!$prow->fresh_review_by_user($u_v2));
+        $qreq = (new Qrequest("POST", ["email" => $u_v2->email]))->approve_token();
+        $jr = RequestReview_API::retractreview($this->u_prober, $qreq, $prow);
+        xassert($jr->content["ok"] ?? false);
+        $prow->load_reviews(true);
+        xassert(!$prow->fresh_review_by_user($u_v2));
+
+        // cleanup
+        $conf->qe("delete from PaperReview where paperId=? and contactId=?", $this->pid, $u_victim->contactId);
+        $prow->load_reviews(true);
     }
 }

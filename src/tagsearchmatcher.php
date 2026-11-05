@@ -11,6 +11,8 @@ class TagSearchMatcher {
     private $_include_twiddles = false;
     /** @var bool */
     private $_avoid_regex = false;
+    /** @var bool */
+    private $_allow_star = false;
     /** Defines the class of match.
      *
      * * -2: Matches if no visible tags ("none"/test_empty()).
@@ -26,7 +28,7 @@ class TagSearchMatcher {
     /** @var list<string> */
     private $_tagregex = [];
     /** @var list<string> */
-    private $_sql_tagregex = [];
+    private $_sql_tagpat = [];
     /** @var ?string */
     private $_tag_exclusion_regex;
     /** @var list<CountMatcher> */
@@ -37,11 +39,30 @@ class TagSearchMatcher {
     function __construct(Contact $user) {
         $this->user = $user;
     }
+
+    /** @return $this */
     function set_include_twiddles(bool $on) {
         $this->_include_twiddles = $on;
+        return $this;
     }
+    /** @return $this */
     function set_avoid_regex(bool $on) {
         $this->_avoid_regex = $on;
+        return $this;
+    }
+    /** @return $this */
+    function set_allow_star(bool $on) {
+        $this->_allow_star = $on;
+        return $this;
+    }
+
+    /** @return bool */
+    function has_error() {
+        return !empty($this->_errors);
+    }
+    /** @param string $error */
+    function error($error) {
+        $this->_errors[] = $error;
     }
     /** @return list<string> */
     function error_ftexts() {
@@ -50,15 +71,16 @@ class TagSearchMatcher {
 
     /** @param string $tag
      * @param bool $allow_star_any */
-    function add_check_tag($tag, $allow_star_any) {
+    function add_check_tag($tag) {
         $xtag = $tag;
         $twiddle = strpos($xtag, "~");
+        $star = strpos($xtag, "*", $twiddle ? : 0);
 
         $checktag = substr($xtag, (int) $twiddle);
         $tagger = new Tagger($this->user);
-        if (!$tagger->check($checktag, Tagger::NOVALUE | ($allow_star_any ? Tagger::ALLOWRESERVED | Tagger::ALLOWSTAR : 0))) {
-            $this->_errors[] = $tagger->error_ftext();
-            return false;
+        if (!$tagger->check_syntax($checktag, Tagger::NOVALUE | ($this->_allow_star ? Tagger::ALLOWRESERVED | Tagger::ALLOWSTAR : 0))) {
+            $this->_errors[] = $tagger->error_ftext(true);
+            return;
         }
 
         if ($twiddle === false
@@ -66,42 +88,54 @@ class TagSearchMatcher {
             $this->add_tag($xtag);
         } else if ($twiddle > 0) {
             $c = substr($xtag, 0, $twiddle);
-            if (ctype_digit($c)) {
-                $cids = [(int) $c];
+            if (($uid = stoi($c)) !== null) {
+                if ($uid > 0
+                    && ($uid === $this->user->contactXid
+                        || $this->user->privChair
+                        || (($vrm = $this->user->viewable_roles_mask()) !== 0
+                            && ($u = $this->user->conf->pc_user_by_id($uid))
+                            && ($u->roles & $vrm) !== 0))) {
+                    $cids = [$uid];
+                } else {
+                    $cids = [];
+                }
             } else {
                 $cids = ContactSearch::make_pc($c, $this->user)->user_ids();
             }
-            if (!$this->user->can_view_some_peruser_tag()) {
-                if (in_array($this->user->contactId, $cids, true)) {
-                    $cids = [$this->user->contactId];
-                } else {
-                    $this->_errors[] = "<0>You can’t search other users’ twiddle tags";
-                    return false;
+            if (empty($cids)) {
+                $this->_errors[] = $uid !== null ? "<0>PC member not found" : "<0>No PC member matches ‘{$c}’";
+                return;
+            } else if (count($cids) > 1 && !$this->_allow_star) {
+                $this->_errors[] = "<0>Wildcard tags aren’t allowed here";
+                return;
+            } else if ($star === false
+                       ? !$this->user->can_view_peruser_tag(null, substr($xtag, $twiddle + 1))
+                       : !$this->user->can_view_some_peruser_tag()) {
+                if (!in_array($this->user->contactId, $cids, true)) {
+                    $this->_errors[] = "<0>You don’t have permission to access other users’ private tags";
+                    return;
                 }
-            } else if (empty($cids)) {
-                $this->_errors[] = "<0>No PC members match ‘{$c}’";
-                return false;
-            }
-            if (count($cids) > 1 && !$allow_star_any) {
-                $this->_errors[] = "<0>Wildcard searches like #{$tag} aren’t allowed here";
-                return false;
+                $cids = [$this->user->contactId];
             }
             if (count($cids) === 1 || $this->_avoid_regex) {
                 foreach ($cids as $xcid) {
                     $this->add_tag($xcid . $checktag);
                 }
             } else if ($c === "*") {
-                $ct = str_replace("\\*", "\\S*", preg_quote($checktag));
-                $this->add_tag_regex(" \\d+{$ct}#", "[0-9]+" . str_replace("\\S*", ".*", $ct));
+                $ct = self::pattern_regex($checktag);
+                $this->add_tag_regex(" \\d+{$ct}#", ["*{$checktag}"]);
             } else {
-                $ct = str_replace("\\*", "\\S*", preg_quote($checktag));
+                $ct = self::pattern_regex($checktag);
                 $cidt = join("|", $cids);
-                $this->add_tag_regex(" (?:{$cidt}){$ct}#", "({$cidt})" . str_replace("\\S*", ".*", $ct));
+                $sqlpats = [];
+                foreach ($cids as $xcid) {
+                    $sqlpats[] = $xcid . $checktag;
+                }
+                $this->add_tag_regex(" (?:{$cidt}){$ct}#", $sqlpats);
             }
         } else {
             $this->add_tag($this->user->contactId . $xtag);
         }
-        return true;
     }
 
     /** @param string $tag
@@ -111,6 +145,12 @@ class TagSearchMatcher {
             $this->_mtype = $tag === "any" ? -1 : -2;
             $this->_tagpat = $this->_tagregex = [];
         } else if ($this->_mtype >= 0) {
+            $star = strpos($tag, "*");
+            if ($star === false
+                && !$this->user->can_view_tag_somewhere($tag)) {
+                $this->_errors[] = "<0>You don’t have permission to access tag ‘{$tag}’";
+                return;
+            }
             $this->_tagpat[] = $tag;
             if ($this->_include_twiddles && strpos($tag, "~") === false)  {
                 $this->_tagpat[] = $this->user->contactId . "~" . $tag;
@@ -139,13 +179,20 @@ class TagSearchMatcher {
         return $this;
     }
 
+    /** @param string $tp
+     * @return string */
+    static private function pattern_regex($tp) {
+        // wildcards match within one tag, which is followed by `#`
+        return Text::one_wildcard_regex($tp, "", "\\s#", "#");
+    }
+
     /** @param string $regex
-     * @param string $sql_regex */
-    private function add_tag_regex($regex, $sql_regex) {
+     * @param list<string> $sql_patterns */
+    private function add_tag_regex($regex, $sql_patterns) {
         assert($regex[0] === " " && $regex[strlen($regex) - 1] === "#");
         if ($this->_mtype >= 0)  {
             $this->_tagregex[] = $regex;
-            $this->_sql_tagregex[] = $sql_regex;
+            array_push($this->_sql_tagpat, ...$sql_patterns);
             $this->_mtype = 0;
             $this->_re = null;
         }
@@ -191,12 +238,12 @@ class TagSearchMatcher {
                 $starpos = strpos($tp, "*");
                 if ($starpos === 0) {
                     if ($tp !== "*" && $tp[1] === "~") {
-                        $res[] = ' ' . str_replace("\\*", "\\S*", preg_quote($tp)) . "#";
+                        $res[] = ' ' . self::pattern_regex($tp) . "#";
                     } else {
-                        $res[] = ' (?![~\d])' . str_replace("\\*", "\\S*", preg_quote($tp)) . "#";
+                        $res[] = ' (?![~\d])' . self::pattern_regex($tp) . "#";
                     }
                 } else if ($starpos !== false) {
-                    $res[] = ' ' . str_replace('\\*', '\\S*', preg_quote($tp)) . "#";
+                    $res[] = ' ' . self::pattern_regex($tp) . "#";
                 } else {
                     $res[] = ' ' . preg_quote($tp) . "#";
                 }
@@ -226,14 +273,15 @@ class TagSearchMatcher {
         if ($this->_mtype > 0) {
             return Dbl::format_query($this->user->conf->dblink, "{$table}.tag?a", $this->_tagpat);
         } else if ($this->_mtype === 0
-                   && (!empty($this->_sql_tagregex) || !empty($this->_tagpat))) {
-            $res = $this->_sql_tagregex;
-            foreach ($this->_tagpat as $tp) {
-                $res[] = str_replace('\\*', '.*', preg_quote($tp));
-            }
-            $regex = count($res) > 1 ? "^(" . join("|", $res) . ")$" : "^{$res[0]}$";
+                   && (!empty($this->_sql_tagpat) || !empty($this->_tagpat))) {
+            // `like` cannot backtrack; `test()` makes the precise decision
             $dbl = $this->user->conf->dblink;
-            return Dbl::format_query($dbl, "{$table}.tag regexp " . Dbl::utf8ci($dbl, "?"), $regex);
+            $res = [];
+            foreach (array_merge($this->_sql_tagpat, $this->_tagpat) as $tp) {
+                $res[] = Dbl::format_query($dbl, "{$table}.tag like " . Dbl::utf8ci($dbl, "?"),
+                    str_replace("*", "%", Dbl::escape_like($tp)));
+            }
+            return count($res) > 1 ? "(" . join(" or ", $res) . ")" : $res[0];
         }
         return null;
     }
@@ -257,7 +305,7 @@ class TagSearchMatcher {
         if ($sqle === null) {
             return null;
         }
-        return "exists (select * from PaperTag where paperId={$base_table}.paperId and {$sqle})";
+        return "exists (select * from PaperTag where paperId={$base_table}.paperId and {$sqle})=1";
     }
 
     /** @return bool */

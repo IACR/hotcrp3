@@ -3,25 +3,6 @@
 // Copyright (c) 2008-2024 Eddie Kohler; see LICENSE.
 
 class Completion_API {
-    /** @param list &$comp
-     * @param string $prefix
-     * @param array $map
-     * @param int $flags */
-    static private function simple_search_completion(&$comp, $prefix, $map, $flags = 0) {
-        foreach ($map as $id => $str) {
-            $match = null;
-            foreach (preg_split('/[^a-z0-9_]+/', strtolower($str)) as $word)
-                if ($word !== ""
-                    && ($m = Text::simple_search($word, $map, $flags))
-                    && isset($m[$id]) && count($m) == 1
-                    && !Text::is_boring_word($word)) {
-                    $match = $word;
-                    break;
-                }
-            $comp[] = $prefix . ($match ? : "\"{$str}\"");
-        }
-    }
-
     /** @param list &$comp */
     static private function has_search_completion(Contact $user, &$comp) {
         $conf = $user->conf;
@@ -35,7 +16,8 @@ class Completion_API {
         }
         if ($user->can_view_some_decision()) {
             $comp[] = "has:decision";
-            if ($conf->setting("final_open")) {
+            if ($conf->setting("final_open")
+                && $user->can_view_some_standard_decision()) {
                 $comp[] = "has:final";
             }
         }
@@ -186,7 +168,10 @@ class Completion_API {
         }
 
         if (!$category || $category === "ss") {
-            foreach ($user->viewable_named_searches(false) as $sj) {
+            foreach ($user->conf->named_searches() as $sj) {
+                if (!$user->can_view_named_search($sj, false)) {
+                    continue;
+                }
                 $twiddle = strpos($sj->name, "~");
                 $comp[] = "ss:" . ($twiddle > 0 ? substr($sj->name, $twiddle) : $sj->name);
             }
@@ -213,13 +198,11 @@ class Completion_API {
             && $user->is_reviewer()
             && $conf->has_rounds()) {
             $comp[] = ["pri" => -1, "nosort" => true, "i" => ["round:any", "round:none"]];
-            $rlist = [];
             foreach ($conf->round_list() as $rnum => $round) {
                 if ($rnum && $round !== ";") {
-                    $rlist[$rnum] = $round;
+                    $comp[] = "round:{$round}";
                 }
             }
-            self::simple_search_completion($comp, "round:", $rlist);
         }
 
         if ((!$category || $category === "topic")

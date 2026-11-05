@@ -282,7 +282,7 @@ CREATE TABLE `Paper` (
   `timeSubmittedReviewable` bigint NOT NULL DEFAULT 0,
   `timeAcceptNotified` bigint NOT NULL DEFAULT 0,
   `paperStorageId` int NOT NULL DEFAULT 0,
-  # `sha1` copied from PaperStorage to reduce joins
+  -- `sha1` copied from PaperStorage to reduce joins
   `sha1` varbinary(64) NOT NULL DEFAULT '',
   `finalPaperStorageId` int NOT NULL DEFAULT 0,
   `blind` tinyint NOT NULL DEFAULT 1,
@@ -290,8 +290,8 @@ CREATE TABLE `Paper` (
   `leadContactId` int NOT NULL DEFAULT 0,
   `shepherdContactId` int NOT NULL DEFAULT 0,
   `managerContactId` int NOT NULL DEFAULT 0,
-  `capVersion` int NOT NULL DEFAULT 0, # XXX obsolete
-  # next 3 fields copied from PaperStorage to reduce joins
+  `capVersion` int NOT NULL DEFAULT 0, -- XXX obsolete
+  -- next 3 fields copied from PaperStorage to reduce joins
   `size` bigint NOT NULL DEFAULT -1,
   `mimetype` varbinary(80) NOT NULL DEFAULT '',
   `timestamp` bigint NOT NULL DEFAULT 0,
@@ -507,6 +507,7 @@ CREATE TABLE `PaperStorage` (
   `paperStorageId` int NOT NULL AUTO_INCREMENT,
   `timestamp` bigint NOT NULL,
   `timeReferenced` bigint DEFAULT NULL,
+  `timeChecked` bigint DEFAULT NULL,
   `mimetype` varbinary(80) NOT NULL DEFAULT '',
   `paper` longblob DEFAULT NULL,
   `compression` tinyint NOT NULL DEFAULT 0,
@@ -515,6 +516,7 @@ CREATE TABLE `PaperStorage` (
   `documentType` int NOT NULL DEFAULT 0,
   `filename` varbinary(255) DEFAULT NULL,
   `infoJson` varbinary(32768) DEFAULT NULL,
+  `infoJsonOverflow` longblob DEFAULT NULL,
   `size` bigint NOT NULL DEFAULT -1,
   `filterType` int DEFAULT NULL,
   `originalStorageId` int DEFAULT NULL,
@@ -535,7 +537,7 @@ CREATE TABLE `PaperStorage` (
 DROP TABLE IF EXISTS `PaperTag`;
 CREATE TABLE `PaperTag` (
   `paperId` int NOT NULL,
-  `tag` varchar(80) NOT NULL,		# case-insensitive; see TAG_MAXLEN in init.php
+  `tag` varchar(80) NOT NULL,		-- case-insensitive; see TAG_MAXLEN in init.php
   `tagIndex` float NOT NULL DEFAULT 0,
   PRIMARY KEY (`paperId`,`tag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -548,7 +550,7 @@ CREATE TABLE `PaperTag` (
 
 DROP TABLE IF EXISTS `PaperTagAnno`;
 CREATE TABLE `PaperTagAnno` (
-  `tag` varchar(80) NOT NULL,   # case-insensitive; see TAG_MAXLEN in init.php
+  `tag` varchar(80) NOT NULL,   -- case-insensitive; see TAG_MAXLEN in init.php
   `annoId` int NOT NULL,
   `tagIndex` float NOT NULL DEFAULT 0,
   `heading` varbinary(8192) DEFAULT NULL,
@@ -662,11 +664,27 @@ CREATE TABLE `TopicInterest` (
 
 
 
+--
+-- Table structure for table `WorkItem`
+--
+
+DROP TABLE IF EXISTS `WorkItem`;
+CREATE TABLE `WorkItem` (
+  `workType` varbinary(80) NOT NULL,
+  `workSubtype` varbinary(80) NOT NULL,
+  `work` longblob NOT NULL,
+  `touchedAt` bigint NOT NULL,
+  `dequeuedAt` bigint NOT NULL,
+  PRIMARY KEY (`workType`,`workSubtype`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+
 
 -- Initial settings
 -- (each setting must be on its own line for createdb.php/createdb.sh)
 insert into Settings (name, value, data) values
-  ('allowPaperOption', 329, null),   -- schema version
+  ('allowPaperOption', 335, null),   -- schema version
   ('setupPhase', 1, null),           -- initial user is chair
   ('no_papersub', 1, null),          -- no submissions yet
   ('sub_pcconf', 1, null),           -- collect PC conflicts, not collaborators

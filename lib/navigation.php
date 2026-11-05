@@ -61,16 +61,26 @@ class NavigationState {
             $nav->protocol = "http://";
             $xport = 80;
         }
-        $hp = ($server["HTTP_HOST"] ?? $server["SERVER_NAME"] ?? null) ? : "localhost";
-        $colon = str_ends_with($hp, "]") ? false : strrpos($hp, ":");
-        if ($colon === false) {
-            $colon = strlen($hp);
-            if (($port = $server["SERVER_PORT"])
-                && $port != $xport) {
-                $hp .= ":" . $port;
+        $hp = $server["HTTP_HOST"] ?? "";
+        $has_host = $hp !== "";
+        if (!$has_host) {
+            $hp = $server["SERVER_NAME"] ?? "";
+            if ($hp === "") {
+                $hp = "localhost";
+            }
+            // `SERVER_NAME` may hold a bare IPv6 address
+            if (substr_count($hp, ":") > 1 && $hp[0] !== "[") {
+                $hp = "[{$hp}]";
             }
         }
-        $nav->host = substr($hp, 0, $colon);
+        $colon = str_ends_with($hp, "]") ? false : strrpos($hp, ":");
+        $nav->host = $colon === false ? $hp : substr($hp, 0, $colon);
+        if (!$has_host
+            && $colon === false
+            && ($port = $server["SERVER_PORT"])
+            && $port != $xport) {
+            $hp .= ":{$port}";
+        }
         $nav->server = $nav->protocol . $hp;
 
         $nav->request_uri = $server["REQUEST_URI"];
@@ -554,32 +564,25 @@ class NavigationState {
                 $path = "/{$path}";
             }
         }
-        $pos = 0;
-        while (($slashdot = strpos($path, "/.", $pos)) !== false) {
-            $dot = $slashdot + 1;
-            $sfxlen = strlen($path) - $dot;
-            if ($sfxlen === 1) {
-                $path = substr($path, 0, $dot);
-                break;
-            }
-            $ch = $path[$dot + 1];
-            if ($ch === "/") {
-                $path = substr_replace($path, "", $dot, 2);
-            } else if ($ch !== "." || ($sfxlen > 2 && $path[$dot + 2] !== "/")) {
-                $pos = $dot + 1;
-            } else if ($slashdot === 0) {
-                $path = substr($path, $dot + 2);
-                if ($path === "") {
-                    $path = "/";
-                }
-            } else {
-                $rpos = $sfxlen === 2 ? $dot + 2 : $dot + 3;
-                $slash = strrpos($path, "/", $dot - 2 - strlen($path)) ? : 0;
-                $path = substr_replace($path, "", $slash + 1, $rpos - $slash - 1);
-                $pos = $slash;
-            }
+        if (strpos($path, "/.") === false) {
+            return $path;
         }
-        return $path;
+        $seg = explode("/", $path);
+        $n = count($seg);
+        $pseg = [];
+        foreach ($seg as $i => $s) {
+            if ($s === "." || $s === "..") {
+                if ($s === ".." && count($pseg) > 1) {
+                    array_pop($pseg);
+                }
+                if ($i !== $n - 1) {
+                    continue;
+                }
+                $s = "";
+            }
+            $pseg[] = $s;
+        }
+        return join("/", $pseg);
     }
 
     /** @param ?string $url
@@ -635,7 +638,8 @@ class NavigationState {
         }
 
         // merge + remove_dot_segments, but resulting path is always nonempty
-        $path = $up["path"] ?? "";
+        // browsers treat `%2e` as `.` and `\` as `/` in paths
+        $path = str_replace("\\", "/", str_ireplace("%2e", ".", $up["path"] ?? ""));
         if (strpos($path, "//") !== false) { // reject empty segments
             return null;
         }
@@ -789,7 +793,7 @@ class Navigation {
 <meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />
 <meta http-equiv=\"Content-Script-Type\" content=\"text/javascript\" />
 <title>Redirection</title>
-<script>location=", json_encode($url), ";</script></head>
+<script>location=", json_encode($url, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG), ";</script></head>
 <body><p>You should be redirected <a href=\"", htmlspecialchars($url), "\">to here</a>.</p></body></html>\n";
         exit(0);
     }

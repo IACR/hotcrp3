@@ -75,8 +75,15 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
         $this->xtype = $aj->type;
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
-        return $state->user->can_manage($prow)
-            || $prow->has_author($state->user);
+        if ($state->user->can_manage($prow)) {
+            return true;
+        } else if (!$prow->has_author($state->user)) {
+            return false;
+        } else if (($fr = $state->user->perm_allow_edit_paper($prow))) {
+            $state->paper_error($fr);
+            return false;
+        }
+        return true;
     }
     static function load_status_state(AssignmentState $state) {
         if ($state->mark_type("status", ["pid"], "Status_Assigner::make")) {
@@ -109,8 +116,10 @@ class Status_AssignmentParser extends UserlessAssignmentParser {
                     $state->callable("WithdrawVotesAssigner")->add_paper($prow);
                 }
             }
-            $r = $req["withdraw_reason"];
-            if ((string) $r !== ""
+            // see also PaperStatus::_prepare_withdraw
+            $r = convert_to_utf8((string) $req["withdraw_reason"]);
+            $r = UnicodeHelper::utf8_truncate_invalid(substr($r, 0, 1024));
+            if ($r !== ""
                 && $state->user->can_withdraw_paper($prow)) {
                 $res->_withdraw_reason = $r;
             }
@@ -272,7 +281,7 @@ class Status_Assigner extends Assigner {
             "prow" => $prow,
             "reason" => $reason,
             "adminupdate" => $tmpl === "@adminwithdraw",
-            "combination_type" => 1
+            "combination_type" => HotCRPMailer::COMBINE_PAPER
         ];
 
         // email contact authors

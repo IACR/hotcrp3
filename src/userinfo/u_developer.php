@@ -199,8 +199,7 @@ class Developer_UserInfo {
         if (empty($toks)) {
             return;
         }
-        Icons::stash_defs("trash");
-        echo '<div class="mt-4">', Ht::unstash();
+        echo '<div class="mt-4">';
         $n = 1;
         foreach ($toks as $tok) {
             if ($tok->timeCreated >= Conf::$now - 10) {
@@ -225,7 +224,7 @@ class Developer_UserInfo {
         $id = "{$tok->timeCreated}.{$dbid}." . substr($tok->salt, 0, 12);
         echo Ht::hidden("bearer_token/{$n}/id", $id),
             Ht::hidden("bearer_token/{$n}/delete", "", ["class" => "deleter", "data-default-value" => ""]),
-            Ht::button(Icons::ui_use("trash", "m"), [
+            Ht::button(Ht::make_licon("trash", "m"), [
                 "class" => "ml-3 btn-licon-s ui js-profile-token-delete need-tooltip",
                 "aria-label" => "Delete API token"
             ]);
@@ -304,8 +303,7 @@ class Developer_UserInfo {
         echo '<p class="w-text">These applications may act on your behalf using ',
             'HotCRP’s API. Disconnecting one revokes every token it holds; ',
             'it can ask for your authorization again.</p>';
-        Icons::stash_defs("trash");
-        echo '<div class="mt-4">', Ht::unstash();
+        echo '<div class="mt-4">';
         $n = 1;
         foreach ($grants as $g) {
             $this->print_grant($us, $g, $n);
@@ -325,7 +323,7 @@ class Developer_UserInfo {
             && $us->has_recent_authentication()) {
             echo Ht::hidden("grant/{$n}/id", ($g->is_cdb ? "A." : "L.") . $g->client_id),
                 Ht::hidden("grant/{$n}/delete", "", ["class" => "deleter", "data-default-value" => ""]),
-                Ht::button(Icons::ui_use("trash", "m"), [
+                Ht::button(Ht::make_licon("trash", "m"), [
                     "class" => "ml-3 btn-licon-s ui js-profile-token-delete need-tooltip",
                     "aria-label" => "Disconnect application"
                 ]);
@@ -534,8 +532,17 @@ class Developer_UserInfo {
         }
 
         $scope = simplify_whitespace($us->qreq["bearer_token/new/scope"] ?? "");
-        if ($scope !== ""
-            && preg_match('/\A(?:[a-z][!\#-\x5b\x5d-~]*+\s*+)++\z/', $scope)) {
+        if ($scope === "") {
+            // unrestricted token
+        } else if (strlen($scope) > 1024) {
+            // a scope is parsed on every request that presents its token, so
+            // it has the length limit `Authorize_Page` puts on OAuth scopes
+            $us->error_at("bearer_token/new/scope", "<0>Scope too long");
+            $this->_new_token = null;
+        } else if (!preg_match('/\A(?:[a-z][!\#-\x5b\x5d-~]*+\s*+)++\z/', $scope)) {
+            $us->error_at("bearer_token/new/scope", "<0>Invalid scope");
+            $this->_new_token = null;
+        } else {
             $token->change_data("scope", $scope);
         }
     }

@@ -231,7 +231,7 @@ function HPromise(executor) {
     }
 }
 HPromise.prototype._resolver = function (state) {
-    var self = this;
+    const self = this;
     return function (value) {
         if (self.state === -1) {
             self.state = state;
@@ -241,20 +241,20 @@ HPromise.prototype._resolver = function (state) {
     };
 };
 HPromise.prototype.then = function (yes, no) {
-    var next = new HPromise;
+    const next = new HPromise;
     this.c.push([no, yes, next]);
-    if (this.state === 0 || this.state === 1)
+    if (this.state === 0 || this.state === 1) {
         this._resolve();
+    }
     return next;
 };
 HPromise.prototype._resolve = function () {
-    var i, x, ss = this.state, s, v, f;
+    const ss = this.state;
     this.state = 2;
-    for (i in this.c) {
-        x = this.c[i];
-        s = ss;
-        v = this.value;
-        f = x[s];
+    for (const i in this.c) {
+        const x = this.c[i];
+        let s = ss, v = this.value;
+        const f = x[s];
         if ($.isFunction(f)) {
             try {
                 v = f(v);
@@ -268,14 +268,17 @@ HPromise.prototype._resolve = function () {
     this.c = [];
     this.state = ss;
 };
+HPromise.prototype.ready = function () {
+    return this.state === 0 || this.state === 1;
+};
 HPromise.resolve = function (value) {
-    var p = new HPromise;
+    const p = new HPromise;
     p.value = value;
     p.state = 1;
     return p;
 };
 HPromise.reject = function (reason) {
-    var p = new HPromise;
+    const p = new HPromise;
     p.value = reason;
     p.state = 0;
     return p;
@@ -1031,6 +1034,72 @@ Object.assign(hotcrp.text, {
     urlencode: urlencode
 });
 
+
+// MIME
+
+hotcrp.mimeinfo = (function () {
+let cache = new Map;
+
+function image(alt, className) {
+    return $e("img", {src: `${siteinfo.assets}images/${this.image_stem}24.svg`,
+                      alt: alt || this.description || "File", class:
+                      className ?? "sdlimg"});
+}
+
+return function (type, filename) {
+    // ported from Mimetype::image_stem()
+    const semi = type.indexOf(";");
+    if (semi >= 0) {
+        type = type.substring(0, semi).trim();
+    }
+    // a gzip file’s icon depends on its name
+    const targz = type === "application/gzip"
+        && typeof filename === "string"
+        && filename.endsWith(".tar.gz"),
+        key = targz ? type + ";tar" : type;
+    if (cache.has(key)) {
+        return cache.get(key);
+    }
+    const ch = type.charCodeAt(0);
+    let ans;
+    if (ch === 97 /*a*/) {
+        if (type === "application/pdf") {
+            ans = {image_stem: "pdf", description: "PDF"};
+        } else if (type.startsWith("audio/")) {
+            ans = {image_stem: "audio"};
+        } else if (type === "application/zip"
+                   || type === "application/x-tar"
+                   || type === "application/x-rar-compressed"
+                   || targz) {
+            ans = {image_stem: "archive"};
+        } else if (type === "application/vnd.ms-powerpoint") {
+            ans = {image_stem: "slides", description: "PowerPoint"};
+        } else if (type === "application/vnd.apple.keynote") {
+            ans = {image_stem: "slides", description: "Keynote"};
+        } else if (type === "application/vnd.openxmlformats-officedocument.presentationml.presentation") {
+            ans = {image_stem: "slides", description: "PowerPoint"};
+        }
+    } else if (ch === 105 /*i*/) {
+        if (type.startsWith("image/")) {
+            ans = {image_stem: "image"};
+        }
+    } else if (ch === 116 /*t*/) {
+        if (type.startsWith("text/")) {
+            ans = {image_stem: "txt"};
+        }
+    } else if (ch === 118 /*v*/) {
+        if (type.startsWith("video/")) {
+            ans = {image_stem: "video"};
+        }
+    }
+    ans = ans || {image_stem: "generic"};
+    ans.image = image;
+    cache.set(key, ans);
+    return ans;
+};
+})();
+
+
 // events
 var event_key = (function () {
 const nonprintable_map = {
@@ -1782,21 +1851,26 @@ function append_item(ul, mi, options) {
             ul.removeAttribute("data-last-mi");
         }
     }
-    if (mi.context) {
-        const s = mi.context[0],
-            p1 = string_utf8_index(s, mi.context[1]),
-            p2 = string_utf8_index(s, mi.context[2]);
-        let sklass = p2 > p1 + 2 ? "context-mark" : "context-caret-mark";
-        if (mi.status > 0)
-            sklass += mi.status > 1 ? " is-error" : " is-warning";
-        ul.lastChild || ul.appendChild(document.createElement("li"));
-        const ctxe = $e("div", "msg-context",
-            s.substring(0, p1), $e("span", sklass, s.substring(p1, p2)), s.substring(p2));
-        if (want_landmark && mi.landmark && (mi.message == null || mi.message === "")) {
-            prepend_landmark(ul, ctxe, mi);
-        }
-        ul.lastChild.appendChild(ctxe);
+    if (!mi.context) {
+        return;
     }
+    const s = mi.context[0];
+    let p1 = mi.context[1], p2 = mi.context[2], ctxe;
+    if (p1 < 0) {
+        ctxe = $e("div", "msg-context", s);
+    } else {
+        p1 = string_utf8_index(s, p1);
+        p2 = string_utf8_index(s, p2);
+        let sklass = (p2 > p1 + 2 ? "context-mark" : "context-caret-mark")
+            + (mi.status > 1 ? " is-error" : " is-warning");
+        ctxe = $e("div", "msg-context",
+            s.substring(0, p1), $e("span", sklass, s.substring(p1, p2)), s.substring(p2));
+    }
+    ul.lastChild || ul.appendChild(document.createElement("li"));
+    if (want_landmark && mi.landmark && (mi.message == null || mi.message === "")) {
+        prepend_landmark(ul, ctxe, mi);
+    }
+    ul.lastChild.appendChild(ctxe);
 }
 
 function append_item_near(elt, mi, options) {
@@ -1809,7 +1883,8 @@ function append_item_near(elt, mi, options) {
         removeClass(elt, "has-warning");
         addClass(elt, "has-error");
     }
-    if (mi.message == null || mi.message === "") {
+    if ((mi.message == null || mi.message === "")
+        && !mi.context) {
         return true;
     }
     let owner = elt && elt.closest(".f-i, .entry, .entryi, fieldset");
@@ -2524,7 +2599,7 @@ function change_tail_direction(tail, bubsty, sizes, dir) {
         })));
     tail.style.width = `${wx1}px`;
     tail.style.height = `${wy1}px`;
-    tail.style.top = tail.style.left = tail.style.top = tail.style.bottom = "";
+    tail.style.top = tail.style.right = tail.style.bottom = tail.style.left = "";
     if (dir & 1) {
         tail.style[lcdir[dir]] = `${-wx1}px`;
     } else {
@@ -3262,20 +3337,22 @@ function $popup(options) {
     }
 
     function close() {
-        removeClass(document.body, "modal-open");
-        document.body.removeEventListener("keydown", dialog_keydown);
-        set_inert(false);
-        if (document.activeElement
-            && modale.contains(document.activeElement)) {
-            document.activeElement.blur();
+        if (!modale.hidden) {
+            removeClass(document.body, "modal-open");
+            document.body.removeEventListener("keydown", dialog_keydown);
+            set_inert(false);
+            if (document.activeElement
+                && modale.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
+            hotcrp.tooltip.close();
+            $(modale).find("textarea, input").unautogrow();
+            $(forme).trigger("closedialog");
+            if (prior_focus) {
+                prior_focus.focus({preventScroll: true});
+            }
         }
-        hotcrp.tooltip.close();
-        $(modale).find("textarea, input").unautogrow();
-        $(forme).trigger("closedialog");
         modale.remove();
-        if (prior_focus) {
-            prior_focus.focus({preventScroll: true});
-        }
     }
 
     function dialog_click(evt) {
@@ -3342,7 +3419,10 @@ function $popup(options) {
         awaken: function () {
             $(forme).awaken();
         },
-        close: close
+        close: close,
+        is_visible: function () {
+            return !modale.hidden;
+        }
     };
 
     function open() {
@@ -3925,7 +4005,7 @@ handle_ui.on("js-tracker", function (evt) {
         const trp = "tr/" + trno, ktrp = "k-tr/" + trno,
             $t = $e("fieldset", {class: "tracker-group", "data-index": trno, "data-trackerid": tr.trackerid},
                 $e("legend", "mb-1",
-                    $e("input", {id: ktrp + "/name", type: "text", name: trp + "/name", size: 24, class: "want-focus need-autogrow", value: tr.name || "", placeholder: tr.is_new ? "New tracker" : "Unnamed tracker"})),
+                    $e("input", {id: ktrp + "/name", type: "text", name: trp + "/name", size: 24, class: "want-focus need-autogrow", value: tr.name || "", placeholder: tr.is_new ? "New unnamed tracker" : "Unnamed tracker"})),
                 hidden_input(trp + "/id", tr.trackerid));
         if (tr.trackerid === "new" && siteinfo.paperid)
             $t.append(hidden_input(trp + "/p", siteinfo.paperid));
@@ -3934,14 +4014,15 @@ handle_ui.on("js-tracker", function (evt) {
         let vis = tr.visibility || "", vistype;
         if (vis === "+none" || vis === "none") {
             vistype = "none";
-            vis = "";
-        } else if (vis !== "") {
-            vistype = vis.charAt(0);
+            vis = "x";
+        } else if (vis === "" || vis === "all") {
+            vistype = "all";
+            vis = "x";
         } else {
-            vistype = "";
+            vistype = vis.charAt(0);
         }
         const gvis = (dl.tracker && dl.tracker.global_visibility) || "",
-            vismap = [["", "Whole PC"], ["+", "PC members with tag"], ["-", "PC members without tag"]],
+            vismap = [["all", "Whole PC"], ["+", "PC members with tag"], ["-", "PC members without tag"]],
             vissel = $e("select", {id: ktrp + "/visibility_type", name: trp + "/visibility_type", class: "uich js-foldup", "data-default-value": vistype});
         if (hotcrp.status.is_admin) {
             vismap.push(["none", "Administrators only"]);
@@ -3955,12 +4036,13 @@ handle_ui.on("js-tracker", function (evt) {
                 $e("input", {type: "text", name: trp + "/visibility", value: vis.substring(1), placeholder: "(tag)", class: "need-suggest need-autogrow pc-tags fx ml-2"}))));
         if (gvis) {
             let gvist;
-            if (gvis === "+none")
+            if (gvis === "+none") {
                 gvist = "Administrators only";
-            else if (gvis.charAt(0) === "+")
+            } else if (gvis.charAt(0) === "+") {
                 gvist = "PC members with tag " + gvis.substring(1);
-            else
+            } else {
                 gvist = "PC members without tag " + gvis.substring(1);
+            }
             $t.append($e("div", "entryi",
                 $e("label", null, "Global visibility"),
                 $e("div", "entry", gvist, $e("div", "f-d", "This ", $e("a", {href: hoturl("settings", {group: "tracks"})}, "setting"), " restricts all trackers."))));
@@ -4015,18 +4097,40 @@ handle_ui.on("js-tracker", function (evt) {
         clearInterval(elapsed_timer);
     }
     function new_tracker() {
-        var tr = {
-            is_new: true, trackerid: "new",
-            visibility: wstor.site(false, "hotcrp-tracking-visibility"),
-            hide_conflicts: true,
-            listinfo: document.body.getAttribute("data-hotlist")
-        }, $myg = $(this).closest("div.lg");
-        if (siteinfo.paperid) {
-            tr.papers = [{pid: siteinfo.paperid}];
+        const $myg = $(this).closest("div.lg"),
+            listinfo = document.body.getAttribute("data-hotlist");
+        function make(visibility) {
+            const tr = {
+                is_new: true, trackerid: "new",
+                visibility: visibility,
+                hide_conflicts: true,
+                listinfo: listinfo
+            };
+            if (siteinfo.paperid) {
+                tr.papers = [{pid: siteinfo.paperid}];
+            }
+            focus_within($(make_tracker(tr)).insertBefore($myg));
+            $myg.remove();
+            $pu.awaken();
         }
-        focus_within($(make_tracker(tr)).insertBefore($myg));
-        $myg.remove();
-        $pu.awaken();
+        const recent = tracker_recent_visibility();
+        let ids = null;
+        try {
+            const j = JSON.parse(listinfo || "null");
+            ids = j && j.ids ? decode_session_list_ids(j.ids) : null;
+        } catch (err) {
+        }
+        if (recent !== null || !ids || ids.length === 0) {
+            make(recent);
+            return;
+        }
+        // ask the server for the list’s default visibility
+        this.disabled = true;
+        $.ajax(hoturl("api/search", {q: "pidcode:" + encode_session_list_ids(ids), t: "viewable", default_tracker_visibility: 1}), {
+            method: "GET", success: function (data) {
+                make(data && data.ok ? data.default_tracker_visibility : null);
+            }
+        });
     }
     function make_submit_success(hiding, why) {
         return function (data) {
@@ -4132,15 +4236,25 @@ handle_ui.on("js-tracker", function (evt) {
         start();
     } else {
         $.post(hoturl("=api/trackerconfig"),
-               {"tr/1/id": "new", "tr/1/listinfo": document.body.getAttribute("data-hotlist"), "tr/1/p": siteinfo.paperid, "tr/1/visibility": wstor.site(false, "hotcrp-tracking-visibility")},
+               {"tr/1/id": "new", "tr/1/listinfo": document.body.getAttribute("data-hotlist"), "tr/1/p": siteinfo.paperid, "tr/1/visibility": tracker_recent_visibility() || ""},
                make_submit_success({}, "new"));
     }
 });
 
+// A recently chosen tracker visibility overrides the default for new trackers.
+function tracker_recent_visibility() {
+    const x = wstor.site_json(false, "hotcrp-tracking-visibility");
+    if (x && typeof x === "object" && typeof x.v === "string"
+        && x.at > now_sec() - 172800) {
+        return x.v;
+    }
+    return null;
+}
+
 function tracker_configure_success() {
     if (dl.tracker_here) {
-        var visibility = tracker_find(dl.tracker_here).visibility || null;
-        wstor.site(false, "hotcrp-tracking-visibility", visibility);
+        const visibility = tracker_find(dl.tracker_here).visibility || "all";
+        wstor.site(false, "hotcrp-tracking-visibility", {v: visibility, at: now_sec()});
     }
     tracker_configured = false;
 }
@@ -4547,10 +4661,10 @@ function fold_map(e, type) {
     } else if (s) {
         s = [s];
     }
-    const m = {};
+    const m = {}, pfx = type === "session" ? e.getAttribute("data-fold-session-prefix") : "";
     for (const k in s || {}) {
         const v = s[k];
-        m[k] = v.charAt(0) === "-" ? [v.substring(1), true] : [v, false];
+        m[k] = v.charAt(0) === "-" ? [pfx + v.substring(1), true] : [pfx + v, false];
     }
     return m;
 }
@@ -4647,7 +4761,10 @@ function foldup(evt, opts) {
         } else if ((l = evt.target.closest("label"))) {
             opts.open = true;
             preventDefault = false;
-            if (l.control && l.control.checkVisibility()) {
+            if (l.control
+                && (l.control.checkVisibility
+                    ? l.control.checkVisibility()
+                    : l.control.offsetParent !== null)) {
                 return;
             }
         }
@@ -4829,13 +4946,11 @@ function $svg(tag, attr) {
     return e;
 }
 
-function $svg_use_licon(name, size, rest) {
+function $svg_licon(name, size, rest) {
     rest = Object.assign({}, rest || {});
     rest.class = "licon licon-" + (size || "l") + (rest.class ? ` ${rest.class}` : "");
-    rest.viewBox = "0 0 64 64";
-    rest.preserveAspectRatio = "none";
     rest["aria-hidden"] = "true";
-    return $svg("svg", rest, $svg("use", {href: "#i-def-" + name}));
+    return $svg("svg", rest, $svg("use", {href: window.siteinfo.icons_url + "#" + name}));
 }
 
 function $e(tag, attr) {
@@ -4889,13 +5004,18 @@ function make_expander_element(foldnum) {
 handle_ui.on("js-retheme", function () {
     const v = this.value || this.getAttribute("data-theme"),
         th = $$("p-theme");
-    if (v === "auto") {
-        th.textContent = "";
-    } else if (v === "light") {
-        th.textContent = "@layer dark-mode, theme;";
+    th && th.remove();
+    let want = "";
+    if (v === "light") {
+        want = "@layer dark-mode, theme; ";
     } else if (v === "dark") {
-        th.textContent = "@supports (color: light-dark(red, blue)) { @layer theme, dark-mode; }";
+        want = "@supports (color: light-dark(red, blue)) { @layer theme, dark-mode; } ";
     }
+    // 2026-08: Chrome reevaluates layer order only when parsing a sheet that
+    // contains an `@layer` block with a style rule in it.
+    want += "@layer retheme-trigger { :root { --p-theme: 1; } }";
+    const first_css = document.querySelector("link[rel=stylesheet]");
+    first_css.before($e("style", {id: "p-theme"}, want));
 });
 
 
@@ -6621,7 +6741,9 @@ function render_review_body_in(rrow, bodye) {
         h3.className = "s-rf-title";
         h3.appendChild(fte);
         let vis = f.visibility || "re";
-        if (vis === "audec" && hotcrp.status && hotcrp.status.myperm
+        if (vis === "audec"
+            && hotcrp.status
+            && hotcrp.status.myperm
             && hotcrp.status.myperm.some_author_can_view_decision) {
             vis = "au";
         }
@@ -7256,9 +7378,8 @@ Checkbox_ReviewField.prototype.unparse_symbol = function (val) {
         return "½✓";
     } else if (val < 0.875) {
         return "¾✓";
-    } else {
-        return "✓";
     }
+    return "✓";
 };
 
 Checkbox_ReviewField.prototype.render_in = function (fv, rrow, fe) {
@@ -7307,14 +7428,14 @@ Checkboxes_ReviewField.prototype.render_in = function (fv, rrow, fe) {
 
 
 hotcrp.make_review_field = function (fj) {
-    if (fj.type === "radio" || fj.type === "dropdown")
+    if (fj.type === "radio" || fj.type === "dropdown") {
         return new Score_ReviewField(fj);
-    else if (fj.type === "checkbox")
+    } else if (fj.type === "checkbox") {
         return new Checkbox_ReviewField(fj);
-    else if (fj.type === "checkboxes")
+    } else if (fj.type === "checkboxes") {
         return new Checkboxes_ReviewField(fj);
-    else
-        return new ReviewField(fj);
+    }
+    return new ReviewField(fj);
 };
 
 hotcrp.set_review_form = function (rfj) {
@@ -7649,9 +7770,9 @@ function cmt_render_form_prop(cj, cid, btnbox) {
 
     // attachments
     einfo.append($e("div", {class: "cmtprop w-text has-editable-attachments", hidden: true, role: "group", "aria-label": "Attachments"},
-        $e("span", {class: "need-tooltip", "data-tooltip": "Attachments"}, $svg_use_licon("attachment")),
+        $e("span", {class: "need-tooltip", "data-tooltip": "Attachments"}, $svg_licon("attachment")),
         $e("div", {id: cid + "-attachments", class: "entry", "data-dt": -2, "data-document-prefix": "attachment"})));
-    btnbox.append($e("button", {type: "button", name: "attach", class: "btn-licon need-tooltip ui js-add-attachment", "aria-label": "Attach file", "data-editable-attachments": cid + "-attachments"}, $svg_use_licon("attachment")));
+    btnbox.append($e("button", {type: "button", name: "attach", class: "btn-licon need-tooltip ui js-add-attachment", "aria-label": "Attach file", "data-editable-attachments": cid + "-attachments"}, $svg_licon("attachment")));
 
     // visibility and thread, stated as an editable sentence
     if (!cj.response) {
@@ -7685,16 +7806,16 @@ function cmt_render_form_prop(cj, cid, btnbox) {
         }*/
         evis.append(cmt_inline_select("topic", cid + "-thread", topt, "Thread"));
         einfo.append($e("div", "cmtprop w-text",
-            $e("span", {class: "need-tooltip", "data-tooltip": "Visibility"}, $svg_use_licon("eye")),
+            $e("span", {class: "need-tooltip", "data-tooltip": "Visibility"}, $svg_licon("eye")),
             $e("div", "entry", evis, eblind, $e("div", {class: "cmtvis-hints", "aria-live": "polite"}))));
     }
 
     // tags (appended below the sentence)
     if (!cj.response && !cj.by_author) {
         einfo.append($e("div", {class: "cmtprop w-text", hidden: true},
-            $e("label", {for: cid + "-tags", class: "need-tooltip", "data-tooltip": "Tags"}, $svg_use_licon("tag")),
+            $e("label", {for: cid + "-tags", class: "need-tooltip", "data-tooltip": "Tags"}, $svg_licon("tag")),
             $e("input", {id: cid + "-tags", class: "pled", name: "tags", type: "text", size: 50, placeholder: "Comment tags", "aria-label": "Tags"})));
-        btnbox.append($e("button", {type: "button", name: "showtags", class: "btn-licon need-tooltip", "aria-label": "Tags"}, $svg_use_licon("tag")));
+        btnbox.append($e("button", {type: "button", name: "showtags", class: "btn-licon need-tooltip", "aria-label": "Tags"}, $svg_licon("tag")));
     }
 
     // delete
@@ -7706,7 +7827,7 @@ function cmt_render_form_prop(cj, cid, btnbox) {
         } else {
             bnote = "Are you sure you want to override the deadline and delete this " + x + "?";
         }
-        btnbox.append($e("button", {type: "button", name: "delete", class: "btn-licon need-tooltip", "aria-label": "Delete " + x, "data-override-text": bnote}, $svg_use_licon("trash")));
+        btnbox.append($e("button", {type: "button", name: "delete", class: "btn-licon need-tooltip", "aria-label": "Delete " + x, "data-override-text": bnote}, $svg_licon("trash")));
     }
 
     // response ready
@@ -7950,13 +8071,10 @@ function cmt_render_attachment_input(ctr, doc) {
 }
 
 function cmt_render_attachment(doc) {
-    const a = $e("a", {href: siteinfo.site_relative + doc.siteurl, class: "qo"});
-    if (doc.mimetype === "application/pdf") {
-        a.append($e("img", {src: siteinfo.assets + "images/pdf.png", alt: "[PDF]", class: "sdlimg"}));
-    } else {
-        a.append($e("img", {src: siteinfo.assets + "images/generic.png", alt: "[Attachment]", class: "sdlimg"}));
-    }
-    a.append(" ", $e("u", "x", doc.unique_filename || doc.filename || "Attachment"));
+    const a = $e("a", {href: siteinfo.site_relative + doc.siteurl, class: "qo"}),
+        mi = hotcrp.mimeinfo(doc.mimetype, doc.filename);
+    a.append(mi.image(mi.description || "Attachment", "sdlimg"),
+             " ", $e("u", "x", doc.unique_filename || doc.filename || "Attachment"));
     if (doc.size != null) {
         a.append(" ", $e("span", "dlsize", "(" + unparse_byte_size(doc.size) + ")"));
     }
@@ -8056,6 +8174,12 @@ function cmt_toggle_editing(celt, editing) {
     }
 }
 
+function cmt_clear_no_dry_run() {
+    let form = this.closest("form");
+    form.removeAttribute("data-no-dry-run");
+    form.elements.text && form.elements.text.removeEventListener("input", cmt_clear_no_dry_run);
+}
+
 function cmt_save_callback(cj) {
     var cid = cj_cid(cj), celt = $$(cid), form = celt.querySelector("form");
     return function (data) {
@@ -8079,9 +8203,10 @@ function cmt_save_callback(cj) {
                     message: "<0>To continue anyway, click “" + (bsub ? bsub.textContent : "Save") + "” again.",
                     status: -4 /*MessageSet::MARKED_NOTE*/
                 });
+                form.elements.text.addEventListener("input", cmt_clear_no_dry_run);
             }
-            if (form.elements.topic) {
-                toggleClass(form.elements.topic.parentElement, "is-warning", feedback.list_status(ml, "topic") > 0);
+            for (const f of ["visibility", "topic"]) {
+                form.elements[f] && toggleClass(form.elements[f].parentElement, "is-warning", feedback.list_status(ml, f) > 0);
             }
             $(celt).find(".cmtmsg").html(feedback.render_alert(ml));
             $(celt).find("button, input[type=file]").prop("disabled", false);
@@ -8678,13 +8803,10 @@ hotcrp.shortcut = function (top_elt) {
 var demand_load = {};
 
 demand_load.make = function (executor) {
-    var promise;
+    let promise;
     return function (value) {
         if (!promise) {
-            if (value != null)
-                promise = HPromise.resolve(value);
-            else
-                promise = new HPromise(executor);
+            promise = value != null ? HPromise.resolve(value) : new HPromise(executor);
         }
         return promise;
     };
@@ -8737,12 +8859,13 @@ demand_load.search_completion = demand_load.make(function (resolve) {
 });
 
 demand_load.alltag_info = demand_load.make(function (resolve) {
-    if (siteinfo.user.is_pclike)
+    if (siteinfo.user.is_pclike) {
         $.get(hoturl("api/alltags"), null, function (v) {
             resolve(v && v.tags ? v : {tags: []});
         });
-    else
+    } else {
         resolve({tags: []});
+    }
 });
 
 demand_load.tags = demand_load.make(function (resolve) {
@@ -9669,8 +9792,12 @@ hotcrp.suggest.add_builder("pc-tags", function (elt) {
     if (cs.matchLeft(/(?:^|\s)#?([^#\s]*)$/)) {
         cs.matchRight(/([^#\s]*)/y);
         cs.skipRe = /#[-+]?(?:\d+\.?|\.\d)\d*/y;
+        const role_tags = elt.hasAttribute("data-suggest-role-tags");
         return cs.filterFrom(demand_load.pc().then(function (pc) {
-            return pc.tags || [];
+            return (pc.tags || []).filter(function (t) {
+                // keep in sync with Contact::ROLE_TAGS
+                return role_tags || !/^(?:pc|listedpc|unlistedpc|bot)$/i.test(t);
+            });
         }));
     }
 });
@@ -10538,6 +10665,9 @@ function tablelist_postreorder(tbl) {
     }
     lasthead && change_heading(null);
     tbl.setAttribute("data-reordered", "");
+    // recompute group checkboxes, including those of new heading rows
+    const ge = tbl.querySelector(".is-range-group");
+    ge && handle_ui.trigger.call(ge, "js-range-click", new CustomEvent("updaterange", {detail: {}}));
 }
 
 
@@ -10787,15 +10917,21 @@ DraggableRow.prototype.legend = function () {
         t = t ? "#".concat(this.id, "  ", t) : "#" + this.id;
     return t;
 };
+DraggableRow.prototype.selected = function () {
+    const e = this.front.querySelector("input.js-selector");
+    return e && e.checked;
+};
 
-function make_gapf() {
-    var gaps = [], gappos = 0;
+function make_gapf(choices) {
+    const gaps = [];
+    let gappos = 0;
+    choices = choices || [1, 1, 1, 1, 1, 2, 2, 2, 3, 4];
     return function (reset) {
         if (reset) {
             gappos = 0;
         }
         if (gappos === gaps.length) {
-            gaps.push([1, 1, 1, 1, 1, 2, 2, 2, 3, 4][Math.floor(Math.random() * 10)]);
+            gaps.push(choices[Math.floor(Math.random() * choices.length)]);
         }
         return gaps[gappos++];
     };
@@ -10963,9 +11099,9 @@ handle_ui.on("js-annotate-order", function () {
             session_chair = $e("span", "select", inpute("session_chair", {type: "select", class: "need-pcselector", "data-pcselector-options": "0 *", "data-default-value": anno.session_chair || "none"}, "session")),
             deleter = $e("button", {
                 type: "button",
-                class: "ml-2 need-tooltip js-delete-ta",
+                class: "ml-2 need-tooltip js-delete-ta btn-licon-s",
                 "aria-label": "Delete annotation"
-            }, $svg_use_licon("trash", "m")),
+            }, $svg_licon("trash", "s")),
             fieldset = $e("fieldset", "mt-3 mb-2",
                 $e("legend", null,
                     "#" + dtag + "#",
@@ -10982,6 +11118,7 @@ handle_ui.on("js-annotate-order", function () {
     }
     function awaken_anno() {
         $pu.find(".need-pcselector").each(populate_pcselector);
+        $pu.awaken();
     }
     function show_dialog(rv) {
         if (!rv.ok || !rv.editable)
@@ -11099,18 +11236,39 @@ function DraggableTable(srctr, dragtag) {
             }
         }
     }
+
+    // dragging a selected submission also drags other selected submissions
+    this.multi = null;
+    if (this.srcindex !== null
+        && this.rs[this.srcindex].id
+        && this.rs[this.srcindex].selected()) {
+        const multi = [];
+        for (const ra of this.rs) {
+            ra.id && ra.selected() && multi.push(ra.index);
+        }
+        this.multi = multi.length > 1 ? multi : null;
+    }
 }
-DraggableTable.prototype.group_back_index = function (i) {
-    if (i < this.rs.length && this.rs[i].isgroup) {
-        while (i + 1 < this.rs.length && !this.rs[i + 1].isgroup) {
+DraggableTable.prototype.group_back_index = function (i, rs) {
+    rs = rs || this.rs;
+    if (i < rs.length && rs[i].isgroup) {
+        while (i + 1 < rs.length && !rs[i + 1].isgroup) {
             ++i;
         }
     }
     return i;
 };
+DraggableTable.prototype.legend = function () {
+    const frag = document.createDocumentFragment();
+    frag.append(this.rs[this.srcindex].legend());
+    if (this.multi) {
+        frag.append($e("span", "dim", " + ".concat(this.multi.length - 1, " more")));
+    }
+    return frag;
+};
 DraggableTable.prototype.content = function () {
     if (this.srcindex !== null) {
-        return this.rs[this.srcindex].legend();
+        return this.legend();
     }
     return "None";
 };
@@ -11118,32 +11276,41 @@ DraggableTable.prototype.content = function () {
 function Tagval_DraggableTable(srctr, dragtag) {
     DraggableTable.call(this, srctr, dragtag);
     this.dragtag = dragtag;
-    this.gapf = function () { return 1; };
-    // annotated groups are assumed to be gapless
-    if (this.grouprs.length > 0) {
-        let sd = 0, nd = 0, s2d = 0, lv = null;
-        for (let i = 0; i < this.rs.length; ++i) {
-            if (this.rs[i].id && this.rs[i].tagval !== false) {
-                if (lv !== null) {
-                    ++nd;
-                    const d = this.rs[i].tagval - lv;
-                    sd += d;
-                    s2d += d * d;
-                }
-                lv = this.rs[i].tagval;
-            }
+    // collect positive gaps between adjacent submissions in the same group
+    const gaps = [];
+    let lv = null, sd = 0, s2d = 0, integral = true;
+    for (const ra of this.rs) {
+        if (ra.isgroup || ra.tagval === false) {
+            lv = null;
+            continue;
         }
-        if (nd < 4 || sd < 0.9 * nd || sd > 1.1 * nd || s2d < 0.9 * nd || s2d > 1.1 * nd) {
-            this.gapf = make_gapf();
+        if (lv !== null && ra.tagval > lv) {
+            const d = ra.tagval - lv;
+            gaps.push(d);
+            sd += d;
+            s2d += d * d;
         }
+        lv = ra.tagval;
+        integral = integral && ra.tagval === Math.floor(ra.tagval);
     }
+    // Gapless orders stay gapless. Other orders get gaps drawn from their
+    // existing gaps, so that hidden submissions are harder to locate.
+    const nd = gaps.length;
+    this.gapless = nd >= 4 && sd >= 0.9 * nd && sd <= 1.1 * nd
+        && s2d >= 0.9 * nd && s2d <= 1.1 * nd;
+    if (this.gapless) {
+        this.gapf = function () { return 1; };
+    } else {
+        this.gapf = make_gapf(nd >= 4 ? gaps : null);
+    }
+    this.gapstep = integral ? 1 : 0.01;
 }
 Object.setPrototypeOf(Tagval_DraggableTable.prototype, DraggableTable.prototype);
 Tagval_DraggableTable.prototype.content = function () {
     const frag = document.createDocumentFragment(),
         unchanged = this.srcindex === this.dragindex,
         srcra = this.rs[this.srcindex];
-    frag.append(srcra.legend());
+    frag.append(this.legend());
     let newval;
     if (unchanged) {
         newval = srcra.tagval;
@@ -11160,106 +11327,212 @@ Tagval_DraggableTable.prototype.content = function () {
     return frag;
 };
 Tagval_DraggableTable.prototype.compute = function () {
-    const len = this.rs.length, si = this.srcindex, di = this.dragindex,
-        sigroup = this.rs[si].isgroup, nsi = this.group_back_index(si) - si + 1;
-    let i, j, d, tv;
-    // initialize to unchanged, reset gap
-    for (i = 0; i !== len; ++i) {
-        this.rs[i].newtagval = this.rs[i].tagval;
-    }
-    this.gapf(true);
-    // forward: [init] [si:SRC:si+nsi) [si+nsi:shift:di) <DST> [di:rest:len)
-    // reverse: [init] <DST> [di:shift:si) [si:SRC:si+nsi) [si+nsi:rest:len)
-    // return if no shift region (which means no change)
-    if (si === di
-        || si + nsi === di
-        || (this.rs[si].tagval === false
-            && di > 0
-            && this.rs[di-1].tagval === false)) {
+    if (!this.multi) {
+        this.compute_move(this.rs, this.srcindex, this.dragindex);
         return;
     }
-    // forward: handle shift region
-    if (si < di && this.rs[si+nsi].tagval !== false) {
-        d = this.rs[si].tagval - this.rs[si+nsi].tagval;
-        i = si + nsi;
-        while (i !== di
-               && this.rs[i].tagval !== false
-               && (sigroup || !this.rs[i].isgroup)) {
-            this.rs[i].newtagval += d;
-            ++i;
+    // move the source row, then move other selected rows next to it
+    const work = this.rs.map(function (ra) {
+        return {ra: ra, tagval: ra.tagval, newtagval: ra.tagval, isgroup: ra.isgroup};
+    }), ws = work.slice(), self = this;
+    function move(w, di) {
+        const si = work.indexOf(w);
+        self.compute_move(work, si, di);
+        work.splice(si, 1);
+        work.splice(di > si ? di - 1 : di, 0, w);
+        for (const x of work) {
+            x.tagval = x.newtagval;
         }
     }
-    // handle move region
-    if (len === 0 || (di === 0 && this.rs[di].newtagval === false)) {
-        tv = 1;
-    } else if (di === 0) {
-        tv = this.rs[di].newtagval;
+    const srcw = ws[this.srcindex];
+    move(srcw, this.dragindex);
+    // earlier rows go before the source, later rows after it;
+    // if the source became untagged, all rows go after it
+    let before = this.multi.filter((i) => i < this.srcindex),
+        after = this.multi.filter((i) => i > this.srcindex);
+    if (srcw.tagval === false) {
+        after = before.concat(after);
+        before = [];
+    }
+    for (let i = before.length - 1; i >= 0; --i) {
+        move(ws[before[i]], work.indexOf(ws[before[i + 1] ?? this.srcindex]));
+    }
+    for (let i = 0; i !== after.length; ++i) {
+        move(ws[after[i]], work.indexOf(ws[i ? after[i - 1] : this.srcindex]) + 1);
+    }
+    for (const w of work) {
+        w.ra.newtagval = w.newtagval;
+    }
+};
+Tagval_DraggableTable.prototype.compute_move = function (rs, si, di) {
+    const len = rs.length, srcra = rs[si], sigroup = srcra.isgroup,
+        nsi = this.group_back_index(si, rs) - si + 1;
+    // initialize to unchanged, reset gap
+    for (const ra of rs) {
+        ra.newtagval = ra.tagval;
+    }
+    this.gapf(true);
+    // return if no change
+    if (si === di
+        || si + nsi === di
+        || (srcra.tagval === false
+            && di > 0
+            && rs[di-1].tagval === false)) {
+        return;
+    }
+    // gapless orders close the hole left by a forward move
+    if (this.gapless
+        && si < di
+        && rs[si+nsi].tagval !== false
+        && (sigroup || !rs[si+nsi].isgroup)) {
+        const d = rs[si+nsi].tagval - srcra.tagval;
+        for (let i = si + nsi;
+             i !== di && rs[i].tagval !== false && (sigroup || !rs[i].isgroup);
+             ++i) {
+            rs[i].newtagval -= d;
+        }
+    }
+    // a move into the untagged region clears the tag
+    const prev = di > 0 ? rs[di-1] : null, next = di < len ? rs[di] : null;
+    if (prev && prev.newtagval === false) {
+        for (let i = si; i !== si + nsi; ++i) {
+            rs[i].newtagval = false;
+        }
+        return;
+    }
+    // choose the new value; a submission may share its group heading’s value
+    const hi = next && next.newtagval !== false ? next.newtagval : null;
+    let tv, gap = 0;
+    if (!prev) {
+        tv = this.top_value(hi);
     } else {
-        tv = this.rs[di-1].newtagval;
-        if (tv !== false && (sigroup || !this.rs[di-1].isgroup)) {
-            tv += this.gapf();
-        }
-        if (tv !== false && sigroup) {
-            j = si < di ? si + nsi : di;
-            if (j !== len && this.rs[j].tagval !== false) {
-                tv = Math.max(tv, this.rs[j].tagval);
-            }
-        }
+        gap = prev.isgroup && !sigroup ? 0 : this.gapf();
+        tv = this.room_value(prev.newtagval, gap, hi);
     }
-    if (tv === false || this.rs[si].tagval === false) {
-        for (i = si; i !== si + nsi; ++i) {
-            this.rs[i].newtagval = tv;
-        }
-    } else {
-        d = tv - this.rs[si].tagval;
-        for (i = si; i !== si + nsi; ++i) {
-            this.rs[i].newtagval += d;
-        }
+    if (tv !== null) {
+        this.place(rs, si, nsi, tv);
+        this.push_after(rs, si, nsi, di);
+        return;
     }
-    // reverse: handle shift region
-    if (si > di
-        && (nsi === 1 || this.rs[si+nsi-1].newtagval >= this.rs[di].tagval)) {
-        tv = this.rs[si+nsi-1].newtagval + this.gapf();
-        if (sigroup) {
-            tv = Math.max(tv, this.rs[si].tagval);
-        }
-        d = tv - this.rs[di].tagval;
-        i = di;
-        while (i !== si
-               && this.rs[i].tagval !== false
-               && (i === di || this.rs[i].tagval <= this.rs[i-1].newtagval)) {
-            this.rs[i].newtagval += d;
-            ++i;
-        }
+    // no room: shift later rows down, or earlier rows up, whichever
+    // changes fewer rows
+    const base = rs.map((ra) => ra.newtagval);
+    this.place(rs, si, nsi, prev.newtagval + gap);
+    this.push_after(rs, si, nsi, di);
+    if (this.gapless || nsi !== 1) {
+        return;
     }
-    // handle rest
-    i = Math.max(si + nsi, di);
-    if (i !== len && this.rs[i].tagval !== false) {
-        if (si < di) { // forward
-            tv = this.rs[si + nsi - 1].newtagval + this.gapf();
-        } else { // reverse
-            tv = this.rs[si - 1].newtagval;
-            if (this.rs[i].tagval !== this.rs[si-1].tagval) {
-                tv += this.gapf();
-            }
-        }
-        while (this.rs[i].tagval < tv) {
-            this.rs[i].newtagval = tv;
-            ++i;
-            if (i === len || this.rs[i].tagval === false) {
-                break;
-            }
-            tv += Math.min(this.rs[i].tagval - this.rs[i-1].tagval, this.gapf());
-        }
+    const after = rs.map((ra) => ra.newtagval);
+    rs.forEach((ra, i) => { ra.newtagval = base[i]; });
+    this.place(rs, si, nsi, hi - this.gapf());
+    if (!this.pull_before(rs, si, nsi, di)
+        || changed_count(rs) >= changed_count(rs, after)) {
+        rs.forEach((ra, i) => { ra.newtagval = after[i]; });
     }
+};
+function changed_count(rs, nvs) {
+    let n = 0;
+    for (let i = 0; i !== rs.length; ++i) {
+        if ((nvs ? nvs[i] : rs[i].newtagval) !== rs[i].tagval)
+            ++n;
+    }
+    return n;
+}
+Tagval_DraggableTable.prototype.place = function (rs, si, nsi, tv) {
+    const srctv = rs[si].tagval;
+    for (let i = si; i !== si + nsi; ++i) {
+        rs[i].newtagval = srctv === false ? tv : rs[i].tagval + tv - srctv;
+    }
+};
+// Shift rows after the moved rows down until they fit.
+Tagval_DraggableTable.prototype.push_after = function (rs, si, nsi, di) {
+    let x = rs[si + nsi - 1], first = true;
+    for (let i = di; i !== rs.length; ++i) {
+        if (i === si) {
+            i += nsi - 1;
+            continue;
+        }
+        const y = rs[i];
+        if (y.newtagval === false) {
+            break;
+        }
+        const tie = (x.isgroup && !y.isgroup) || (!first && y.tagval === x.tagval);
+        if (tie ? y.newtagval >= x.newtagval : y.newtagval > x.newtagval) {
+            break;
+        }
+        if (x.isgroup && !y.isgroup) {
+            y.newtagval = x.newtagval;
+        } else if (first) {
+            y.newtagval = x.newtagval + this.gapf();
+        } else {
+            y.newtagval = x.newtagval + Math.min(y.tagval - x.tagval, this.gapf());
+        }
+        x = y;
+        first = false;
+    }
+};
+// Shift rows before the moved rows up until they fit. Return false if that
+// would move a positive value to 0 or below.
+Tagval_DraggableTable.prototype.pull_before = function (rs, si, nsi, di) {
+    let x = rs[si], first = true;
+    if (x.newtagval <= 0 && rs[di].newtagval > 0) {
+        return false;
+    }
+    for (let i = di - 1; i >= 0; --i) {
+        if (i === si + nsi - 1) {
+            i -= nsi - 1;
+            continue;
+        }
+        const y = rs[i];
+        const tie = (y.isgroup && !x.isgroup) || (!first && y.tagval === x.tagval);
+        if (tie ? y.newtagval <= x.newtagval : y.newtagval < x.newtagval) {
+            break;
+        }
+        if (y.isgroup && !x.isgroup) {
+            y.newtagval = x.newtagval;
+        } else if (first) {
+            y.newtagval = x.newtagval - this.gapf();
+        } else {
+            y.newtagval = x.newtagval - Math.min(x.tagval - y.tagval, this.gapf());
+        }
+        if (y.newtagval <= 0 && y.tagval > 0) {
+            return false;
+        }
+        x = y;
+        first = false;
+    }
+    return true;
+};
+// Return a value in (lo, hi) close to lo + gap, or null if there’s no room.
+// If gap is 0, the value may equal lo.
+Tagval_DraggableTable.prototype.room_value = function (lo, gap, hi) {
+    const v = lo + gap;
+    if (hi === null || v < hi) {
+        return v;
+    } else if (gap === 0) {
+        return null;
+    }
+    const step = this.gapstep, m = lo + step * Math.floor((hi - lo) / (2 * step) + 1e-9);
+    return m > lo && m < hi ? m : null;
+};
+// Return a value for the first row, preferring not to cross 0.
+Tagval_DraggableTable.prototype.top_value = function (hi) {
+    if (hi === null) {
+        return 1;
+    }
+    const v = hi - this.gapf();
+    if (v > 0 || hi <= 0) {
+        return v;
+    }
+    const step = this.gapstep, m = step * Math.floor(hi / (2 * step) + 1e-9);
+    return m > 0 ? m : hi;
 };
 Tagval_DraggableTable.prototype.commit = function () {
     const saves = [], annosaves = [], srcra = this.rs[this.srcindex];
     this.compute();
     for (let i = 0; i !== this.rs.length; ++i) {
-        const row = this.rs[i];
-        if (row.newtagval !== row.tagval) {
-            const nv = tagvalue_unparse(row.newtagval);
+        const row = this.rs[i], nv = tagvalue_unparse(row.newtagval);
+        if (nv !== tagvalue_unparse(row.tagval)) {
             if (row.id) {
                 saves.push("".concat(row.id, " ", this.dragtag, "#", nv === "" ? "clear" : nv));
             } else if (row.annoid) {
@@ -11300,7 +11573,7 @@ Assign_DraggableTable.prototype.content = function () {
         srcra = this.rs[this.srcindex],
         oldidx = srcra.groupindex,
         newidx = this.drag_groupindex();
-    frag.append(srcra.legend());
+    frag.append(this.legend());
     let legend;
     if (newidx < this.assigninfo.length) {
         legend = this.groupinfo[newidx].legend;
@@ -11316,10 +11589,7 @@ Assign_DraggableTable.prototype.content = function () {
     return frag;
 };
 Assign_DraggableTable.prototype.commit = function () {
-    const as = [],
-        srcra = this.rs[this.srcindex],
-        oldidx = srcra.groupindex,
-        newidx = this.drag_groupindex();
+    const as = [], newidx = this.drag_groupindex();
     function doassignlist(as, assignlist, id, ondrag) {
         const len = (assignlist || []).length;
         for (let i = 0; i !== len; ++i) {
@@ -11331,13 +11601,16 @@ Assign_DraggableTable.prototype.commit = function () {
             }
         }
     }
-    if (oldidx !== newidx) {
-        for (let i = 0; i !== this.assigninfo.length; ++i) {
-            i !== newidx && doassignlist(as, this.assigninfo[i], srcra.id, "leave");
+    for (const si of this.multi || [this.srcindex]) {
+        const ra = this.rs[si];
+        if (ra.groupindex !== newidx) {
+            for (let i = 0; i !== this.assigninfo.length; ++i) {
+                i !== newidx && doassignlist(as, this.assigninfo[i], ra.id, "leave");
+            }
+            doassignlist(as, this.assigninfo[newidx], ra.id, "enter");
         }
-        doassignlist(as, this.assigninfo[newidx], srcra.id, "enter");
     }
-    if (!as.empty) {
+    if (as.length) {
         $.post(hoturl("=api/assign", {format: "none"}),
             {assignments: JSON.stringify(as), search: tablelist_search(this.tablelist)},
             function (rv) {
@@ -12501,20 +12774,20 @@ hotcrp.update_tag_decoration = function ($title, html) {
 
 /* pattern fill functions */
 var ensure_pattern = (function () {
-let fmap = {},
-    knownmap = {
-        "tag-white": true, "tag-red": true, "tag-orange": true, "tag-yellow": true,
-        "tag-green": true, "tag-blue": true, "tag-purple": true, "tag-gray": true,
-        "badge-white": true, "badge-red": true, "badge-orange": true, "badge-yellow": true,
-        "badge-green": true, "badge-blue": true, "badge-purple": true, "badge-gray": true,
-        "badge-pink": true
-    },
+let fmap = new Map(),
+    knownmap = new Set([
+        "tag-white", "tag-red", "tag-orange", "tag-yellow",
+        "tag-green", "tag-blue", "tag-purple", "tag-gray",
+        "badge-white", "badge-red", "badge-orange", "badge-yellow",
+        "badge-green", "badge-blue", "badge-purple", "badge-gray",
+        "badge-pink"
+    ]),
     params = {
-        "": {prefix: "", size: 34, incr: 8, type: 0},
-        "gdot": {prefix: "gdot ", size: 12, incr: 3, type: 1},
-        "glab": {prefix: "glab ", size: 20, incr: 6, type: 1},
-        "gcdf": {prefix: "gcdf ", size: 12, incr: 3, type: 1},
-        "badge": {prefix: "badge ", size: 12, incr: 3, type: 2}
+        "": {prefix: "", size: 34, incr: 8, need_scheme: true},
+        "gdot": {prefix: "gdot ", size: 12, incr: 3, graph: true},
+        "glab": {prefix: "glab ", size: 20, incr: 6, graph: true},
+        "gcdf": {prefix: "gcdf ", size: 12, incr: 3, graph: true, cdf: true},
+        "badge": {prefix: "badge ", size: 12, incr: 3}
     },
     stylesheet = null,
     svgdef = null,
@@ -12575,14 +12848,16 @@ function color_compare(a, b) {
     }
     return a.s < b.s ? 1 : (a.s == b.s ? 0 : -1);
 }
-const class_analyses = {tagbg: null, badge: null};
+const class_analyses = new Map([["tagbg", null], ["badge", null]]);
 function analyze_class(k) {
-    if (k in class_analyses) {
-        return class_analyses[k];
+    if (class_analyses.has(k)) {
+        return class_analyses.get(k);
     }
-    function set(type, c) {
-        type && (c.type = type);
-        return (class_analyses[k] = type ? c : null);
+    function set(type, ka) {
+        type && (ka.type = type);
+        const v = type ? ka : null;
+        class_analyses.set(k, v);
+        return v;
     }
     let m;
     if (k.startsWith("tag-rgb-")
@@ -12625,50 +12900,58 @@ function analyze_class(k) {
             if (Math.min(c.r, c.g, c.b) > 200)
                 rules.push("border: 1px solid #333333;", "padding: 1px 0.2em 2px;");
         }
-        ensure_stylesheet().insertRule(".".concat(k, " { ", rules.join(" "), " }"), 0);
+        ensure_stylesheet().insertRule(`.${k} { ${rules.join(" ")} }`, 0);
         if (c.l >= 0.3) {
-            ensure_stylesheet().insertRule("a.".concat(k, ":hover { color: #c45500; border-color: #c45500; }"), 0);
+            ensure_stylesheet().insertRule(`a.${k}:hover { color: #c45500; border-color: #c45500; }`, 0);
         }
         return set("badge", c);
     }
-    const c = probe_bg(k, "");
-    return c ? set("bg", c) : set();
-}
-function probe_bg(k, scheme) {
-    if (testdiv === null) {
-        testdiv = document.createElement("div");
-        testdiv.style.display = "none";
-        document.body.appendChild(testdiv);
+    if ((m = probe(k, "", false))) {
+        return set("bg", m);
     }
-    testdiv.className = k.startsWith("tag-") ? k + " tagbg" : k;
+    if ((m = probe(k, "", true))) {
+        return set("fg", m);
+    }
+    return set();
+}
+function probe(k, scheme, fg) {
+    if (testdiv === null) {
+        const e = document.createElement("div");
+        e.style.display = "none";
+        e.style.color = "transparent";
+        document.body.appendChild(e);
+        e.appendChild((testdiv = document.createElement("div")));
+    }
+    testdiv.className = !fg && k.startsWith("tag-") ? k + " tagbg" : k;
     testdiv.style.colorScheme = scheme;
-    const value = window.getComputedStyle(testdiv).backgroundColor,
+    const value = window.getComputedStyle(testdiv)[fg ? "color" : "backgroundColor"],
         m = value.match(/^rgba?\(([\d.]+), ([\d.]+), ([\d.]+)(?:, ([\d.]+))?\)$/);
     if (m && (m[4] === undefined || +m[4] > 0)) {
         return make_color(k, +m[1], +m[2], +m[3], m[4] === undefined ? 1.0 : +m[4]);
     }
     return null;
 }
-function light_color(color) {
-    // graph fills and strokes are always light-scheme
-    if (color.light === null) {
-        const c = /-rgb-/.test(color.k) ? null : probe_bg(color.k, "light");
-        color.light = c !== null
-            && (c.r !== color.r || c.g !== color.g || c.b !== color.b || c.a !== color.a)
-            ? c : color;
+function light_color(ka) {
+    // since graph entities are often semi-transparent, they look better under
+    // light color-scheme
+    if (ka.light === null) {
+        ka.light = ka;
+        const lka = !ka.k.includes("-rgb-") && probe(ka.k, "light", ka.type === "fg");
+        if (lka && (lka.r !== ka.r || lka.g !== ka.g || lka.b !== ka.b || lka.a !== ka.a))
+            ka.light = lka;
     }
-    return color.light;
+    return ka.light;
 }
-function bgcolor(color) {
-    return `rgba(${color.r}, ${color.g}, ${color.b}, ${color.a})`;
+function bgcolor(ka) {
+    return `rgba(${ka.r}, ${ka.g}, ${ka.b}, ${ka.a})`;
 }
-function gfillcolor(color) {
-    if (color.gfill !== null) {
-        return color.gfill;
+function gfillcolor(ka) {
+    if (ka.gfill !== null) {
+        return ka.gfill;
     }
-    let r = color.r / 255,
-        g = color.g / 255,
-        b = color.b / 255,
+    let r = ka.r / 255,
+        g = ka.g / 255,
+        b = ka.b / 255,
         min = Math.min(r, g, b),
         a, d;
     if (min < 0.3) {
@@ -12679,35 +12962,39 @@ function gfillcolor(color) {
         b = d + a * b;
         min = 0.3;
     }
-    a = Math.max(0.2 + (color.l < 0.9 ? 0 : 4 * (color.l - 0.9)), 1 - min);
+    a = Math.max(0.2 + (ka.l < 0.9 ? 0 : 4 * (ka.l - 0.9)), 1 - min);
     d = 1 - a;
     r = Math.floor(255.5 * (r - d) / a);
     g = Math.floor(255.5 * (g - d) / a);
     b = Math.floor(255.5 * (b - d) / a);
-    color.gfill = [r, g, b, a];
-    return color.gfill;
+    return (ka.gfill = [r, g, b, a]);
 }
-function fillcolor(color) {
-    const gf = gfillcolor(color);
+function fillcolor(ka) {
+    const gf = gfillcolor(ka);
     return `rgba(${gf[0]}, ${gf[1]}, ${gf[2]}, ${gf[3]})`;
 }
-function strokecolor(color) {
-    let gf = gfillcolor(color);
-    if (color.l > 0.75) {
-        const f = 0.75 / color.l;
+function strokecolor(ka) {
+    let gf = gfillcolor(ka);
+    if (ka.l > 0.75) {
+        const f = 0.75 / ka.l;
         gf = [gf[0] * f, gf[1] * f, gf[2] * f, gf[3]];
     }
     return `rgba(${gf[0]}, ${gf[1]}, ${gf[2]}, 0.8)`;
 }
-function paramcolor(param, color) {
-    return param.type === 1 ? fillcolor(light_color(color)) : bgcolor(color);
+function paramcolor(param, ka) {
+    if (param.cdf) {
+        return strokecolor(light_color(ka));
+    } else if (param.graph) {
+        return fillcolor(light_color(ka));
+    }
+    return bgcolor(ka);
 }
-function ensure_graph_rules(color) {
-    if (!color.has_graph) {
-        const stylesheet = ensure_stylesheet(), k = color.k, lc = light_color(color);
-        stylesheet.insertRule(`.gcdf.${k}, .gdot.${k}, .gbar.${k}, .gbox.${k} { stroke: ${strokecolor(lc)}; }`, 0);
-        stylesheet.insertRule(`.gdot.${k}, .gbar.${k}, .gbox.${k}, .glab.${k} { fill: ${fillcolor(lc)}; }`, 0);
-        color.has_graph = true;
+function ensure_graph_rules(ka) {
+    if (!ka.has_graph) {
+        ka.has_graph = true;
+        const stylesheet = ensure_stylesheet(), k = ka.k, lka = light_color(ka);
+        stylesheet.insertRule(`.gcdf.${k}, .gdot.${k}, .gbar.${k}, .gbox.${k} { stroke: ${strokecolor(lka)}; }`, 0);
+        stylesheet.insertRule(`.gdot.${k}, .gbar.${k}, .gbox.${k}, .glab.${k} { fill: ${fillcolor(lka)}; }`, 0);
     }
 }
 function compute_scheme(colors, dots) {
@@ -12715,8 +13002,8 @@ function compute_scheme(colors, dots) {
     const darea = dots.length ? (dots.length === 1 ? 8 : 16) * 0.0276 : 0;
     let lbar = 0, mixed = false;
     if (colors.length) {
-        for (const c of colors) {
-            lbar += c.l;
+        for (const ka of colors) {
+            lbar += ka.l;
         }
         lbar = (1 - darea) * (lbar / colors.length);
     } else {
@@ -12742,20 +13029,22 @@ function compute_scheme(colors, dots) {
 }
 return function (classes, type) {
     if (!classes
-        || (type === "" && classes.endsWith(" tagbg") && knownmap[classes.slice(0, -6)]))
+        || (type === "" && classes.endsWith(" tagbg") && knownmap.has(classes.slice(0, -6)))) {
         return null;
+    }
     // quick check on classes in input order
     const param = params[type || ""] || params[""],
         index = param.prefix + classes;
-    if (index in fmap)
-        return fmap[index];
+    if (fmap.has(index)) {
+        return fmap.get(index);
+    }
     // canonicalize classes, sort by color and luminance
     const xtags = classes.split(/\s+/), colors = [], dots = [];
     for (const k of xtags) {
         const ka = analyze_class(k);
-        if (ka && ka.type === "bg" && colors.indexOf(ka) < 0) {
+        if (ka && (ka.type === "bg" || ka.type === "fg") && colors.indexOf(ka) < 0) {
             colors.push(ka);
-            param.type === 1 && ensure_graph_rules(ka);
+            param.graph && ensure_graph_rules(ka);
         } else if (ka && ka.type === "dot" && dots.indexOf(ka) < 0) {
             dots.push(ka);
         }
@@ -12771,19 +13060,20 @@ return function (classes, type) {
         tags.push(c.k);
     }
     const cindex = param.prefix + tags.join(" ");
-    if (cindex in fmap || (tags.length < 2 && dots.length === 0)) {
-        fmap[index] = fmap[cindex] || null;
-        return fmap[index];
+    if (fmap.has(cindex) || (tags.length < 2 && dots.length === 0)) {
+        const rv = fmap.get(cindex) || null;
+        fmap.set(index, rv);
+        return rv;
     }
     // create pattern
     const id = "svgpat__" + cindex.replace(/\s+/g, "__"),
         size = param.size + Math.max(0, colors.length - 2) * param.incr,
         sw = size / colors.length,
         svgns = "http://www.w3.org/2000/svg",
-        pathsfx = " 0l".concat(-size, " ", size, "l", sw, " 0l", size, " ", -size, "z"),
+        pathsfx = ` 0l${-size} ${size}l${sw} 0l${size} ${-size}z`,
         dxs = [];
     for (let i = 0; i !== colors.length; ++i) {
-        dxs.push("M".concat(sw * i, pathsfx, "M", sw * i + size, pathsfx), paramcolor(param, colors[i]));
+        dxs.push(`M${sw * i}${pathsfx}M${sw * i + size}${pathsfx}`, paramcolor(param, colors[i]));
     }
     if (dots.length > 0) {
         const d = size * 0.125, r = d * 0.75, pds = [],
@@ -12797,7 +13087,7 @@ return function (classes, type) {
             dxs.push(pds[i], paramcolor(param, dots[i]));
         }
     }
-    if (param.type === 1) {
+    if (param.graph) {
         if (svgdef === null) {
             svgdef = $svg("defs");
             let svg = $svg("svg", {width: 0, height: 0}, svgdef);
@@ -12815,11 +13105,13 @@ return function (classes, type) {
             t.push(`<path d="${dxs[i]}" fill="${dxs[i + 1]}"></path>`);
         }
         t.push('</svg>');
-        const extra = param.type === 0 ? compute_scheme(colors, dots) : "";
-        ensure_stylesheet().insertRule(".".concat(tags.join("."), " { background-image: url(data:image/svg+xml;base64,", btoa(t.join("")), ");", extra, " }"), 0);
+        const extra = param.need_scheme ? compute_scheme(colors, dots) : "";
+        ensure_stylesheet().insertRule(`.${tags.join(".")} { background-image: url(data:image/svg+xml;base64,${btoa(t.join(""))});${extra} }`, 0);
     }
-    fmap[index] = fmap[cindex] = "url(#" + id + ")";
-    return fmap[index];
+    const rv = "url(#" + id + ")";
+    fmap.set(cindex, rv);
+    fmap.set(index, rv);
+    return rv;
 };
 })();
 
@@ -12889,11 +13181,14 @@ handle_ui.on("js-reauth", function (evt) {
     evt.preventDefault();
     let url;
     if (f.hasAttribute("data-session-index")) {
-        url = `${siteinfo.base}u/${f.getAttribute("data-session-index")}/api/reauth`;
+        url = `${siteinfo.base}u/${f.getAttribute("data-session-index")}/api/reauth?`;
     } else {
-        url = `${siteinfo.site_relative}api/reauth`;
+        url = `${siteinfo.site_relative}api/reauth?`;
     }
-    $.post(`${url}?confirm=1&post=${siteinfo.postvalue}`,
+    if (!f.hasAttribute("data-no-confirm")) {
+        url += "confirm=1&";
+    }
+    $.post(`${url}post=${siteinfo.postvalue}`,
         $(form).serialize(),
         function (data) {
             if (data.ok) {
@@ -12970,7 +13265,7 @@ function background_format_check() {
                     && data.ok
                     && img
                     && img.tagName === "IMG"
-                    && (m = img.src.match(/^(.*\/pdff?)x?((?:24)?\.png(?:\?.*)?)$/)))
+                    && (m = img.src.match(/^(.*\/pdff?)x?((?:24)?\.(?:png|svg)(?:\?.*)?)$/)))
                     img.src = m[1] + (data.has_error ? "x" : "") + m[2];
                 next(data && data.ok);
             }
@@ -13042,6 +13337,10 @@ handle_ui.on("js-add-attachment", function () {
         doce.setAttribute("data-document-max-size", max_size);
     }
     ee.appendChild(doce);
+    // dismissing the file picker abandons the new instance
+    filee.addEventListener("cancel", function () {
+        doce.hidden && doce.remove();
+    });
     // this hidden_input cannot be in the document-uploader: the uploader
     // might be removed later, but we need to hold the place
     if (!f.elements[name]) {
@@ -13140,7 +13439,15 @@ handle_ui.on("document-uploader", function (event) {
         return;
     }
 
-    function cancel() {
+    function send_cancel() {
+        if (!token || cancel_sent) {
+            return;
+        }
+        cancel_sent = true;
+        $.ajax(hoturl("=api/upload", {p: siteinfo.paperid, token: token, cancel: 1}),
+               {method: "POST"});
+    }
+    function stop() {
         if (that.hotcrpUploader !== self) {
             return false;
         }
@@ -13148,12 +13455,23 @@ handle_ui.on("document-uploader", function (event) {
         that.hidden = false;
         removeClass(that, "prevent-submit");
         delete that.hotcrpUploader;
-        cancelled = true;
+        canceled = true;
         $(that).off("hotcrp-change-document", cancel);
+        if (jqxhr && token) {
+            jqxhr.abort();
+        }
+        return true;
+    }
+    function cancel() {
+        if (!stop()) {
+            return false;
+        }
+        send_cancel();
         return true;
     }
     var self = {cancel: cancel},
-        token = false, cancelled = false, size = file.size,
+        token = false, canceled = false, cancel_sent = false, jqxhr = null,
+        retries = 0, chunkpos = 0, size = file.size,
         pos = 0, uploading = 0, sprogress0 = 0, sprogress1 = size,
         progresselt = $e("progress", {class: "mr-2", max: size + sprogress1, value: "0"});
     that.hotcrpUploader = self;
@@ -13171,13 +13489,71 @@ handle_ui.on("document-uploader", function (event) {
         progresselt.max = size + sprogress1;
     }
 
-    function ajax(r) {
+    function send() {
+        const args = {p: siteinfo.paperid};
+        if (token) {
+            args.token = token;
+        } else {
+            args.dt = doce.getAttribute("data-dt");
+            args.start = 1;
+        }
+        let fd = new FormData, myxhr;
+        fd.append("mimetype", file.type);
+        fd.append("filename", file.name);
+        chunkpos = pos;
+        const endpos = Math.min(size, pos + blob_limit);
+        uploading = endpos - pos;
+        if (uploading !== 0) {
+            args.offset = pos;
+            fd.append("blob", file.slice(pos, endpos), "blob");
+        }
+        args.size = size;
+        if (endpos === size)
+            args.finish = 1;
+        pos = endpos;
+        jqxhr = $.ajax(hoturl("=api/upload", args), {
+            method: "POST", data: fd, processData: false,
+            contentType: false, success: ajax, timeout: 300000,
+            xhr: function () {
+                myxhr = new window.XMLHttpRequest();
+                myxhr.upload.addEventListener("progress", upload_progress);
+                myxhr.addEventListener("load", progress);
+                return myxhr;
+            }
+        });
+        myxhr.upload.addEventListener("progress", upload_progress);
+    }
+
+    function ajax(r, status, xhr) {
+        if (canceled) {
+            // the request that created the token landed after the cancel
+            if (r.ok && r.token) {
+                token = r.token;
+                send_cancel();
+            }
+            return;
+        }
         if (!r.ok) {
-            if (cancel() && r.message_list) {
+            if (status === "abort") {
+                return;
+            }
+            // A busy upload, timeout, or network or server error may be
+            // transient: retry the chunk. Only the user cancels the upload.
+            const transient = xhr
+                && (status === "timeout" || xhr.status === 0
+                    || xhr.status === 409 || xhr.status >= 500);
+            if (transient && retries < 5) {
+                ++retries;
+                pos = chunkpos;
+                setTimeout(function () {
+                    that.hotcrpUploader === self && send();
+                }, 1000 << retries);
+            } else if ((transient ? stop() : cancel()) && r.message_list) {
                 doce.appendChild(feedback.render_alert(r.message_list));
             }
             return;
         }
+        retries = 0;
         if (r.ranges && r.ranges.length === 2) {
             pos = r.ranges[1];
         }
@@ -13189,43 +13565,8 @@ handle_ui.on("document-uploader", function (event) {
             sprogress1 = r.progress_max;
             progress();
         }
-        var args = {p: siteinfo.paperid};
-        if (token) {
-            args.token = token;
-        } else {
-            args.dt = doce.getAttribute("data-dt");
-            args.start = 1;
-        }
-        if (cancelled) {
-            if (token) {
-                args.cancel = 1;
-                $.ajax(hoturl("=api/upload", args), {method: "POST"});
-            }
-        } else if (!r.hash) {
-            let fd = new FormData, myxhr;
-            fd.append("mimetype", file.type);
-            fd.append("filename", file.name);
-            const endpos = Math.min(size, pos + blob_limit);
-            uploading = endpos - pos;
-            if (uploading !== 0) {
-                args.offset = pos;
-                fd.append("blob", file.slice(pos, endpos), "blob");
-            }
-            args.size = size;
-            if (endpos === size)
-                args.finish = 1;
-            pos = endpos;
-            $.ajax(hoturl("=api/upload", args), {
-                method: "POST", data: fd, processData: false,
-                contentType: false, success: ajax, timeout: 300000,
-                xhr: function () {
-                    myxhr = new window.XMLHttpRequest();
-                    myxhr.upload.addEventListener("progress", upload_progress);
-                    myxhr.addEventListener("load", progress);
-                    return myxhr;
-                }
-            });
-            myxhr.upload.addEventListener("progress", upload_progress);
+        if (!r.hash) {
+            send();
         } else {
             that.disabled = true;
             while (that.nextSibling)
@@ -13538,6 +13879,9 @@ function prepare_pstags() {
         return;
     }
     var $f = $(f), ta = f.elements.tags, psc = f.closest(".s-ps");
+    // `data-initial-value` is the server text an edit started from; saving
+    // sends changes relative to it
+    ta.setAttribute("data-initial-value", ta.defaultValue);
     function handle_tag_report(data) {
         data.message_list && render_tag_messages.call(f, data.message_list);
     }
@@ -13555,6 +13899,7 @@ function prepare_pstags() {
     });
     $(f.elements.cancel).on("click", function (evt) {
         ta.value = ta.defaultValue;
+        ta.removeAttribute("data-initial-value");
         removeClass(ta, "has-error");
         $f.find(".is-error").remove();
         check_form_differs(f, ta);
@@ -13565,7 +13910,7 @@ function prepare_pstags() {
     $f.on("foldtoggle", function (evt) {
         if (!evt.detail.open)
             return;
-        $f.data("everOpened", true);
+        ta.setAttribute("data-initial-value", ta.defaultValue);
         $f.find("input").prop("disabled", false);
         if (!$f.data("noTagReport")) {
             $.get(hoturl("api/tagmessages", {p: $f.attr("data-pid")}), handle_tag_report);
@@ -13584,12 +13929,9 @@ function prepare_pstags() {
             $p.html(h);
         }
         input_set_default_value(ta, data.tags_edit_text);
-        if (ta.value !== data.tags_edit_text
-            && (f.hasAttribute("data-saving")
-                || f.hidden)
-            && (!$f.data("everOpened")
-                || hotcrp.parse_tags.delta(data.tags_edit_text, ta.value).length === 0)) {
+        if (f.hasAttribute("data-saving") || f.hidden) {
             ta.value = data.tags_edit_text;
+            ta.removeAttribute("data-initial-value");
         }
         check_form_differs(f, ta);
         handle_tag_report(data);
@@ -13597,12 +13939,13 @@ function prepare_pstags() {
 }
 
 function save_pstags(evt) {
-    const f = this, $f = $(f), ta = f.elements.tags;
+    const f = this, $f = $(f), ta = f.elements.tags,
+        iv = ta.hasAttribute("data-initial-value") ? ta.getAttribute("data-initial-value") : ta.defaultValue;
     evt.preventDefault();
     $f.find("input").prop("disabled", true);
     $.ajax(hoturl("=api/tags", {p: $f.attr("data-pid")}), {
         method: "POST", data: {
-            add_tags: hotcrp.parse_tags.delta(ta.defaultValue, ta.value).join(" ")
+            add_tags: hotcrp.parse_tags.delta(iv, ta.value).join(" ")
         }, timeout: 4000,
         success: function (data) {
             $f.find("input").prop("disabled", false);
@@ -13986,8 +14329,8 @@ function prepare_autoready_condition(f) {
             }
         }
         let t;
-        if (f.hasAttribute("data-contacts-only")) {
-            t = "Save contacts";
+        if (f.hasAttribute("data-limited-edit") || /* XXX backward compat */ f.hasAttribute("data-contacts-only")) {
+            t = "Save changes";
         } else if (!iscond || !readye.checked) {
             t = "Save draft";
         } else if (f.hasAttribute("data-submitted")) {
@@ -14211,7 +14554,7 @@ function split_tag_list(str) {
             if (ltag.charCodeAt(0) === 126 && ltag.charCodeAt(1) !== 126) {
                 ltag = siteinfo.user.uid + ltag;
             }
-            const value = m[1] === "-" ? "clear" : (m[3] === "" ? "0" : m[2]);
+            const value = m[1] === "-" ? "clear" : (m[3] === "" ? "0" : m[3]);
             a.push({str: word, ltag: ltag, value: value});
         } else {
             a.push({str: word});
@@ -14519,10 +14862,10 @@ handle_ui.on("js-offline-review", function () {
         rid = self.form.getAttribute("data-rid"),
         args1 = {p: pid},
         filee = $e("input", {type: "file", name: "file", accept: "text/plain", hidden: true}),
-        uploade = $e("button", {type: "submit", name: "upload", value: 1, class: "btn-primary"}, "Upload form");
+        uploade = $e("button", {type: "submit", name: "upload", value: 1, class: "btn-success btn-big"}, $svg_licon("upload"), " Upload form");
     let $pu, dry_run = true;
-    (rid != "") && (args1.r = rid);
-    self.hasAttribute("data-force") && (args1.forceShow = 1);
+    rid && (args1.r = rid);
+    self.form.hasAttribute("data-force") && (args1.forceShow = 1);
 
     /** @return {boolean} */
     function has_file() {
@@ -14534,7 +14877,18 @@ handle_ui.on("js-offline-review", function () {
     function change_file() {
         dry_run = true;
         uploade.replaceChildren("Upload form");
-        has_file() && upload();
+        if (has_file()) {
+            $pu.show();
+            upload();
+        } else if (!$pu.is_visible()) {
+            $pu.close();
+        }
+    }
+
+    function cancel_file() {
+        if (!$pu.is_visible()) {
+            $pu.close();
+        }
     }
 
     function done(data) {
@@ -14590,18 +14944,26 @@ handle_ui.on("js-offline-review", function () {
 
     $pu = $popup({near: self, className: "modal-dialog-w40", "aria-label": "Offline reviewing"})
         .append($e("h2", null, "Offline reviewing"),
+            $e("div", "mx-auto mt-5 mb-5", uploade),
             $e("p", "w-text",
-                $e("a", {href: hoturl("api/review", Object.assign({}, args1, {format: "form"})), class: "js-download-review-form"}, "Download this review form as text"),
-                ", fill it out offline, then upload it here. ",
+                "If you don’t have an offline form yet, ",
+                $e("a", {href: hoturl("api/review", Object.assign({}, args1, {format: "form"})), class: "js-download-review-form"}, "download it here"),
+                " and fill it out. ",
                 $e("a", {href: hoturl("offline")}, "Offline reviewing"),
-                " handles many forms at once."),
+                " can handle a single text file containing multiple forms."),
             filee)
-        .append_actions("Cancel", uploade)
+        .append_actions("Cancel")
         .on("submit", submit)
         .on("change", "input[type=file]", change_file)
+        .on("cancel", "input[type=file]", cancel_file)
         .on("click", "button[name=upload]", upload_click)
-        .on("click", "a.js-download-review-form", function () { $pu.close(); })
-        .show();
+        .on("click", "a.js-download-review-form", function () { $pu.close(); });
+    if (hasClass(self, "upload")) {
+        hotcrp.tooltip.close();
+        uploade.click();
+    } else {
+        $pu.show();
+    }
 });
 
 
@@ -14614,7 +14976,7 @@ handle_ui.on("js-edit-formulas", function () {
         if (f.editable) {
             nei.className = "mb-1";
             nei.append($e("input", {type: "text", id: "k-formula/" + count + "/name", class: "editformulas-name need-autogrow", name: "formula/" + count + "/name", size: 30, value: f.name, placeholder: "Formula name"}),
-                $e("button", {type: "button", class: "ml-2 delete-link need-tooltip btn-licon-s", "aria-label": "Delete formula"}, $svg_use_licon("trash", "m")));
+                $e("button", {type: "button", class: "ml-2 delete-link need-tooltip btn-licon-s", "aria-label": "Delete formula"}, $svg_licon("trash", "s")));
             xei.append($e("textarea", {class: "editformulas-expression need-autogrow w-99", id: "k-formula/" + count + "/expression", name: "formula/" + count + "/expression", rows: 1, cols: 64, placeholder: "Formula definition"}, f.expression));
         } else {
             nei.append(f.name);
@@ -14769,7 +15131,7 @@ function render_named_searches(data) {
     } else {
         sstab.replaceChildren();
     }
-    sstab.append($e("button", {type: "button", class: "ui js-named-search mt-3 small", "data-search-name": "new"}, "Add named search"));
+    sstab.append($e("button", {type: "button", class: "ui js-named-search mt-3 small", "data-search-name": "new"}, "Add saved search"));
     $(sstab).awaken();
 }
 
@@ -14797,7 +15159,7 @@ handle_ui.on("js-named-search", function (evt) {
             $pu.close();
             render_named_searches(data);
         } else {
-            $pu.show_errors(data);
+            $pu.show_errors(data, {landmarks: true});
         }
     }
     function create1(ctr, data) {
@@ -14811,8 +15173,8 @@ handle_ui.on("js-named-search", function (evt) {
                 size: 30, value: visible_name(si), placeholder: "Name of search"
             });
             if (si.id === "new") {
-                $pu.append($e("h2", null, "New named search"),
-                    $e("p", "w-text", "Save a search for later, then refer to it with a query such as “ss:NAME”. You can combine named searches with other search queries (e.g., “ss:NAME OR #tag”) and highlight named searches on the home page. Named searches are visible to the whole PC."),
+                $pu.append($e("h2", null, "New saved search"),
+                    $e("p", "w-text", "Save a search for later, then refer to it with a query such as “ss:NAME”. You can combine saved searches with other search queries (e.g., “ss:NAME OR #tag”) and highlight saved searches on the home page. Saved searches are visible to the whole PC."),
                     $e("div", "f-i",
                         $e("label", {for: "k-named_search/" + ctr + "/name"}, "Name"),
                         "ss:", namee,
@@ -14871,7 +15233,7 @@ handle_ui.on("js-named-search", function (evt) {
         }
         $pu.show().on("click", "button", click).on("submit", submit);
         if (si.id !== "new") {
-            feedback.render_list_within($pu.form(), data.message_list, {summary: "fieldless"});
+            feedback.render_list_within($pu.form(), data.message_list, {summary: "fieldless", landmarks: true});
         }
     }
     function create_new() {
@@ -14901,7 +15263,7 @@ handle_ui.on("js-named-search", function (evt) {
                 return create1(i, data);
             }
         }
-        $pu = $popup({near: evt.target, "aria-label": "Named search error"});
+        $pu = $popup({near: evt.target, "aria-label": "Saved search error"});
         $pu.append($e("p", null, "That search has been deleted."))
             .append_actions($e("button", {type: "button", class: "btn-primary"}, "OK"))
             .on("click", "button", $pu.close)
@@ -15504,26 +15866,23 @@ function make_fm9(n, max, flip, categorical) {
         return function (i) {
             return Math.round(+i - 1) % max + 1;
         };
-    } else {
-        var f = (max - 1) / (n - 1);
-        if (flip) {
-            return function (i) {
-                return Math.max(Math.min(Math.round((n - i) * f) + 1, max), 1);
-            };
-        } else {
-            return function (i) {
-                return Math.max(Math.min(Math.round((+i - 1) * f) + 1, max), 1);
-            };
-        }
     }
+    const f = (max - 1) / (n - 1);
+    if (flip) {
+        return function (i) {
+            return Math.max(Math.min(Math.round((n - i) * f) + 1, max), 1);
+        };
+    }
+    return function (i) {
+        return Math.max(Math.min(Math.round((+i - 1) * f) + 1, max), 1);
+    };
 }
 
-function rgb_array_for(svx) {
+function rgb_array_for(svx, color_scheme) {
     if (!sccolor[svx]) {
         var sp = document.createElement("span"), st, m;
         sp.className = "svb hidden " + svx;
-        // graphs use light-scheme score colors in every theme
-        sp.style.colorScheme = "light";
+        sp.style.colorScheme = color_scheme || "";
         document.body.appendChild(sp);
         sccolor[svx] = [0, 0, 0];
         st = window.getComputedStyle(sp).color;
@@ -15540,15 +15899,15 @@ return function (n, scheme, flip) {
         svk = sci[2] || scheme;
     if (svk !== "sv")
         svk = "sv-" + svk;
-    function rgb_array(val) {
-        return rgb_array_for(svk + fm9(val));
+    function rgb_array(val, color_scheme) {
+        return rgb_array_for(svk + fm9(val), color_scheme);
     }
     return {
         categorical: (sci[0] & 2) !== 0,
         max: sci[1],
         rgb_array: rgb_array,
-        color: function (val) {
-            var x = rgb_array(val);
+        color: function (val, color_scheme) {
+            const x = rgb_array(val, color_scheme);
             return sprintf("#%02x%02x%02x", x[0], x[1], x[2]);
         },
         className: function (val) {
@@ -15561,7 +15920,7 @@ return function (n, scheme, flip) {
 
 // score charts
 var scorechart = (function ($) {
-var blackcolor = [0, 0, 0], graycolor = [190, 190, 255];
+const blackcolor = [0, 0, 0], whitecolor = [255, 255, 255], graycolor = [190, 190, 255];
 
 function setup_canvas(canvas, w, h) {
     var ctx = canvas.getContext("2d"),
@@ -15623,7 +15982,7 @@ function scorechart1_s1(sc) {
         gray = color_unparse(graycolor);
 
     var svg = $svg("svg", {class: "scorechart-s1", width: cwidth, height: cheight},
-        $svg("path", {stroke: gray, fill: "none", d: "M0.5 ".concat(cheight - blockfull - 1, "v", blockfull + 0.5, "h", cwidth - 1, "v", -(blockfull + 0.5))}));
+        $svg("path", {stroke: gray, fill: "none", d: `M0.5 ${cheight - blockfull - 1}v${blockfull + 0.5}h${cwidth - 1}v${-(blockfull + 0.5)}`}));
 
     if (!anal.v[anal.flip ? n - 1 : 0]) {
         svg.appendChild($svg("text", {x: blockpad, y: cheight - 2, fill: gray}, anal.lo));
@@ -15633,7 +15992,7 @@ function scorechart1_s1(sc) {
     }
 
     function rectd(x, y) {
-        return 'M'.concat(blockfull * x + blockpad, ' ', cheight - 1 - blockfull * y, 'h', blocksize + 1, 'v', blocksize + 1, 'h', -(blocksize + 1), 'z');
+        return `M${blockfull * x + blockpad} ${cheight - 1 - blockfull * y}h${blocksize + 1}v${blocksize + 1}h${-(blocksize + 1)}z`;
     }
 
     for (var x = 0; x < n; ++x) {
@@ -15642,8 +16001,13 @@ function scorechart1_s1(sc) {
             continue;
         var color = anal.fx.rgb_array(vindex + 1), t,
             y = anal.h && anal.h.indexOf(vindex + 1) >= 0 ? 2 : 1;
-        if (y === 2)
-            svg.appendChild($svg("path", {d: rectd(x, 1), fill: color_unparse(rgb_interp(blackcolor, color, 0.5))}));
+        if (y === 2) {
+            // own-score marker: score color shaded toward the page background’s opposite
+            const hlight = color_unparse(rgb_interp(blackcolor, color, 0.5)),
+                hdark = color_unparse(rgb_interp(whitecolor, color, 0.3));
+            svg.appendChild($svg("path", {d: rectd(x, 1), fill: hlight,
+                style: "fill:light-dark(".concat(hlight, ",", hdark, ")")}));
+        }
         if (y <= anal.v[vindex]) {
             t = "";
             for (; y <= anal.v[vindex]; ++y)
@@ -16139,6 +16503,7 @@ Object.assign(window.hotcrp, {
     make_color_scheme: make_color_scheme,
     // make_review_field
     // make_time_point
+    // mimeinfo
     // monitor_autoassignment
     // monitor_job
     // onload

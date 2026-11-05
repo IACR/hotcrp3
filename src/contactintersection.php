@@ -95,6 +95,10 @@ class ContactIntersection extends ContactPermissions {
         return $this->a->can_view_manager($prow)
             && $this->b->can_view_manager($prow);
     }
+    function can_view_lead(?PaperInfo $prow) {
+        return $this->a->can_view_lead($prow)
+            && $this->b->can_view_lead($prow);
+    }
     function can_view_shepherd(?PaperInfo $prow) {
         return $this->a->can_view_shepherd($prow)
             && $this->b->can_view_shepherd($prow);
@@ -102,6 +106,18 @@ class ContactIntersection extends ContactPermissions {
     function can_view_decision(PaperInfo $prow) {
         return $this->a->can_view_decision($prow)
             && $this->b->can_view_decision($prow);
+    }
+    function can_view_all_decision() {
+        return $this->a->can_view_all_decision()
+            && $this->b->can_view_all_decision();
+    }
+    function can_view_some_decision() {
+        return $this->a->can_view_some_decision()
+            && $this->b->can_view_some_decision();
+    }
+    function can_view_some_standard_decision() {
+        return $this->a->can_view_some_standard_decision()
+            && $this->b->can_view_some_standard_decision();
     }
     function tag_perm_flags(?PaperInfo $prow) {
         return $this->a->tag_perm_flags($prow)

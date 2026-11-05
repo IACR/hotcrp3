@@ -26,6 +26,8 @@ class APIToken_Batch {
     private $token;
     /** @var bool */
     private $active_only;
+    /** @var bool */
+    private $full;
 
     function __construct(Conf $conf, $arg) {
         $this->conf = $conf;
@@ -43,10 +45,12 @@ class APIToken_Batch {
         $this->cdb = isset($arg["cdb"]);
         $this->note = simplify_whitespace(convert_to_utf8($arg["note"] ?? ""));
         $this->scope = simplify_whitespace($arg["scope"] ?? "");
-        if (!preg_match('/\A(?:[a-z][!\#-\x5b\x5d-~]*+\s*+)*+\z/', $this->scope)) {
+        if (strlen($this->scope) > 1024
+            || !preg_match('/\A(?:[a-z][!\#-\x5b\x5d-~]*+\s*+)*+\z/', $this->scope)) {
             throw new CommandLineException("Bad `--scope`");
         }
         $this->active_only = isset($arg["active"]);
+        $this->full = isset($arg["full"]);
         if (!empty($arg["_"])) {
             if (strpos($arg["_"][0], "@") === false) {
                 $this->token = $arg["_"][0];
@@ -209,7 +213,9 @@ class APIToken_Batch {
         if ($note !== "") {
             $f[] = "note \"{$note}\"";
         }
-        return "{$tok->salt}  {$who}\n    " . join(" · ", $f) . "\n";
+        // Abbreviated by default to avoid accidental exposure
+        $salt = $this->full ? $tok->salt : $tok->abbreviation(TokenInfo::ABBREVIATION_ELLIPSIS);
+        return "{$salt}  {$who}\n    " . join(" · ", $f) . "\n";
     }
 
     /** @param list<string> $argv
@@ -225,7 +231,8 @@ class APIToken_Batch {
             "scope:,S: =SCOPE Set API scope",
             "token:,T: =TOKEN !list Search for TOKEN",
             "active !list Only show active tokens",
-            "cdb Global token"
+            "full !list Print complete token values, not abbreviations",
+            "cdb,G Global token"
         )->description("Create and list HotCRP API tokens.
 Usage: php batch/apitoken.php [-n CONFID|--config CONFIG] [create] [ARGS...] EMAIL
        php batch/apitoken.php [-n CONFID|--config CONFIG] list [ARGS...] [EMAIL|TOKEN]")

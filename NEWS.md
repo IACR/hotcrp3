@@ -1,6 +1,174 @@
 HotCRP NEWS
 ===========
 
+## Version 3.5 – 27.Oct.2026
+
+* Upgrade notes
+
+    * Most sites should set `$Opt["paperSite"]` explicitly (it was previously
+      optional).
+        * Links in email no longer use the URL of the request that caused the
+          email. They use `$Opt["paperSite"]`, then `$Opt["defaultPaperSite"]`,
+          then a new Site URL setting (Settings > Basics) derived from
+          administrator site access. Without a site URL, HotCRP will not send
+          password reset or account creation email, and other email will contain
+          unexpanded `{{URL}}` keywords.
+        * Sites with a contact database or with `$Opt["chairHidePasswords"]`
+          MUST set `$Opt["paperSite"]` or `$Opt["defaultPaperSite"]`.
+        * On other sites, the Site URL setting is filled in the first time an
+          administrator visits the site after upgrading. Administrators should
+          check that the URL shown in Settings > Basics is correct.
+    * LDAP and htauth usernames are newly restricted to ASCII characters only.
+      LDAP users with non-ASCII usernames will be unable to sign in.
+    * The `preferred_email` user property is only obeyed on LDAP and htauth
+      sites.
+    * New sites that use a contact database do not automatically assign
+      administrator privilege to the first account to sign in. Use `php
+      batch/saveusers.php` to assign administrator privilege to an account.
+
+* Security updates
+
+    This release fixes a number of vulnerabilities, including many reported via
+    the Anthropic OSS Program and Milad Nasr – thanks!
+
+    * Fix a vulnerability, critical for deployments using a contact database,
+      that could misdeliver password reset mails to attacker-chosen mailboxes
+      (GitHub Security Advisory GHSA-8hpm-q65w-xpfv).
+    * Fix a high-severity issue with LDAP sign-in and medium-severity issues
+      with OAuth sign-in (GHSA-hqfx-q434-6rq2).
+    * Fix many medium-severity information exposure bugs (GHSA-ghw2-58rh-vw4w,
+      GHSA-v2fv-53cr-7w9v, GHSA-9cff-2f8h-5hj3).
+    * Fix a high-severity issue with the upload API that could allow
+      inappropriate replacement of previously-uploaded documents
+      (GHSA-6r22-552m-7pv5).
+    * Enforce API token scopes more consistently (medium severity;
+      GHSA-357p-6mjj-f8jr).
+    * Harden code previously vulnerable to denial-of-service attacks
+      (medium severity; GHSA-84xx-cv82-jqv8).
+    * Fix missing permission checks (GHSA-7xrm-6p9c-4wmj).
+    * Fix stored and reflected XSS issues (GHSA-xfq9-h3px-hv62 - high severity,
+      GHSA-h778-cp46-448g - low severity, thanks to Mingi Jung for the report).
+    * Fix information exposure bugs associated with formula graphs.
+
+* Accounts
+
+    * Introduce unlisted PC members, who can be assigned PC reviews but whose
+      names aren’t shared with authors or the public.
+    * Introduce bot accounts, which are associated with programmatic access.
+    * Limit passwords to 72 bytes.
+
+* Appearance
+
+    * Support dark mode. The site obeys the user’s dark-mode preference by
+      default; Settings > Preferences can override it.
+    * Introduce a popup dialog for offline reviewing.
+    * Make icons scalable.
+
+* Accessibility
+
+    * Audit many pages for WCAG compliance.
+
+* Submission form
+
+    * User-defined submission field names cannot consist only of lowercase
+      letters, digits, underscores, and colons. This rule is intended to
+      reliably prevent collisions with other JSON export fields.
+      (Non-compliant field names in existing installations are grandfathered
+      in.)
+    * Text fields gain word limit support.
+    * Fields can have their own edit deadlines. An edit condition that
+      mentions time, such as `before:2026-11-01` or `before:resubmit+3d`,
+      replaces the submission round’s deadline for that field. Withdrawn,
+      frozen, and rejected submissions still can’t be edited.
+    * Authors can’t edit an accepted submission until they can see its
+      decision.
+
+* Tags
+
+    * Tags can now end in `?` or `!`.
+    * Recover ability to change a tag’s value on the paper page.
+
+* Search
+
+    * Add `before:TIME` and `after:TIME` search terms. They accept dates and
+      the deadline names `register`, `submit`, `resubmit`, and `final`, with
+      optional offsets (`after:submit+2d`).
+    * The new `view:` search keyword sets a column’s view options without
+      changing that column’s visibility.
+    * “Named searches” are now called “saved searches” on the search page.
+    * Speed up parsing and running very long searches.
+    * Remove the undocumented `perm:` search term.
+
+* Comments
+
+    * Improve comment editor: always display the comment thread; warn if
+      mentioning users who can’t see the current thread.
+    * Warn when reviewers look like they’re saving a comment intended for the
+      authors, but the authors can’t see it because of the comment’s
+      visibility.
+    * Authors can’t comment on rejected submissions.
+
+* Formulas and formula graphs
+
+    * Formulas support `percentile(e, 90)` and `p90(e)`.
+    * Formula `var` and `stddev` functions compute population statistics as
+      claimed.
+    * Graphs support pan, zoom, and autoresize.
+
+* OAuth
+
+    * Support OAuth Client ID Metadata Documents.
+    * Fix usability of redirections through the `/authorize` endpoint.
+    * Harden OAuth for best practices (RFC 9700).
+    * OAuth sign-in requires a positive `email_verified` claim. A provider
+      that verifies email but omits the claim must be configured with
+      `"allow_unverified_email": true`; see `devel/manual/oauth.md`.
+
+* API
+
+    * JSON export of submissions uses a different naming convention for
+      user-specified submission fields. Rather than a generated
+      lower_snake_case identifier (which was not guaranteed unique),
+      submission JSON uses literal submission field names.
+    * Saving a submission through the API refuses to write if changes to
+      unwritable fields are attempted. Supply `ignore_unwritable_fields=1` to
+      ignore unwritable fields instead.
+    * The `POST /paper`, `/review`, and `/comment` endpoints learn
+      `dry_run=if_error` (and `dry_run=if_warning`), which say to attempt a
+      change, but to make that change a dry-run if there are errors (and/or
+      warnings).
+    * Rate-limited API requests now return a `Retry-After` header.
+    * Introduce `settings:{read/write/admin}`, `preference:{read/write/admin}`,
+      and `reaction:{read/write/admin}` scopes.
+    * Report scope errors more thoroughly.
+    * A single request can upload at most 100 documents, and a paper can have at
+      most 1000 authors and 32 KiB worth of collaborators.
+    * The `POST /assigntags` response now matches the shape of `POST /assign`.
+
+* Other changes
+
+    * Removing a user from the PC also removes them as administrator of any
+      submissions they managed.
+    * The `batch/savepapers.php` script gains `--trust-document-metadata`,
+      which subsumes the old `--skip-document-verify`,
+      `--skip-document-content`, and `--ignore-content-file` flags.
+    * The `batch/search.php` script’s default search collection is `default`,
+      which is usually broader than `s`. Supply `-t s` to get submitted papers
+      only.
+    * Document downloads are logged regardless of the requested byte range.
+      Downloads through reviewer links are attributed to the reviewer, and
+      downloads by anonymous review-token holders aren’t logged.
+    * A user’s last-activity time is updated at most once every two hours.
+    * `{{PASSWORDLINK}}` mail keywords only expand if surrounded by
+      whitespace or on their own line.
+    * Add `batch/db.php`, which runs SQL against a conference database.
+      `lib/runsql.sh` is deprecated.
+    * Transient database errors return 503 errors, not 404.
+    * A new `$Opt["s3Clients"]` setting can support fallback buckets, and S3
+      secrets can be set in external files (rather than a PHP `options.php`
+      file).
+
+
 ## Version 3.4 – 5.Aug.2026
 
 * Security updates

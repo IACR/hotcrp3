@@ -18,7 +18,7 @@ class Emoji_SearchTerm extends SearchTerm {
         if (!$this->user->can_view_tags()) {
             return "false";
         }
-        return 'exists (select * from PaperTag where paperId=Paper.paperId)';
+        return 'exists (select * from PaperTag where paperId=Paper.paperId)=1';
     }
     function test(PaperInfo $row, $xinfo) {
         $tags = $row->viewable_tags($this->user);
@@ -48,7 +48,7 @@ class Emoji_SearchTerm extends SearchTerm {
             $word = substr($word, 0, -1);
         }
         $star = strpos($word, "*") !== false;
-        $regex = '/\\A' . str_replace("\\*", ".*", preg_quote($word, "/")) . '\\z/i';
+        $regex = '{\\A' . Text::wildcard_pregex($word) . '\\z}i';
         $ecmap = $srch->conf->emoji_code_map();
         if (isset($ecmap[$word])) {
             $wantcode = $ecmap[$word];

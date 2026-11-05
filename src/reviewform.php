@@ -135,12 +135,12 @@ class ReviewForm {
     }
     function populate_abbrev_matcher(AbbreviationMatcher $am) {
         foreach ($this->all_fields() as $f) {
-            $am->add_phrase($f->name, $f, Conf::MFLAG_REVIEW);
+            $am->add_phrase($f->name, $f, Conf::MFLAG_REVIEW | Conf::MFLAG_GLOBAL);
         }
     }
     function assign_search_keywords(AbbreviationMatcher $am) {
         foreach ($this->all_fields() as $f) {
-            $e = new AbbreviationEntry($f->name, $f, Conf::MFLAG_REVIEW);
+            $e = new AbbreviationEntry($f->name, $f, Conf::MFLAG_REVIEW | Conf::MFLAG_GLOBAL);
             $f->_search_keyword = $am->ensure_entry_keyword($e, AbbreviationMatcher::KW_CAMEL) ?? false;
         }
     }
@@ -172,7 +172,7 @@ class ReviewForm {
         $fs = [];
         foreach (ViewCommand::split_parse($s, 0) as $svc) {
             if ($svc->is_show()
-                && ($x = $this->conf->find_all_fields($svc->keyword))
+                && ($x = $this->conf->find_all_fields($svc->keyword, Conf::MFLAG_GLOBAL))
                 && count($x) === 1
                 && $x[0] instanceof Score_ReviewField
                 && $x[0]->view_score >= VIEWSCORE_PC
@@ -243,10 +243,8 @@ class ReviewForm {
 
     /** @param PaperInfo $prow
      * @param ?ReviewInfo $rrow
-     * @param ContactPermissions $viewer
-     * @param bool $no_update */
-    static function check_review_author_seen($prow, $rrow, $viewer,
-                                             $no_update = false) {
+     * @param ContactPermissions $viewer */
+    static function check_review_author_seen($prow, $rrow, $viewer) {
         if (!$rrow
             || !$rrow->reviewId
             || ($rrow->reviewAuthorSeen && ($rrow->rflags & ReviewInfo::RF_AUSEEN) !== 0)
@@ -256,10 +254,8 @@ class ReviewForm {
         // XXX combination of review tokens & authorship gets weird -- old comment
         $rrow->reviewAuthorSeen = $rrow->reviewAuthorSeen ? : Conf::$now;
         $rrow->rflags |= ReviewInfo::RF_AUSEEN;
-        if (!$no_update) {
-            $prow->conf->register_shutdown_function("ReviewAuthorSeenUpdate")
-                ->add(Conf::$now, $rrow->paperId, $rrow->reviewId);
-        }
+        $prow->conf->register_shutdown_function("ReviewAuthorSeenUpdate")
+            ->add(Conf::$now, $rrow->paperId, $rrow->reviewId);
     }
 
 
@@ -301,7 +297,7 @@ class ReviewForm {
                 $t[] = "==+== Reviewer: " . Text::nameo($contact, NAME_EB) . "\n";
             }
         }
-        list($time, $obscured) = $rrow->mtime_info($contact);
+        [$time, $obscured] = $rrow->mtime_info($contact);
         if ($time > 0) {
             $time_text = $obscured ? $this->conf->unparse_time_obscure($time) : $this->conf->unparse_time($time);
             $t[] = "==-== Updated {$time_text}\n";
@@ -352,7 +348,9 @@ Ready\n";
 
     function unparse_text(PaperInfo $prow, ReviewInfo $rrow,
                           ContactPermissions $viewer, $flags = 0) {
-        self::check_review_author_seen($prow, $rrow, $viewer, !!($flags & self::UNPARSE_NO_AUTHOR_SEEN));
+        if (($flags & self::UNPARSE_NO_AUTHOR_SEEN) === 0) {
+            self::check_review_author_seen($prow, $rrow, $viewer);
+        }
 
         $n = "";
         if (!($flags & self::UNPARSE_NO_TITLE)) {
@@ -396,7 +394,7 @@ Ready\n";
 
     /** @param ReviewInfo $rrow
      * @param Contact $user
-     * @return ?FailureReasons */
+     * @return ?FailureReason */
     private function _override_reason($rrow, $user) {
         if ($this->conf->time_review($rrow->reviewRound, $rrow->reviewType, true)) {
             return null;
@@ -515,7 +513,7 @@ Ready\n";
         // Links
         if ($rrow->reviewId) {
             echo '<div class="float-right">',
-                $this->conf->hotlink(Ht::img("txt.png", "[Text]", "b") . "&nbsp;<u>Plain text</u>", "review", $rlink1 + ["text" => 1] + $rlink2, ["class" => "noul"]),
+                $this->conf->hotlink(Ht::img("txt24.svg", "[Text]", "sdlimg") . "&nbsp;<u>Plain text</u>", "review", $rlink1 + ["text" => 1] + $rlink2, ["class" => "noul"]),
                 "</div>";
         }
 
@@ -559,8 +557,10 @@ Ready\n";
             echo '<span class="barsep">·</span>';
         }
         echo $revtime,
-            Ht::button("Review offline", ["class" => "ui js-offline-review btn ml-4"]),
-            '</div>';
+            '<span class="btnbox ml-4">',
+            Ht::button("Review offline", ["class" => "ui js-offline-review btn"]),
+            Ht::button(Ht::make_licon("upload"), ["class" => "ui js-offline-review upload btn btn-licon need-tooltip", "aria-label" => "Upload offline review form"]),
+            '</span></div>';
 
         echo '<hr class="c"></div>', "\n";
 
@@ -630,7 +630,7 @@ Ready\n";
         $barsep = ' <span class="barsep">·</span> ';
         $a = '<a href="' . Ht::escape_attr($prow->hoturl(["#" => "r" . $rrow->unparse_ordinal_id()])) . '"';
         $t = "<tr class=\"pl\"><td class=\"pl_eventicon\">{$a}>"
-            . Ht::img("review48.png", "[Review]", ["class" => "dlimg", "width" => 24, "height" => 24])
+            . Ht::img("review48.svg", "[Review]", ["class" => "dlimg", "width" => 24, "height" => 24])
             . "</a></td>"
             . "<td class=\"pl_eventid pl_rowclick\">{$a} class=\"pnum\">#{$prow->paperId}</a></td>"
             . "<td class=\"pl_eventdesc pl_rowclick\"><small>{$a} class=\"ptitle\">"

@@ -465,13 +465,11 @@ class String_Sitype extends Sitype {
         } else if ($subtype === "prefer_numeric") {
             $this->simple = $this->prefer_numeric = true;
         } else if ($subtype === "search") {
-            $this->simple = true;
             $this->example = "search expression";
         } else if ($subtype === "condition") {
-            $this->simple = $this->condition = true;
+            $this->condition = true;
             $this->example = "search expression";
         } else if ($subtype === "formula") {
-            $this->simple = true;
             $this->example = "formula expression";
         } else if ($subtype === "mailbody") {
             $this->long = $this->mailbody = true;
@@ -485,7 +483,7 @@ class String_Sitype extends Sitype {
         } else if ($this->long) {
             $s = cleannl($vstr);
         } else {
-            $s = trim($vstr);
+            $s = trim(cleannl($vstr));
         }
         if ($this->mailbody && $s !== "" && !str_ends_with($s, "\n")) {
             $s .= "\n";
@@ -614,7 +612,7 @@ class EmailHeader_Sitype extends Sitype {
         $mt = new MimeText;
         $t = $mt->encode_email_header("", $vstr);
         if ($t !== false) {
-            return $t != "" ? MimeText::decode_header($t) : "";
+            return $t != "" ? MimeText::decode_email_header($t) : "";
         }
         $sv->append_item_at($si, $mt->mi);
         return null;
@@ -664,7 +662,7 @@ class Tag_Sitype extends Sitype {
                 $flags |= Tagger::ALLOWNONE;
             }
         }
-        if (($t = $sv->tagger()->check($vstr, $flags)) !== false) {
+        if (($t = $sv->tagger()->check_syntax($vstr, $flags)) !== false) {
             return $t;
         }
         $sv->error_at($si, $sv->tagger()->error_ftext());
@@ -700,7 +698,7 @@ class TagList_Sitype extends Sitype {
     function parse_reqv($vstr, Si $si, SettingValues $sv) {
         $ts = [];
         foreach (preg_split('/[\s,;]+/', $vstr) as $t) {
-            if ($t !== "" && ($tx = $sv->tagger()->check($t, $this->flags))) {
+            if ($t !== "" && ($tx = $sv->tagger()->check_syntax($t, $this->flags))) {
                 list($tag, $idx) = Tagger::unpack($tx);
                 if ($this->min_idx !== null) {
                     $tx = $tag . "#" . max($this->min_idx, (float) $idx);

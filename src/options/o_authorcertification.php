@@ -268,7 +268,8 @@ class AuthorCertification_PaperOption extends PaperOption {
             $e = new AuthorCertification_Entry($u->email);
             $e->uid = $v;
             $e->user = $u;
-            if (($j = json_decode_object($ov->data_by_index($i)))) {
+            $j = json_decode($ov->data_by_index($i) ?? "");
+            if (is_object($j)) {
                 if (isset($j->value)) {
                     $e->value = $j->value;
                 }
@@ -373,7 +374,7 @@ class AuthorCertification_PaperOption extends PaperOption {
 
     /** @return AuthorCertification_EntryList */
     static private function author_option_entries(PaperInfo $prow) {
-        $auov = $prow->force_option(PaperOption::AUTHORSID);
+        $auov = $prow->option(PaperOption::AUTHORSID);
         $aulist = Authors_PaperOption::author_list($auov);
         return ACEntryList::make_author_list($prow->conf, $aulist);
     }
@@ -468,7 +469,7 @@ class AuthorCertification_PaperOption extends PaperOption {
         $want_complete = self::entries_complete($ov->prow, $entries);
         $have_complete = self::is_complete($ov);
         // check for illegal change to authors
-        $auov = $ov->prow->force_option(PaperOption::AUTHORSID);
+        $auov = $ov->prow->option(PaperOption::AUTHORSID);
         $base_auov = $ov->prow->base_option(PaperOption::AUTHORSID);
         if (!$auov->equals($base_auov)) {
             $prevent_add = !$have_complete
@@ -539,7 +540,7 @@ class AuthorCertification_PaperOption extends PaperOption {
         foreach ($entries as $ne) {
             if ($ne->user
                 && $ne->value
-                && !$base_entries->find_by_id($ne->uid)
+                && !$xentries->find_by_id($ne->uid)
                 && self::user_can_change($user, $prow, $ne->user->email)
                 && $this->resolve_max_submissions($ne->user, $entries, $msgs)) {
                 $xentries->append($ne);

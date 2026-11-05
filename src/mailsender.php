@@ -46,6 +46,8 @@ class MailSender {
     private $skipcount = 0;
     /** @var array<int,true> */
     private $mrecipients = [];
+    /** @var array<int,true> */
+    private $notified_reviews = [];
     /** @var ?HotCRPMailPreparation */
     private $active_prep;
     /** @var ?HotCRPMailPreparation */
@@ -161,13 +163,13 @@ class MailSender {
             // XXX should only apply to papers you administer
             $qreq->cc = simplify_whitespace($qreq->cc);
         } else {
-            $qreq->cc = simplify_whitespace($conf->opt("emailCc") ?? "");
+            $qreq->cc = MimeText::expand_email_header_setting($conf, "emailCc");
         }
         if (isset($qreq["reply-to"]) && $qreq->user()->is_manager()) {
             // XXX should only apply to papers you administer
             $qreq["reply-to"] = simplify_whitespace($qreq["reply-to"]);
         } else {
-            $qreq["reply-to"] = $conf->opt("emailReplyTo") ?? "";
+            $qreq["reply-to"] = MimeText::expand_email_header_setting($conf, "emailReplyTo");
         }
     }
 
@@ -200,7 +202,7 @@ class MailSender {
 
     /** @return bool */
     function prepare_sending_mailid() {
-        $result = $this->conf->qe("update MailLog set status=1 where mailId=? and status=-1", $this->mailid());
+        $result = $this->conf->qe("update MailLog set status=1 where mailId=? and contactId=? and status=-1", $this->mailid(), $this->user->contactId);
         $ok = $result->affected_rows > 0;
         $result->close();
         return $ok;
@@ -325,7 +327,7 @@ class MailSender {
                   "Mailing to: ", $this->recip->unparse(),
                   '<span id="mailinfo"></span>';
             if (!preg_match('/\A(?:pc\z|pc:|all\z)/', $this->recipients)
-                && $this->qreq->plimit
+                && friendly_boolean($this->qreq->plimit)
                 && (string) $this->qreq->q !== "") {
                 assert($this->recip->has_paper_ids());
                 echo "<br>Paper selection: ";
@@ -412,7 +414,8 @@ class MailSender {
     /** @param HotCRPMailPreparation $prep
      * @return string */
     static private function prepid($prep) {
-        return "c" . join("_", $prep->recipient_uids()) . "p" . $prep->paperId;
+        return "c" . join("_", $prep->recipient_uids())
+            . ($prep->prow ? "p{$prep->prow->paperId}" : "px");
     }
 
     /** @param HotCRPMailPreparation $prep
@@ -471,10 +474,10 @@ class MailSender {
                     $vh = "<div class=\"mb-1\">{$vh}</div>" . MessageSet::feedback_html($ml);
                 }
             } else if ($k == "Subject") {
-                $vh = htmlspecialchars(MimeText::decode_header($show_prep->subject));
+                $vh = htmlspecialchars(MimeText::decode_text_header($show_prep->subject));
             } else if (($line = $show_prep->headers[$k] ?? null)) {
                 $k = substr($line, 0, strlen($k));
-                $vh = htmlspecialchars(MimeText::decode_header(substr($line, strlen($k) + 2)));
+                $vh = htmlspecialchars(MimeText::decode_email_header(substr($line, strlen($k) + 2)));
             } else {
                 continue;
             }
@@ -515,12 +518,15 @@ class MailSender {
                 $this->mrecipients[$recip->contactId] = true;
                 if ($this->sending) {
                     // Log format matters
-                    $this->conf->log_for($this->user, $recip, "Sent mail #{$this->mailid}", $prep->paperId);
+                    $this->conf->log_for($this->user, $recip, "Sent mail #{$this->mailid}", $prep->prow);
                 }
             }
         }
         if ($any_receivers) {
             ++$this->mcount;
+            if ($this->sending) {
+                $this->notified_reviews += $prep->listed_reviews;
+            }
         } else {
             $this->had_invalid_mail = true;
         }
@@ -543,10 +549,11 @@ class MailSender {
             "cc" => $this->qreq->cc,
             "reply-to" => $this->qreq["reply-to"],
             "no_error_quit" => true,
-            "author_permission" => $is_authors
+            "author_permission" => $is_authors,
+            "preview" => !$this->sending
         ];
-        if ($rest["cc"] !== ""
-            && $rest["cc"] !== simplify_whitespace($this->conf->opt("emailCc") ?? "")
+        if ((string) $rest["cc"] !== ""
+            && simplify_whitespace($rest["cc"]) !== simplify_whitespace(MimeText::expand_email_header_setting($this->conf, "emailCc"))
             && !$this->user->privChair) {
             $rest["sender_visible"] = true;
         }
@@ -570,10 +577,7 @@ class MailSender {
         if ($this->sending) {
             // Mail format matters
             $this->user->log_activity("Sending mail #{$this->mailid} \"{$subject}\"");
-        } else {
-            $rest["preview"] = true;
         }
-        $need_censored_prep = !$this->user->privChair || $this->conf->opt("chairHidePasswords");
 
         $mailer = new HotCRPMailer($this->user);
         $mailer->set_recip_set($this->recip);
@@ -586,7 +590,6 @@ class MailSender {
         $nrows_total = count($recip_set);
         $nwarnings = 0;
         $has_decoration = false;
-        $revinform = ($this->recipients === "newpcrev" ? [] : null);
         $acceptnotify = ($this->recip->is_accepted_authors() ? [] : null);
         $last_pid = null;
         $pid_index = null;
@@ -611,53 +614,66 @@ class MailSender {
                 }
             }
 
-
             // skip if reviews don’t match
             $rest["prow"] = $prow = $this->recip->paper($pid);
             if ($prow && !$this->recip->test_paper($prow, $user)) {
                 continue;
             }
 
+            // prepare censored preparation
+            $rest["censor"] = Mailer::CENSOR_PREVIEW;
+            $rest["preview"] = true;
             $mailer->reset($user, $rest);
-            $prep = $mailer->prepare($template, $rest);
+            $cprep = $mailer->prepare($template, $rest);
 
-            foreach ($prep->message_list() as $mi) {
+            foreach ($cprep->message_list() as $mi) {
                 $this->recip->append_item($mi);
-                if (!$has_decoration) {
+                if (!$has_decoration
+                    && in_array($mi->field, ["reply-to", "cc", "bcc"], true)) {
                     $this->recip->inform_at($mi->field, "<0>Put names in \"double quotes\" and email addresses in <angle brackets>, and separate destinations with commas.");
                     $has_decoration = true;
                 }
             }
 
-            if (!$prep->has_error()
-                && $this->process_prep($prep, $user)
-                && $need_censored_prep) {
-                if ($this->active_censored_prep) {
-                    $this->active_censored_prep->merge($prep);
+            // prepare uncensored preparation
+            $merge = false;
+            if (!$cprep->has_error()) {
+                $rest["censor"] = Mailer::CENSOR_NONE;
+                $rest["preview"] = !$this->sending;
+                $mailer->reset($user, $rest);
+                $prep = $mailer->prepare($template, $rest);
+
+                if ($prep->has_error()) {
+                    foreach ($prep->message_list() as $mi) {
+                        // context might report data that should be censored
+                        $this->recip->append_item($mi->without_context());
+                    }
                 } else {
-                    $rest["censor"] = Mailer::CENSOR_PREVIEW;
-                    $mailer->reset($user, $rest);
-                    $this->active_censored_prep = $mailer->prepare($template, $rest);
-                    $rest["censor"] = Mailer::CENSOR_NONE;
+                    $merge = $this->process_prep($prep, $user);
                 }
             }
 
-            if ($nwarnings !== $mailer->message_count() || $nrows_done % 5 == 0) {
+            // maybe merge censored preparation
+            if ($this->active_censored_prep) {
+                $this->active_censored_prep->merge($cprep);
+            } else {
+                $this->active_censored_prep = $cprep;
+            }
+
+            if ($nwarnings !== $this->recip->message_count()
+                || $nrows_done % 5 == 0) {
                 $this->print_mailinfo($nrows_done, $nrows_total);
             }
-            if ($nwarnings !== $mailer->message_count()) {
+            if ($nwarnings !== $this->recip->message_count()) {
                 $this->print_prologue();
-                $nwarnings = $mailer->message_count();
+                $nwarnings = $this->recip->message_count();
                 echo "<div id=\"foldmailwarn{$nwarnings}\" class=\"hidden\"><div class=\"msg msg-warning\">",
-                    MessageSet::feedback_html($mailer->decorated_message_list()),
+                    MessageSet::feedback_html($this->recip->decorated_message_list()),
                     "</ul></div></div>",
                     Ht::unstash_script("document.getElementById('mailwarnings').innerHTML = document.getElementById('foldmailwarn{$nwarnings}').innerHTML;");
             }
 
             if ($this->sending && $prow) {
-                if ($revinform !== null) {
-                    $revinform[] = "(paperId={$prow->paperId} and contactId={$user->contactId})";
-                }
                 if ($acceptnotify !== null && $prow->timeAcceptNotified === 0) {
                     $acceptnotify[] = $prow->paperId;
                 }
@@ -673,7 +689,6 @@ class MailSender {
             } else {
                 $this->recip->warning_at(null, "<0>Mail not sent: no users match this search");
             }
-            $this->recip->append_list($mailer->message_list());
             $this->conf->feedback_msg($this->recip->decorated_message_list());
             echo Ht::unstash_script("\$(\"#foldmail\").addClass('hidden');document.getElementById('f-mail').action=" . json_encode_browser($this->conf->hoturl("=mail", ["check" => 1])));
             return;
@@ -685,8 +700,8 @@ class MailSender {
         } else {
             $this->conf->qe("update MailLog set status=0 where mailId=?", $this->mailid);
             $time = time();
-            if ($revinform) {
-                $this->conf->qe_raw("update PaperReview set timeRequestNotified={$time} where " . join(" or ", $revinform));
+            if ($this->recipients === "newpcrev" && !empty($this->notified_reviews)) {
+                $this->conf->qe("update PaperReview set timeRequestNotified=? where reviewId?a", $time, array_keys($this->notified_reviews));
             }
             if ($acceptnotify) {
                 $this->conf->qe("update Paper set timeAcceptNotified={$time} where paperId?a and timeAcceptNotified=0 and outcome>0", $acceptnotify);

@@ -3,16 +3,33 @@
 // Copyright (c) 2008-2026 Eddie Kohler; see LICENSE.
 
 class DocumentLocator {
+    /** @var Conf */
+    public $conf;
     /** @var ?Qrequest */
     public $attachment_qreq;
     /** @var ?ZipArchive */
     public $ziparchive;
     /** @var ?string */
     public $ziparchive_docdir;
+    /** @var int */
+    private $_json_size_limit;
 
     const M_ONE = 1;
     const M_MULTI = 2;
     const M_MATCH = 4;
+
+    function __construct(Conf $conf) {
+        $this->conf = $conf;
+        // Bound the metadata JSON, which is loaded whole and decoded (~2x peak
+        // memory). Document *files* in a ZIP are separate members streamed to
+        // disk and are not limited by this. Override with `$Opt["jsonSizeLimit"]`.
+        if (($x = $conf->opt("jsonSizeLimit")) !== null) {
+            $this->_json_size_limit = (int) $x;
+        } else {
+            $ml = ini_get_bytes("memory_limit");
+            $this->_json_size_limit = $ml > 0 ? intdiv($ml, 2) : (1 << 30);
+        }
+    }
 
     /** @return ?string */
     function set_zipfile($file) {
@@ -75,14 +92,25 @@ class DocumentLocator {
             if (!$jsonname) {
                 JsonResult::make_error(400, "<0>ZIP `data.json` not found")->complete();
             }
+            // reject a zip bomb before inflating `data.json` into memory
+            $stat = $this->ziparchive->statName($jsonname);
+            if ($stat && $stat["size"] > $this->_json_size_limit) {
+                JsonResult::make_error(413, "<0>ZIP `{$jsonname}` too large")->complete();
+            }
             $jsonstr = $this->ziparchive->getFromName($jsonname);
         } else {
             JsonResult::make_error(400, "<0>Unexpected content type")->complete();
             $jsonstr = ""; // unreachable - shut up Phan
         }
 
-        // read JSON, check format
-        $jp = Json::try_decode((string) $jsonstr);
+        // read JSON, check format. A chair is trusted: the bulk-paper paths are
+        // chair-only, and their large documents are not hash-collision attacks,
+        // so lift the complexity cap for them (the length limit still applies).
+        $parser = (new JsonParser)->set_user($this->_json_size_limit);
+        if (($u = $qreq->user()) && $u->privChair) {
+            $parser->set_complexity_scale(0);
+        }
+        $jp = Json::decode((string) $jsonstr, $parser);
         if (is_object($jp)) {
             if (isset($qreq->q)
                 && ($mode & self::M_MATCH) !== 0) {
@@ -172,6 +200,11 @@ class DocumentLocator {
             $importer->error("<0>{$filename}: File not found");
             return false;
         }
+        // reject a decompression bomb before inflating the entry
+        if ($stat["size"] > $importer->max_upload_size()) {
+            $importer->error("<0>{$filename}: File too large");
+            return false;
+        }
         // use resources to store large files
         if ($stat["size"] > 50000000) {
             if (PHP_VERSION_ID >= 80200) {
@@ -239,9 +272,12 @@ class DocumentLocator {
         if (is_string($docj->content_file)) {
             if ($this->ziparchive) {
                 return $this->apply_zip_content_file($docj, $importer);
-            } else if ($this->attachment_qreq
-                       && ($qf = $this->attachment_qreq->file($docj->content_file))) {
-                return self::apply_qrequest_file($docj, $qf);
+            } else if ($this->attachment_qreq) {
+                $qf = $this->attachment_qreq->file($docj->content_file)
+                    ?? $this->attachment_qreq->file(Qrequest::mangle_key($docj->content_file));
+                if ($qf) {
+                    return self::apply_qrequest_file($docj, $qf);
+                }
             }
         }
         unset($docj->content_file);

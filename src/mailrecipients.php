@@ -209,7 +209,7 @@ class MailRecipients extends MessageSet {
             $row = $this->conf->fetch_first_row("select
                 exists (select * from PaperReview where reviewType>=" . REVIEW_PC . " and {$pidw}),
                 exists (select * from PaperReview where reviewType>0 and reviewType<" . REVIEW_PC . "  and {$pidw}),
-                exists (select * from PaperReview where reviewType>=" . REVIEW_PC . " and reviewSubmitted<=0 and reviewNeedsSubmit!=0 and timeRequested>timeRequestNotified and {$pidw}),
+                exists (select * from PaperReview where reviewType>=" . REVIEW_PC . " and reviewSubmitted<=0 and reviewNeedsSubmit!=0 and timeRequested>timeRequestNotified and (rflags&" . ReviewInfo::RF_SELF_ASSIGNED . ")=0 and {$pidw}),
                 exists (select * from Paper where timeSubmitted>0 and leadContactId!=0 and {$pidw}),
                 exists (select * from Paper where timeSubmitted>0 and shepherdContactId!=0 and {$pidw})");
             list($any_pcrev, $any_extrev, $any_newpcrev, $any_lead, $any_shepherd) = $row;
@@ -246,11 +246,7 @@ class MailRecipients extends MessageSet {
 
         // PC
         $this->recipt_default_message = "pc";
-        $tags = [];
-        foreach ($this->conf->viewable_user_tags($this->user) as $t) {
-            if ($t !== "pc" && $t !== "listedpc" && $t !== "unlistedpc")
-                $tags[] = $t;
-        }
+        $tags = $this->conf->viewable_user_tags($this->user);
         $unlisted = $this->conf->has_unlisted_pc_members()
             && ($this->user->viewable_roles_mask() & Contact::ROLE_UNLISTEDPC) !== 0;
         if (empty($tags) && !$unlisted) {
@@ -418,10 +414,10 @@ class MailRecipients extends MessageSet {
     /** @param bool $paper_sensitive
      * @return int */
     function combination_type($paper_sensitive) {
-        if (preg_match('/\A(?:pc|pc:.*|(?:|unc|new)pcrev|lead|shepherd)\z/', $this->rect->name)) {
-            return 2;
+        if (preg_match('/\A(?:pc|listedpc|unlistedpc|pc:.*|(?:|unc|new)pcrev|lead|shepherd)\z/', $this->rect->name)) {
+            return HotCRPMailer::COMBINE_GROUP;
         } else if ($this->is_authors() || $paper_sensitive) {
-            return 1;
+            return HotCRPMailer::COMBINE_PAPER;
         }
         return 0;
     }
@@ -466,20 +462,18 @@ class MailRecipients extends MessageSet {
             $options["anyShepherd"] = $options["reviewSignatures"] = true;
         } else {
             $options["reviewSignatures"] = true;
-            $options["decision"] = ["standard"]; // skip desk rejects (???)
+            $options["decision"] = ["standard"]; // skip desk rejects
         }
 
         // additional manager limit
-        $need_filter = false;
-        if (!$this->user->privChair
-            && ($this->rect->flags & self::F_ANYPC) === 0) {
+        $need_filter = !$this->user->privChair
+            && ($this->rect->flags & self::F_ANYPC) === 0;
+        if ($need_filter) {
             if (!$this->user->is_track_manager()) {
                 $options["myManaged"] = true;
             } else if (($mtt = $this->user->managed_track_tags()) !== null) {
-                $tsm = (new TagSearchMatcher($this->user))->add_tag_list($mtt);
-                $options["where"] = $tsm->exists_sqlexpr("Paper") . " or managerContactId={$this->user->contactId}";
-            } else {
-                $need_filter = true;
+                $tsm = (new TagSearchMatcher($this->conf->root_user()))->add_tag_list($mtt);
+                $options["where"] = ($tsm->exists_sqlexpr("Paper") ?? "false") . " or managerContactId={$this->user->contactId}";
             }
         }
 
@@ -532,7 +526,7 @@ class MailRecipients extends MessageSet {
         }
         $rf = $this->rect->flags;
         if (($rf & self::F_REV) === 0) {
-            return true;
+            return $prow->timeSubmitted > 0;
         }
         // withdrawn papers + incomplete reviews generally uninteresting
         if (($rf & self::FM_REV_SPECIFIC) === 0
@@ -561,7 +555,7 @@ class MailRecipients extends MessageSet {
             return false;
         }
         if (($rf & self::F_REV_PC)
-            && $rrow->reviewType <= REVIEW_PC) {
+            && $rrow->reviewType < REVIEW_PC) {
             return false;
         }
         // check requester
@@ -569,11 +563,13 @@ class MailRecipients extends MessageSet {
             && $rrow->requestedBy !== $this->user->contactId) {
             return false;
         }
-        // check time requested (NB requires full review)
+        // check time requested (NB requires full review); self-assigned
+        // reviews are not new assignments
         if (($rf & self::F_REV_SINCE)
-            && ($this->newrev_since
-                ? $this->newrev_since > $rrow->timeRequested
-                : $rrow->timeRequested <= $rrow->timeRequestNotified)) {
+            && (($rrow->rflags & ReviewInfo::RF_SELF_ASSIGNED) !== 0
+                || ($this->newrev_since
+                    ? $this->newrev_since > $rrow->timeRequested
+                    : $rrow->timeRequested <= $rrow->timeRequestNotified))) {
             return false;
         }
         return true;
@@ -653,6 +649,7 @@ class MailRecipients extends MessageSet {
                 $where[] = "(PaperReview.rflags&" . ReviewInfo::RF_LIVE . ")!=0";
             }
             if ($rf & self::F_REV_SINCE) {
+                $where[] = "(PaperReview.rflags&" . ReviewInfo::RF_SELF_ASSIGNED . ")=0";
                 if ($this->newrev_since) {
                     $where[] = "PaperReview.timeRequested>={$this->newrev_since}";
                 } else {

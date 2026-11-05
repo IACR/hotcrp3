@@ -108,7 +108,7 @@ class PaperExport {
 
 
     /** @return ?object */
-    function document_json(?DocumentInfo $doc) {
+    function document_json(?DocumentInfo $doc, $options = []) {
         if (!$doc) {
             return null;
         }
@@ -129,7 +129,8 @@ class PaperExport {
         if (($sz = $doc->size()) >= 0) {
             $d->size = $sz;
         }
-        if ($doc->filename) {
+        if (($options["want_filename"] ?? true)
+            && $doc->filename) {
             $d->filename = $doc->filename;
         }
         if ($this->include_document_content
@@ -179,6 +180,7 @@ class PaperExport {
             return null;
         }
 
+        $old_viewer = $this->conf->swap_viewer($this->viewer);
         $pj = (object) [
             "object" => "paper",
             "pid" => (int) $prow->paperId
@@ -220,6 +222,7 @@ class PaperExport {
         if (!empty($truncated)) {
             $pj->truncated = $truncated;
         }
+        $this->conf->swap_viewer($old_viewer);
         return $pj;
     }
 
@@ -256,7 +259,8 @@ class PaperExport {
             $pj->submitted_at = $t;
         }
 
-        if ($prow->timeFinalSubmitted > 0) {
+        if ($prow->timeFinalSubmitted > 0
+            && $this->viewer->can_view_decision($prow)) {
             $pj->final_submitted = true;
             $pj->final_submitted_at = $prow->timeFinalSubmitted;
         }
@@ -277,6 +281,7 @@ class PaperExport {
     function review_json(PaperInfo $prow, ReviewInfo $rrow) {
         ReviewForm::check_review_author_seen($prow, $rrow, $this->viewer);
         $my_review = $this->viewer->is_my_review($rrow);
+        $old_viewer = $this->conf->swap_viewer($this->viewer);
 
         $rj = [
             "object" => "review",
@@ -384,6 +389,7 @@ class PaperExport {
             $rj["format"] = $fmt;
         }
 
+        $this->conf->swap_viewer($old_viewer);
         return (object) $rj;
     }
 

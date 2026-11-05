@@ -80,6 +80,8 @@ class TokenInfo {
     private $_changes;
 
     const SALT_PREFIX = "hc";
+    const SALT_MIN_LENGTH = 12;
+    const SALT_MAX_LENGTH = 255;
 
     const RESETPASSWORD = 1;
     const CHANGEEMAIL = 2;
@@ -139,6 +141,7 @@ class TokenInfo {
      * @return $this
      * @suppress PhanAccessReadOnlyProperty */
     final function set_user_from(Contact $user, $is_cdb) {
+        assert(!$this->contactId);
         if ($this->is_cdb === null) {
             $this->is_cdb = $is_cdb ?? $user->is_cdb_user();
         }
@@ -146,7 +149,9 @@ class TokenInfo {
             $user->ensure_account_here();
         }
         $uid = $this->is_cdb ? $user->contactDbId : $user->contactId;
-        assert(!$this->contactId && $uid > 0);
+        if ($uid <= 0) {
+            throw new Exception("TokenInfo::set_user_from: Failed to create user");
+        }
         $this->contactId = $uid;
         $this->email = $user->email;
         $this->_user = $user;
@@ -159,6 +164,14 @@ class TokenInfo {
     final function set_paper(?PaperInfo $prow) {
         assert(!$this->stored());
         $this->paperId = $prow ? $prow->paperId : 0;
+        return $this;
+    }
+
+    /** @return $this
+     * @suppress PhanAccessReadOnlyProperty */
+    final function set_pid(int $pid) {
+        assert(!$this->stored() && $pid >= -2);
+        $this->paperId = $pid;
         return $this;
     }
 
@@ -324,7 +337,10 @@ class TokenInfo {
      * @return ?TokenInfo */
     static function find_from($token, Conf $conf, $is_cdb) {
         $db = $is_cdb ? $conf->contactdb() : $conf->dblink;
-        if ($token === null || strlen($token) < 5 || !$db) {
+        if ($token === null
+            || strlen($token) < self::SALT_MIN_LENGTH
+            || strlen($token) > self::SALT_MAX_LENGTH
+            || !$db) {
             return null;
         }
         $extra = $is_cdb ? ", (select email from ContactInfo where contactDbId=Capability.contactId) email" : "";
@@ -505,6 +521,10 @@ class TokenInfo {
             if ($need_salt) {
                 $this->salt = $this->instantiate_token();
             }
+            if (strlen($this->salt) < self::SALT_MIN_LENGTH
+                || strlen($this->salt) > self::SALT_MAX_LENGTH) {
+                break;
+            }
             $qv[0] = $this->salt;
             $qv[1] = Conf::$now;
             $result = Dbl::qe($this->dblink(), "insert into Capability (salt, timeCreated, capabilityType, contactId, paperId, timeUsed, useCount, timeInvalid, timeExpires, data, dataOverflow{$qf}) values ?v", [$qv]);
@@ -531,7 +551,10 @@ class TokenInfo {
     /** @param ?string $key
      * @return mixed */
     final function data($key = null) {
-        $this->_jdata = $this->_jdata ?? json_decode_object($this->data);
+        if ($this->_jdata === null) {
+            $j = $this->data ? json_decode($this->data) : null;
+            $this->_jdata = is_object($j) ? $j : null;
+        }
         return $key ? $this->_jdata->$key ?? null : $this->_jdata;
     }
 
@@ -554,7 +577,10 @@ class TokenInfo {
     /** @param ?string $key
      * @return mixed */
     final function input($key = null) {
-        $this->_jinputData = $this->_jinputData ?? json_decode_object($this->inputData);
+        if ($this->_jinputData === null) {
+            $j = $this->inputData ? json_decode($this->inputData) : null;
+            $this->_jinputData = is_object($j) ? $j : null;
+        }
         return $key ? $this->_jinputData->$key ?? null : $this->_jinputData;
     }
 
@@ -608,7 +634,7 @@ class TokenInfo {
      * @suppress PhanAccessReadOnlyProperty */
     final function assign_data($data) {
         if ($data !== null && !is_string($data)) {
-            $data = json_encode_db($data);
+            $data = json_encode_db($data, JSON_INVALID_UTF8_SUBSTITUTE);
         }
         /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
         $this->data = $data;

@@ -447,7 +447,7 @@ class UserStatus extends MessageSet {
             $cj->bot = true;
         }
 
-        if ($user->roles) {
+        if (($user->roles & Contact::ROLE_PCLIKE) !== 0) {
             $cj->roles = self::unparse_roles_json($user->roles);
         }
 
@@ -573,6 +573,9 @@ class UserStatus extends MessageSet {
         foreach ($t0 as $t) {
             if ($t === "") {
                 continue;
+            } else if (!is_string($t)) {
+                $this->error_at($key, "<0>Format error [{$key}]");
+                continue;
             }
             $pfx = "";
             $flags = Tagger::NOPRIVATE;
@@ -583,13 +586,29 @@ class UserStatus extends MessageSet {
             } else if ($change && strlen($t) > 1 && $t[0] === "+") {
                 $t = substr($t, 1);
             }
-            if (($tx = $tagger->check($t, $flags))) {
+            if (($tx = $tagger->check_syntax($t, $flags))) {
                 $t1[] = $pfx . $tx;
             } else {
                 $this->error_at($key, $tagger->error_ftext(true));
             }
         }
         return $t1;
+    }
+
+    /** Reject values of the wrong type before anything parses them.
+     * @param object $cj */
+    private function normalize_types($cj) {
+        foreach (["user", "name", "given_name", "family_name", "first", "last",
+                  "firstName", "lastName", "email", "preferred_email", "preferredEmail",
+                  "affiliation", "institution", "phone", "voicePhoneNumber", "new_password",
+                  "city", "state", "zip", "zipCode", "postal_code", "country", "orcid"] as $k) {
+            if (isset($cj->$k) && !is_string($cj->$k)) {
+                $this->error_at($k, "<0>Format error [{$k}]");
+                unset($cj->$k);
+            }
+        }
+        // computed by `normalize`
+        unset($cj->bad_follow, $cj->bad_topics);
     }
 
     /** @param ?Contact $old_user */
@@ -611,14 +630,12 @@ class UserStatus extends MessageSet {
             }
         }
 
-        // Stringiness
-        foreach (["firstName", "lastName", "email", "preferred_email",
-                  "affiliation", "phone", "new_password",
-                  "city", "state", "zip", "country"] as $k) {
-            if (isset($cj->$k) && !is_string($cj->$k)) {
-                $this->error_at($k, "<0>Format error [{$k}]");
-                unset($cj->$k);
-            }
+
+        // New password
+        if (isset($cj->new_password)
+            && ($m = LoginHelper::new_password_problem($cj->new_password))) {
+            $this->error_at("password", $m);
+            unset($cj->new_password);
         }
 
         // Email
@@ -979,9 +996,11 @@ class UserStatus extends MessageSet {
 
     /** @return bool */
     static function check_pc_tag($base) {
-        return !preg_match('/\A(?:any|all|none|enabled|disabled|pc|listedpc|unlistedpc|chair|admin|sysadmin)\z/i', $base);
+        return !preg_match('/\A(?:any|all|none|enabled|disabled|pc|listedpc|unlistedpc|chair|admin|sysadmin|bot)\z/i', $base);
     }
 
+
+    const NAME_MISSING_MESSAGE = "<0>Please enter your name";
 
     static function crosscheck_main(UserStatus $us) {
         if ($us->profile_topic() !== "main"
@@ -993,8 +1012,8 @@ class UserStatus extends MessageSet {
         if ($user->firstName === ""
             && $user->lastName === ""
             && ($user->contactId > 0 || !$cdbu || ($cdbu->firstName === "" && $cdbu->lastName === ""))) {
-            $us->warning_at("firstName", "<0>Please enter your name");
-            $us->warning_at("lastName", "<0>Please enter your name");
+            $us->warning_at("firstName", self::NAME_MISSING_MESSAGE);
+            $us->warning_at("lastName", self::NAME_MISSING_MESSAGE);
         }
         if ($user->affiliation === ""
             && ($user->contactId > 0 || !$cdbu || $cdbu->affiliation === "")) {
@@ -1063,6 +1082,7 @@ class UserStatus extends MessageSet {
         $cj = $this->jval;
 
         // normalize name, including email
+        $this->normalize_types($cj);
         self::normalize_name($cj);
 
         // obtain old users in this conference and contactdb
@@ -1203,7 +1223,7 @@ class UserStatus extends MessageSet {
                 $cf |= Contact::CF_BOT;
             }
             $create_cj = array_merge((array) $cj, [
-                "email" => $email, "disablement" => $cf
+                "contactId" => 0, "email" => $email, "disablement" => $cf
             ]);
             $user = Contact::make_keyed($this->conf, $create_cj)->store(0, $actor);
             if ($user && $user->is_bot()) {
@@ -1271,13 +1291,23 @@ class UserStatus extends MessageSet {
             $this->diffs["create"] = true;
         }
 
+        // Removing someone from the PC also removes them as manager
+        // (but for now keep them as lead/shepherd)
+        if (($old_roles & Contact::ROLE_PCLIKE) !== 0
+            && ($roles & Contact::ROLE_PCLIKE) === 0
+            && $this->conf->has_any_manager()) {
+            $aset = new AssignmentSet($this->conf->root_user());
+            $aset->parse("paper,action\nadmin:{$user->email}:explicit,clearadministrator\n");
+            $aset->execute();
+        }
+
         // Notify of new accounts or new PC-ness
         if ($this->notify && $user->disabled_flags() === 0) {
             $eff_old_roles = $old_disablement !== 0 ? 0 : $old_roles;
             if (!$old_activity_at
                 || (($eff_old_roles & Contact::ROLE_PCLIKE) === 0
                     && ($roles & Contact::ROLE_PCLIKE) !== 0)) {
-                if (($roles & Contact::ROLE_PC) !== 0) {
+                if (($roles & Contact::ROLE_ANYPC) !== 0) {
                     $prep = $user->prepare_mail("@newaccount.pc");
                 } else if (($roles & Contact::ROLE_ADMIN) !== 0) {
                     $prep = $user->prepare_mail("@newaccount.admin");
@@ -1319,15 +1349,21 @@ class UserStatus extends MessageSet {
                   "state" => "address",
                   "zip" => "address",
                   "theme" => "theme"] as $prop => $diff) {
-            if (($v = $this->jval->$prop ?? null) !== null) {
-                $user->set_prop($prop, $v, $ifempty);
-                if ($user->prop_changed($prop)) {
-                    $this->diffs[$diff] = true;
-                }
+            if (($v = $this->jval->$prop ?? null) === null) {
+                continue;
+            }
+            if (isset(Contact::$prop_max_length[$prop])
+                && strlen($v) > Contact::$prop_max_length[$prop]) {
+                $this->error_at($prop, "<0>Entry truncated");
+            }
+            $user->set_prop($prop, $v, $ifempty);
+            if ($user->prop_changed($prop)) {
+                $this->diffs[$diff] = true;
             }
         }
-        if ($user->conf->allow_preferred_email()
-            && ($v = $this->jval->preferred_email ?? null) !== null) {
+        if ($user->conf->require_preferred_email()
+            && ($v = $this->jval->preferred_email ?? null) !== null
+            && strlen($v) <= 120) {
             $user->set_prop("preferredEmail", $v, $ifempty);
             if ($user->prop_changed("preferredEmail")) {
                 $this->diffs["preferred_email"] = true;
@@ -1577,13 +1613,25 @@ class UserStatus extends MessageSet {
         "disabled", "theme"
     ];
 
+    /** Trim a CSV value, leaving JSON non-strings as they are.
+     * @param mixed $v
+     * @return mixed */
+    static private function csv_trim($v) {
+        return is_string($v) ? trim($v) : $v ?? "";
+    }
+
     static function parse_csv_main(UserStatus $us, CsvRow $line) {
         $cj = $us->jval;
 
         // set keys
         foreach (self::$csv_keys as $k) {
             $v = $line[$k];
-            if ($v === null || $v === "" || ($v = trim($v)) === "") {
+            if ($v === null) {
+                // skip
+            } else if (!is_string($v)) {
+                // JSON values keep their types; `normalize` checks them
+                $cj->$k = $v;
+            } else if (($v = trim($v)) === "") {
                 // skip
             } else if ($v === "-" || $v === "–" || $v === "—") {
                 if ($k === "roles" || $k === "disabled") {
@@ -1599,7 +1647,7 @@ class UserStatus extends MessageSet {
         }
 
         // user override
-        $override = trim($line["user_override"] ?? "");
+        $override = self::csv_trim($line["user_override"]);
         if ($override !== "") {
             $cj->user_override = friendly_boolean($override); /* OK if null */
         }
@@ -1610,7 +1658,7 @@ class UserStatus extends MessageSet {
             foreach ($line as $k => $v) {
                 if (preg_match('/^topic[:\s]\s*(.*?)\s*$/i', $k, $m)) {
                     if (($tid = $us->conf->topic_set()->find1($m[1], TopicSet::MFLAG_TOPIC)) > 0) {
-                        $v = trim($v);
+                        $v = self::csv_trim($v);
                         $topics[$tid] = $v === "" ? 0 : $v;
                     } else {
                         $us->unknown_topics[$m[1]] = true;
@@ -1618,7 +1666,7 @@ class UserStatus extends MessageSet {
                 }
             }
             if (!empty($topics)) {
-                $override = trim($line["topic_override"] ?? "");
+                $override = self::csv_trim($line["topic_override"]);
                 if ($override !== "" && friendly_boolean($override) === false) {
                     $cj->default_topics = (object) $topics;
                 } else {
@@ -1802,11 +1850,13 @@ class UserStatus extends MessageSet {
         }
         echo '<div class="', $us->control_class("theme", "w-text"), '">',
             $us->feedback_html_under("theme", "/");
+        // preview a theme only on the viewer's own profile
+        $klass = $us->is_auth_self() ? "uich js-retheme" : null;
         foreach (["auto" => "Automatic (follow system setting)",
                   "light" => "Light",
                   "dark" => "Dark"] as $value => $label) {
             echo '<label class="checki"><span class="checkc">',
-                Ht::radio("theme", $value, $reqtheme === $value, ["class" => "uich js-retheme", "data-default-checked" => $itheme === $value]),
+                Ht::radio("theme", $value, $reqtheme === $value, ["class" => $klass, "data-default-checked" => $itheme === $value]),
                 '</span>', $us->conf->_($label), "</label>\n";
         }
         echo "</div>\n";

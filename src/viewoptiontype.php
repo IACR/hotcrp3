@@ -15,8 +15,10 @@ class ViewOptionType {
     public $enum;
     /** @var ?string */
     public $alias;
-    /** @var ?int */
+    /** @var null|int|float */
     public $min;
+    /** @var null|int|float */
+    public $max;
     /** @var bool */
     public $lifted = false;
     /** @var bool */
@@ -194,7 +196,8 @@ class ViewOptionType {
             return SearchWord::unquote((string) $value);
         } else if ($this->type === "int") {
             if (($iv = stoi($value)) !== null
-                && (!isset($this->min) || $iv >= $this->min)) {
+                && (!isset($this->min) || $iv >= $this->min)
+                && (!isset($this->max) || $iv <= $this->max)) {
                 return $iv;
             }
         } else if ($this->type === "tag") {
@@ -244,8 +247,13 @@ class ViewOptionType {
                 array_splice($v["enum"], $dpos, 1);
                 $v["extensible"] = true;
             }
-        } else if ($this->type === "int" && isset($this->min)) {
-            $v["min"] = $this->min;
+        } else if ($this->type === "int") {
+            if (isset($this->min)) {
+                $v["min"] = $this->min;
+            }
+            if (isset($this->max)) {
+                $v["max"] = $this->max;
+            }
         }
         if ($this->required) {
             $v["required"] = true;

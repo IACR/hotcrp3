@@ -1,6 +1,6 @@
 <?php
 // a_tag.php -- HotCRP assignment helper classes
-// Copyright (c) 2006-2025 Eddie Kohler; see LICENSE.
+// Copyright (c) 2006-2026 Eddie Kohler; see LICENSE.
 
 class Tag_Assignable extends Assignable {
     /** @var string */
@@ -10,18 +10,18 @@ class Tag_Assignable extends Assignable {
     /** @var ?float */
     public $_index;
     /** @var ?bool */
-    public $_override;
+    public $_system;
     /** @param ?int $pid
      * @param string $ltag
      * @param ?string $tag
      * @param ?float $index
-     * @param ?bool $override */
-    function __construct($pid, $ltag, $tag = null, $index = null, $override = null) {
+     * @param ?bool $system */
+    function __construct($pid, $ltag, $tag = null, $index = null, $system = null) {
         $this->pid = $pid;
         $this->ltag = $ltag;
         $this->_tag = $tag ?? $ltag;
         $this->_index = $index;
-        $this->_override = $override;
+        $this->_system = $system;
     }
     /** @return string */
     function type() {
@@ -55,14 +55,15 @@ class Tag_Assignable extends Assignable {
         }
     }
     static function load_tag(AssignmentState $astate, $ltag) {
-        if ($astate->mark_stash("#{$ltag}")) {
-            $known = $astate->paper_ids();
-            $arg = empty($known) ? [] : ["where" => "Paper.paperId not in (" . join(",", $known) . ") and exists (select * from PaperTag where paperId=Paper.paperId and tag='" . sqlq($ltag) . "')"];
-            $arg["tags"] = true;
-            foreach ($astate->user->paper_set($arg) as $prow) {
-                $astate->add_prow($prow);
-                self::load_prow($astate, $prow);
-            }
+        if (!$astate->mark_stash("#{$ltag}")) {
+            return;
+        }
+        $where = "exists (select * from PaperTag where paperId=Paper.paperId and tag='" . sqlq($ltag) . "')";
+        if (($known = $astate->paper_ids())) {
+            $where = "Paper.paperId not in (" . join(",", $known) . ") and {$where}";
+        }
+        foreach ($astate->load_prows(["where" => $where, "where_safe" => true, "tags" => true]) as $prow) {
+            self::load_prow($astate, $prow);
         }
     }
     static function load_prow(AssignmentState $state, PaperInfo $prow) {
@@ -75,12 +76,10 @@ class Tag_Assignable extends Assignable {
 class NextTagAssignmentState {
     /** @var AssignmentState */
     private $astate;
-    /** @var ?string */
-    private $prev_ltag;
+    /** @var array<string,?float> */
+    private $ltag_map;
     /** @var ?int */
     private $expected_state_version;
-    /** @var ?float */
-    private $prev_value;
 
     function __construct(AssignmentState $astate) {
         $this->astate = $astate;
@@ -89,11 +88,13 @@ class NextTagAssignmentState {
      * @param bool $isseq
      * @return float */
     function compute_next(PaperInfo $prow, $ltag, $isseq) {
-        if ($this->astate->state_version() === $this->expected_state_version
-            && $this->prev_ltag === $ltag) {
-            $this->prev_value += Tagger::value_increment($isseq);
+        if ($this->astate->state_version() !== $this->expected_state_version) {
+            $this->ltag_map = [];
+        }
+        if (isset($this->ltag_map[$ltag])) {
+            $v = $this->ltag_map[$ltag] += Tagger::value_increment($isseq);
             ++$this->expected_state_version;
-            return $this->prev_value;
+            return $v;
         }
         Tag_Assignable::load_tag($this->astate, $ltag);
         $items = $this->astate->query_items(new Tag_Assignable(null, $ltag));
@@ -103,14 +104,14 @@ class NextTagAssignmentState {
             if ($item->pid() !== $prow->paperId
                 && ($maxvalue === null || $value > $maxvalue)
                 && ($p = $this->astate->prow($item->pid()))
+                && $this->astate->user->can_view_paper($p)
                 && $this->astate->user->can_view_tag($p, $ltag)) {
                 $maxvalue = floor($value);
             }
         }
-        $this->prev_value = ($maxvalue ?? 0.0) + Tagger::value_increment($isseq);
-        $this->prev_ltag = $ltag;
+        $v = $this->ltag_map[$ltag] = ($maxvalue ?? 0.0) + Tagger::value_increment($isseq);
         $this->expected_state_version = $this->astate->state_version() + 1;
-        return $this->prev_value;
+        return $v;
     }
 }
 
@@ -239,7 +240,12 @@ class TagAssignmentPiece {
      * @param string $tag
      * @return bool */
     function parse_xuser($xuser, AssignmentState $state, $tag) {
-        if ($xuser === "" || ctype_digit(substr($xuser, 0, -1))) {
+        if ($xuser === ""
+            || strspn($xuser, "0123456789") === strlen($xuser) - 1) {
+            if (str_starts_with($xuser, "0")) {
+                $state->error("<0>‘{$tag}’: Invalid private tag");
+                return false;
+            }
             $this->xuser = $xuser;
             return true;
         }
@@ -307,22 +313,40 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         }
     }
 
-    function set_req($req, AssignmentState $state) {
-        $this->pieces = [];
-        $sp = new SearchParser($req["tag"] ?? "");
-        $ok = true;
-        $any = false;
+    /** @param ?string $tag
+     * @return list<string> */
+    static function split_tag_assignments($tag) {
+        $sp = new SearchParser($tag ?? "");
+        $pieces = [];
         while (true) {
             $sp->skip_span(" ,;");
             if ($sp->is_empty()) {
                 break;
             }
-            $any = true;
-            $ok = $this->add_piece($sp->shift_balanced_parens(" ,;"), $req, $state) && $ok;
+            $pieces[] = $sp->shift_balanced_parens(" ,;");
         }
-        if (!$any && $ok) {
+        return $pieces;
+    }
+
+    /** @param string $t
+     * @return ?array{string,string,string,string,string,string} */
+    static function unpack_tag_assignment($t) {
+        if (!preg_match('/\A([-+]?+#?+)(|~~|[^-~+#]*+~)([a-zA-Z@*_:.][-+a-zA-Z0-9@*_:.\/]*+(?:\?|!(?!=))*+)(\z|#|#?+[=<>]=?+|#?+!=|#?+≠|#?+≤|#?+≥)(.*)\z/', $t, $m)) {
+            return null;
+        }
+        return $m;
+    }
+
+    function set_req($req, AssignmentState $state) {
+        $this->pieces = [];
+        $tags = self::split_tag_assignments($req["tag"] ?? "");
+        if (empty($tags)) {
             $state->error("<0>Tag required");
-            $ok = false;
+            return false;
+        }
+        $ok = true;
+        foreach ($tags as $t) {
+            $ok = $this->add_piece($t, $req, $state) && $ok;
         }
         return $ok;
     }
@@ -330,7 +354,7 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
     /** @param CsvRow $req */
     private function add_piece($tag, $req, AssignmentState $state) {
         // parse tag into parts
-        if (!preg_match('/\A([-+]?+#?+)(|~~|[^-~+#]*+~)([a-zA-Z@*_:.][-+a-zA-Z0-9!@*_:.\/]*)(\z|#|#?[=!<>]=?|#?≠|#?≤|#?≥)(.*)\z/', $tag, $m)
+        if (($m = self::unpack_tag_assignment($tag)) === null
             || ($m[4] !== "" && $m[4] !== "#")) {
             $state->error("<0>Invalid tag ‘{$tag}’");
             return false;
@@ -378,7 +402,7 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         // star only allowed on remove
         if (!$piece->allow_wildcard()
             && strpos($piece->xtag, "*") !== false) {
-            $state->error("<0>Invalid tag ‘{$tag}’ (wildcards aren’t allowed here)");
+            $state->error("<0>Wildcard tag ‘{$tag}’ isn’t allowed here");
             return false;
         }
 
@@ -390,7 +414,7 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         // if adding, check tag
         if (!$piece->allow_wildcard()) {
             $tagger = new Tagger($state->user);
-            if (!$tagger->check($piece->xtag)) {
+            if (!$tagger->check_syntax($piece->xuser . $piece->xtag, Tagger::ALLOWCONTACTID)) {
                 $state->error($tagger->error_ftext(true));
                 return false;
             }
@@ -405,11 +429,16 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
     }
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
         if ($this->itype & self::I_CHECK) {
-            $whynot = $state->user->perm_view_tags($prow);
+            $whynot = $state->user->perm_view_paper($prow)
+                ?? $state->user->perm_view_tags($prow);
         } else {
             $whynot = $state->user->perm_edit_some_tag($prow);
         }
-        return $whynot ? new AssignmentError($whynot) : true;
+        if (!$whynot) {
+            return true;
+        }
+        $state->paper_error($whynot);
+        return false;
     }
     /** @return false */
     static function cannot_view_error(PaperInfo $prow, $tag, AssignmentState $state) {
@@ -417,6 +446,23 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
             $state->paper_error("<0>You have a conflict with #{$prow->paperId}");
         } else {
             $state->paper_error("<0>You can’t view that tag for #{$prow->paperId}");
+        }
+        return false;
+    }
+    /** @param string $ltag
+     * @param null|int|float $index
+     * @return ?bool */
+    static function check_unviewable_add(PaperInfo $prow, $ltag, $index, AssignmentState $state) {
+        // If you can't view a tag, you can't set it. Decide that before
+        // consulting any current value
+        if ($state->user->can_view_tag($prow, $ltag)
+            || !($fr = $state->user->perm_edit_tag($prow, $ltag, null, $index ?? 0.0))) {
+            return null;
+        } else if ($fr["otherTwiddleTag"] ?? null) {
+            return true;
+        }
+        foreach ($fr->message_list(null, 2) as $mi) {
+            $state->append_item_here($mi);
         }
         return false;
     }
@@ -476,6 +522,9 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
         // compute final tag and value
         $ntag = $piece->xuser . $piece->xtag;
         $ltag = strtolower($ntag);
+        if (($r = self::check_unviewable_add($prow, $ltag, $nvalue, $state)) !== null) {
+            return $r;
+        }
         if ($piece->xitype === self::I_NEXT
             || $piece->xitype === self::I_NEXTSEQ) {
             $nvalue = $state->callable("NextTagAssignmentState")
@@ -542,21 +591,21 @@ class Tag_AssignmentParser extends UserlessAssignmentParser {
                 $cid = $state->reviewer->contactId;
             }
             if ($xuser) {
-                $xtag = "[^~]*";
+                $xtag = "[^~]*+";
             } else if ($state->user->privChair && $state->reviewer->privChair) {
-                $xtag = "(?:~~|{$cid}~|)[^~]*";
+                $xtag = "(?:~~|{$cid}~|)[^~]*+";
             } else {
-                $xtag = "(?:{$cid}~|)[^~]*";
+                $xtag = "(?:{$cid}~|)[^~]*+";
             }
         } else if (strcasecmp($xtag, "~~any") === 0
                    || strcasecmp($xtag, "~~all") === 0) {
             assert($xuser === "");
-            $xtag = "~~[^~]*";
+            $xtag = "~~[^~]*+";
         } else {
             if (!preg_match('/[*(]/', $xuser . $xtag)) {
                 $search_ltag = strtolower($xuser . $xtag);
             }
-            $xtag = str_replace("\\*", "[^~]*", preg_quote($xtag));
+            $xtag = Text::one_wildcard_regex($xtag, '', '~', '\z');
         }
 
         // if you can't view the tag, you can't clear the tag
@@ -646,6 +695,9 @@ class Tag_Assigner extends Assigner {
     /** @var bool
      * @readonly */
     public $case_only;
+    /** @var bool
+     * @readonly */
+    public $system;
     function __construct(AssignmentItem $item, AssignmentState $state) {
         parent::__construct($item, $state);
         $this->tag = $item["_tag"];
@@ -653,11 +705,12 @@ class Tag_Assigner extends Assigner {
         $this->case_only = $item->existed()
             && !$item->deleted()
             && $item->before->match($item->after);
+        $this->system = !!$item["_system"];
     }
     static function make(AssignmentItem $item, AssignmentState $state) {
         $prow = $state->prow($item["pid"]);
         // check permissions
-        if (!$item["_override"]) {
+        if (!$item["_system"]) {
             $whyNot = $state->user->perm_edit_tag($prow, $item["ltag"],
                 $item->pre("_index"), $item->post("_index"));
             if ($whyNot) {
@@ -668,6 +721,9 @@ class Tag_Assigner extends Assigner {
             }
         }
         return new Tag_Assigner($item, $state);
+    }
+    function is_system() {
+        return $this->system;
     }
     function about() {
         return SearchTerm::ABOUT_TAGS;

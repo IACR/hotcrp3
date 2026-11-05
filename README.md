@@ -150,6 +150,9 @@ Installation
    }
    ```
 
+   If you serve HotCRP on a nonstandard port, you may need `fastcgi_param
+   HTTP_HOST $host:$server_port;` after `include fastcgi_params`.
+
    **Apache with mod_proxy and `php-fpm`**: Add a `ProxyPass`.
 
    ```
@@ -255,7 +258,7 @@ submissions in the database, so the backup file may be quite large.
 Run `php batch/backupdb.php -r BACKUPFILE` at the shell prompt to restore the
 database from a backup stored in `BACKUPFILE`.
 
-Run `lib/runsql.sh` at the shell prompt to get a SQL command prompt for the
+Run `php batch/db.php` at the shell prompt to get a SQL command prompt for the
 conference database.
 
 

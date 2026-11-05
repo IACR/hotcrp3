@@ -350,7 +350,9 @@ abstract class ReviewField implements JsonSerializable {
 
     /** @return ?SearchTerm */
     private function exists_term() {
-        $st = (new PaperSearch($this->conf->root_user(), $this->exists_if ?? ""))->full_term();
+        $s = new PaperSearch($this->conf->root_user(), $this->exists_if ?? "");
+        $s->set_use_viewer_permissions(true);
+        $st = $s->full_term();
         return $st instanceof True_SearchTerm ? null : $st;
     }
 
@@ -421,6 +423,12 @@ abstract class ReviewField implements JsonSerializable {
      * @return string */
     function unparse_span_html($fval) {
         return "";
+    }
+
+    /** @param int|float|string $fval
+     * @return ?string */
+    function value_class($fval) {
+        return null;
     }
 
     /** @param int|float|string $fval
@@ -674,9 +682,8 @@ abstract class Discrete_ReviewField extends ReviewField {
         }
         if ($sclass === "sv") {
             return "sv sv{$x}";
-        } else {
-            return "sv sv-{$sclass}{$x}";
         }
+        return "sv sv-{$sclass}{$x}";
     }
 
     function export_json($style) {
@@ -1494,8 +1501,8 @@ class Text_ReviewField extends ReviewField {
     }
 
     function parse_search(SearchWord $sword, ReviewSearchMatcher $rsm, PaperSearch $srch) {
-        list($word, $quoted) = SearchWord::maybe_unquote($sword->cword);
-        $preg = Text::star_text_pregexes($word, $quoted);
+        list($word, ) = SearchWord::maybe_unquote($sword->cword);
+        $preg = Text::star_text_pregexes($word);
         return new Text_ReviewFieldSearch($this, $rsm->rfop, $preg);
     }
 }

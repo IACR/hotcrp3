@@ -2,7 +2,7 @@
     "openapi": "3.1.0",
     "info": {
         "title": "HotCRP REST API",
-        "version": "2026-08-21",
+        "version": "2026-10-21",
         "summary": "HotCRP conference management software API",
         "description": "[HotCRP](https://github.com/kohler/hotcrp) is conference review software. It\nis open source; a supported version runs on [hotcrp.com](https://hotcrp.com/).\nThis documentation is for the HotCRP REST API.\n\nTo request documentation for an API method, please open a [GitHub\nissue](https://github.com/kohler/hotcrp/issues). We also welcome [pull\nrequests](https://github.com/kohler/hotcrp/pulls).\n\n\n## Overview\n\nAPI calls use paths under `api`. For instance, to call the `paper` endpoint on\na server at `https://example.hotcrp.org/funconf25`, you might use a URL like\n`https://example.hotcrp.org/funconf25/api/paper?p=1`.\n\n`GET` operations retrieve system state and `POST` operations modify system\nstate. Other operations are occasionally used when semantically meaningful—for\nexample, the `/paper` endpoint supports `DELETE`.\n\nParameters may be provided in the query string or (for non-GET requests) the\nrequest body. In most cases, the request body should have Content-Type\n`application/x-www-form-urlencoded` or `multipart/form-data`; exceptions are\ndocumented.\n\nResponses are formatted as JSON. Every response has an `ok` field, which is\n`true` if the request passed initial validation and `false` otherwise. Typically\n`\"ok\": false` indicates a serious error, such as a missing or malformatted\nparameter or a permission problem. `\"ok\": true` does not necessarily mean that\nthe request fully succeeded. Messages about the request, if any, are expressed\nin a [`message_list` field](#overview-message-lists); a successful response may\nstill carry errors and warnings there.\n\nOperations marked with a yellow star (<span class=\"featured-star\nfeatured-star-op\" title=\"Featured\" aria-label=\"Featured\">★</span>) are\n**featured**: the parts of the API most useful to external integrations, which\nwe aim to keep stable and well documented. When several endpoints can accomplish\na task, the featured one is usually the best choice. Other API endpoints may be\nunstable or may be intended to serve HotCRP’s own web client.\n\nExternal applications should [authenticate](#authentication) to HotCRP’s API\nusing bearer tokens obtained using Account settings > Developer.\n\n\n## Parameter types\n\n**Boolean** parameters accept `1` or `true` for true and `0` or `false` or the\nempty string for false; the values `on`/`yes` and `off`/`no` are also\naccepted. For example, `dry_run=1` and `dry_run=true` are equivalent.\n\n**Integer** and **number** parameters are written in decimal, such as `p=10`.\n**String** parameters are sent literally. Enumerated parameters are strings\nrestricted to a fixed set of values.\n\nMore complex inputs use other encodings. Some requests group parameters into\nlogical objects using structured keys, such as `named_search/1/q`; others define\nan object using JSON, supplied either as the request body or as a JSON-valued\nparameter. Use `multipart/form-data` encoding for requests that include uploaded\nfiles. Since servers limit upload size, you may need the [upload\nAPI](#post-upload) to send a large file before processing it with another call.\n\n\n## Common parameters\n\n**`p`**: The `p` parameter defines a submission ID. It can appear either in the\nquery string or immediately following `api/` in the query path:\n`api/comment?p=1` and `api/1/comment` are the same API call. `p` is a positive\ndecimal integer, but some API calls accept `p=new` when defining a new\nsubmission.\n\n**`forceShow`**: HotCRP site administrators and track managers can administer\nsubmissions with which they are conflicted. For instance, when viewing a\nconflicted submission in the web UI, they see the conflicted view, but selecting\n“Override conflict” shows them a full administrator view. Conflict overriding\ncan affect many aspects of site behavior, including search order, visible tags,\nand whether modifications are accepted. The `forceShow` boolean API parameter\ndetermines whether conflicts should be overridden when that is possible. It\ndefaults to `true`, so administrators override their conflicts by default; pass\n`forceShow=false` to respect conflicts instead.\n\n**`actas`**: HotCRP site administrators can assume other users’ identities,\nallowing them to check how the site appears to users with less authority.\nThe `actas` parameter implements this in the API. Site administrators can set\n`actas` to an email address or numeric user ID; the API call will execute with\nthe named user’s privileges.\n\n**`:method:`**: The `:method:` parameter overrides the request’s HTTP method.\nSetting `:method:=GET` on a `POST` request makes HotCRP process it with `GET`\nsemantics. The parameter must appear in the URL query string, not the request\nbody, and `GET` is its only meaningful value. Use this for read requests whose\nparameters are too large to fit within a URL’s length limit: send the parameters\nin a `POST` body while still getting `GET` behavior.\n\n**`q` and search modifiers**: Many endpoints act on a set of submissions chosen\nby a search rather than by a single `p`. These share a family of search\nparameters: `q` (the search expression), `t` (the search scope—the collection of\nsubmissions to search), and the modifiers `qt`, `sort`, `scoresort`, and\n`reviewer`. They mean the same thing everywhere they appear—for example in\n[`/papers`](#get-papers), [`/reviews`](#get-reviews), and\n[`/assign`](#post-assign). See [Search](#tag-search) for the search-string\nsyntax and the full meaning of each parameter.\n\n**`pretty`**: HotCRP APIs generally pretty-print JSON results, unless (as for\n[`/graphdata`](#get-graphdata)) pretty-printing would overly expand the result.\nSet `pretty=0` to turn off pretty printing or `pretty=1` to explicitly request\nit.\n\n\n## Message lists\n\nThe **`message_list`** response field holds an array of diagnostics about a\nrequest, such as why it failed, which field was invalid, or a note about what\nchanged. It can appear on successful or unsuccessful responses and may be empty.\nThe messages appear in display order.\n\nEach entry is a **message object** whose only required field is `status`, an\ninteger that classifies the message:\n\n- `2` or `3`—an **error**; the request was rejected or could not be fully\n  processed. (`3` marks an especially serious error.)\n- `1`—a **warning**.\n- `0`—a **plain** informational message.\n- `-3`—a **success** message.\n- `-5`—an **informational note** about the preceding non-informational message\n  (rendered indented).\n- other **negative** values—notes that are not full errors, but that should be\n  rendered with highlights.\n\nA message object may also have these fields:\n\n- `message`—the human-readable text, as a **formatted-text string**: a leading\n  format sigil gives the encoding, with `<0>` for plain text, `<1>` for\n  Markdown, and `<5>` for HTML. For example, `\"<0>Entry required\"` is the plain\n  text “Entry required”. The field may be absent or empty, since a message\n  object can carry only a field status.\n- `field`—when present, names the request parameter or submission field the\n  message is about (such as `title` or `abstract`), letting a client attach the\n  diagnostic to the corresponding input or highlight that input.\n- `pos1`, `pos2`, `context`—locate the message within the text it concerns. A\n  message carries **either** `pos1` and `pos2` (byte offsets of a span in the\n  UTF-8-encoded value of `field`) **or** a `context` array `[\"…excerpt…\", pos1,\n  pos2]` that bundles an excerpt of that text with the span’s byte offsets into\n  the excerpt. These let the web client underline the exact problem text.\n\nFor example, an unsuccessful submission update might return:\n\n```json\n{\n    \"ok\": false,\n    \"message_list\": [\n        {\n            \"status\": 2,\n            \"field\": \"abstract\",\n            \"message\": \"<0>Entry required to complete submission\"\n        },\n        {\n            \"status\": 1,\n            \"field\": \"other_topics\",\n            \"message\": \"<0>Please avoid superlatives\",\n            \"context\": [\"Extremely interesting ideas\", 0, 9]\n        },\n        {\n            \"status\": 2,\n            \"message\": \"<0>Submission not saved\"\n        }\n    ]\n}\n```\n\n\n## User rights\n\nTwo terms describe administrative authority in this documentation, and they are\nnot interchangeable.\n\nA **site administrator** has site-wide authority over the whole conference.\nChairs and sysadmins are site administrators; they can act on every submission,\nthe review process, and conference settings. Endpoints restricted to this\nauthority are badged **Site admin only**.\n\nA **submission administrator** has administrative authority over a particular\nsubmission or a subset of submissions. For example, a track manager has\nadministrative authority over a track, and each submission can have an\nexplicit manager assigned from the PC. For most submissions, site\nadministrators are also submission administrators (there are exceptions\ninvolving track rights and conflicts), but a submission manager is not\nnecessarily a site administrator. Endpoints that require administrative\nauthority over specific submissions, but do not require broad site\nadministration rights, are badged **Admin only** or **Track manager only**.\n"
     },
@@ -280,7 +280,7 @@
         "/paper": {
             "post": {
                 "summary": "Create or modify submission",
-                "description": "Create or modify a submission specified by `p`, a submission ID.\n\nSetting `p=new` will create a new submission; the response will contain the\nchosen submission ID.\n\nThe modification is specified in JSON in any of these forms:\n\n1. In a JSON-formatted request parameter named `json`.\n2. As a JSON request body (when the request body has content-type\n   `application/json`).\n3. As a ZIP archive (when the request body has content-type\n   `application/zip`). The archive must contain a file named `data.json`; it\n   may contain other files too.\n4. As a previously-uploaded JSON or ZIP file, represented by an [upload\n   token](#post-upload) in the `upload` parameter.\n\nThe JSON object is a submission object whose fields define the modifications\napplied to the submission. The object need not specify all submission fields;\nabsent fields remain unchanged.\n\nThe `p` request parameter is optional. If it is unset, HotCRP uses the `pid`\nfrom the supplied JSON. If both the `p` parameter and the JSON `pid` field\nare present, then they must match.\n\nThe API also supports form upload using the parameter conventions of the HotCRP\nweb application. These conventions are subject to change, and third-party\napplications should prefer JSON.\n\nTo test a modification without saving, supply a `dry_run=1` parameter. This\nwill test the uploaded JSON but make no visible changes to the database.\nSupply `dry_run=if_warning` to save only if the modification produces no\nwarnings, or `dry_run=if_error` to save unless it produces an error (some\nmistakes, such as missing required fields or fields with invalid values, are\nreported as errors but do not ordinarily prevent saving). The response reports\n`dry_run` when a save was withheld.\n\n\n## ZIP and form uploads\n\nA ZIP upload should contain a file named `data.json` (`PREFIX-data.json` is\nalso acceptable). This file’s content is parsed as JSON. Submission fields in\nthe JSON can refer to other files in the ZIP. For instance, this shell session\nuploads a new submission with content `paper.pdf`:\n\n```\n$ cat data.json\n{\n\t\"object\": \"paper\",\n\t\"pid\": \"new\",\n\t\"title\": \"Aught: A Methodology for the Visualization of Scheme\",\n\t\"authors\": [{\"name\": \"Nevaeh Gomez\", \"email\": \"ngomez@example.edu\"}],\n\t\"submission\": {\"content_file\": \"paper.pdf\"},\n\t\"status\": \"submitted\"\n}\n$ zip upload.zip data.json paper.pdf\n$ curl -H \"Authorization: bearer hct_XXX\" --data-binary @upload.zip -H \"Content-Type: application/zip\" SITEURL/api/paper\n```\n\nThis shell session does the same, but using `multipart/form-data`.\n\n```\n$ curl -H \"Authorization: bearer hct_XXX\" -F \"json=<data.json\" -F paper.pdf=@paper.pdf SITEURL/api/paper\n```\n\n\n## Administrator use\n\nSubmission administrators can use this endpoint to set some submission fields,\nsuch as `decision`, that have other endpoints as well.\n\nSite administrators can choose specific IDs for new submissions by setting `p`\n(or JSON `pid`) to the chosen ID. Such a request will either modify an existing\nsubmission or create a new submission with that ID. To avoid overwriting an\nexisting submission, set the submission JSON’s `if_unmodified_since` to\n`0`.\n",
+                "description": "Create or modify a submission specified by `p`, a submission ID.\n\nSetting `p=new` will create a new submission; the response will contain the\nchosen submission ID.\n\nThe modification is specified in JSON in any of these forms:\n\n1. In a JSON-formatted request parameter named `json`.\n2. As a JSON request body (when the request body has content-type\n   `application/json`).\n3. As a ZIP archive (when the request body has content-type\n   `application/zip`). The archive must contain a file named `data.json`; it\n   may contain other files too.\n4. As a previously-uploaded JSON or ZIP file, represented by an [upload\n   token](#post-upload) in the `upload` parameter.\n\nThe JSON object is a submission object whose fields define the modifications\napplied to the submission. The object need not specify all submission fields;\nabsent fields remain unchanged.\n\nThe `p` request parameter is optional. If it is unset, HotCRP uses the `pid`\nfrom the supplied JSON. If both the `p` parameter and the JSON `pid` field\nare present, then they must match.\n\nThe API also supports form upload using the parameter conventions of the HotCRP\nweb application. These conventions are subject to change, and third-party\napplications should prefer JSON.\n\nThe [`GET /paper`](#get-paper) endpoint defaults to truncating word-limited text\nfields at their soft word limits. A field truncated this way (marked `soft`\nunder the uploaded JSON‘s `truncated` key) is not saved, and is reported as an\nerror. Provide `word_limit=hard` to `GET /paper` to avoid this error.\n\nTo test a modification without saving, supply a `dry_run=1` parameter. This\nwill test the uploaded JSON but make no visible changes to the database.\nSupply `dry_run=if_warning` to save only if the modification produces no\nwarnings, or `dry_run=if_error` to save unless it produces an error (some\nmistakes, such as missing required fields or fields with invalid values, are\nreported as errors but do not ordinarily prevent saving). The response reports\n`dry_run` when a save was withheld.\n\n\n## ZIP and form uploads\n\nA ZIP upload should contain a file named `data.json` (`PREFIX-data.json` is\nalso acceptable). This file’s content is parsed as JSON. Submission fields in\nthe JSON can refer to other files in the ZIP. For instance, this shell session\nuploads a new submission with content `paper.pdf`:\n\n```\n$ cat data.json\n{\n\t\"object\": \"paper\",\n\t\"pid\": \"new\",\n\t\"title\": \"Aught: A Methodology for the Visualization of Scheme\",\n\t\"authors\": [{\"name\": \"Nevaeh Gomez\", \"email\": \"ngomez@example.edu\"}],\n\t\"submission\": {\"content_file\": \"paper.pdf\"},\n\t\"status\": \"submitted\"\n}\n$ zip upload.zip data.json paper.pdf\n$ curl -H \"Authorization: bearer hct_XXX\" --data-binary @upload.zip -H \"Content-Type: application/zip\" SITEURL/api/paper\n```\n\nThis shell session does the same, but using `multipart/form-data`.\n\n```\n$ curl -H \"Authorization: bearer hct_XXX\" -F \"json=<data.json\" -F paper.pdf=@paper.pdf SITEURL/api/paper\n```\n\n> [!CAUTION]\n> `multipart/form-data` uploads are processed by PHP, which mangles field names\n> containing spaces, periods, and brackets (for instance, `paper.pdf` becomes\n> `paper_pdf`). The example above works, but an upload may fail or have\n> unexpected results if mangled names collide.\n\n## Administrator use\n\nSubmission administrators can use this endpoint to set some submission fields,\nsuch as `decision`, that have other endpoints as well.\n\nSite administrators can choose specific IDs for new submissions by setting `p`\n(or JSON `pid`) to the chosen ID. Such a request will either modify an existing\nsubmission or create a new submission with that ID. To avoid overwriting an\nexisting submission, set the submission JSON’s `if_unmodified_since` to\n`0`.\n",
                 "operationId": "paper-post",
                 "x-order": 87,
                 "tags": [
@@ -422,12 +422,27 @@
                         "x-order": 11
                     },
                     {
-                        "$ref": "#/components/parameters/p",
+                        "name": "word_limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "soft",
+                                "hard"
+                            ],
+                            "default": "hard"
+                        },
+                        "description": "Which word limit applies to long text fields\nin the returned submission object.",
                         "x-order": 12
                     },
                     {
-                        "$ref": "#/components/parameters/forceShow",
+                        "$ref": "#/components/parameters/p",
                         "x-order": 13
+                    },
+                    {
+                        "$ref": "#/components/parameters/forceShow",
+                        "x-order": 14
                     }
                 ],
                 "requestBody": {
@@ -848,28 +863,36 @@
                         "x-order": 14
                     },
                     {
-                        "name": "notify_authors",
+                        "name": "word_limit",
                         "in": "query",
                         "required": false,
-                        "schema": {},
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "soft",
+                                "hard"
+                            ],
+                            "default": "hard"
+                        },
+                        "description": "Which word limit applies to long text fields\nin the returned submission objects.",
                         "x-order": 15
                     },
                     {
-                        "name": "reason",
+                        "name": "notify_authors",
                         "in": "query",
                         "required": false,
                         "schema": {},
                         "x-order": 16
                     },
                     {
-                        "name": "if_unmodified_since",
+                        "name": "reason",
                         "in": "query",
                         "required": false,
                         "schema": {},
                         "x-order": 17
                     },
                     {
-                        "name": "word_limit",
+                        "name": "if_unmodified_since",
                         "in": "query",
                         "required": false,
                         "schema": {},
@@ -1134,7 +1157,10 @@
                 "security": [
                     {
                         "oauth2": [
-                            "submeta:read"
+                            "submeta:admin",
+                            "document:read",
+                            "review:read",
+                            "comment:read"
                         ]
                     },
                     {
@@ -1209,7 +1235,10 @@
                 "security": [
                     {
                         "oauth2": [
-                            "submeta:write"
+                            "submeta:admin",
+                            "document:read",
+                            "review:read",
+                            "comment:read"
                         ]
                     },
                     {
@@ -1306,7 +1335,10 @@
                 "security": [
                     {
                         "oauth2": [
-                            "submeta:write"
+                            "submeta:admin",
+                            "document:read",
+                            "review:read",
+                            "comment:read"
                         ]
                     },
                     {
@@ -1895,7 +1927,7 @@
         "/upload": {
             "post": {
                 "summary": "Upload file",
-                "description": "Upload large files for later use.\n\nServers limit how much data they will accept in a single request. The upload API\ncan upload large files using multiple requests. When an upload is complete,\nlater API requests can refer to that file using an *upload token*.\n\nThe lifecycle of an upload is as follows.\n\n1. A request with `start=1` begins a new upload. This request should also\n   include a `size` parameter to define the size of the uploaded file, if that\n   is known, and parameters defining its purpose (`dt`, `mimetype`, `filename`,\n   and `temp`).\n2. The response to this request includes the upload token in its `token`\n   field. This is a string like `hcupwhvGDVmHNYyDKdqeqA`. All subsequent\n   requests relating to the upload must include this token as a `token`\n   parameter.\n3. Subsequent requests upload the contents of the file in chunks. The `blob`\n   parameter (which can be an attached file) contains the chunk itself, and the\n   `offset` parameter defines the offset of chunk relative to the file.\n4. A request with `finish=1` completes the upload. The server seals the upload\n   and responds with the file’s content hash. A `finish=1` request will fail\n   unless all expected chunks have been received.\n\n`start=1` and `finish=1` requests can also include a chunk. The `ranges`\nresponse field represents the ranges of bytes received so far.\n\nThe upload API is only available on sites that have enabled the document\nstore.\n",
+                "description": "Upload large files for later use.\n\nServers limit how much data they will accept in a single request. The upload API\ncan upload large files using multiple requests. When an upload is complete,\nlater API requests can refer to that file using an *upload token*.\n\nThe lifecycle of an upload is as follows.\n\n1. A request with `start=1` begins a new upload. This request should also\n   include a `size` parameter to define the size of the uploaded file, if that\n   is known, and parameters defining its purpose (`dt`, `mimetype`, `filename`,\n   and `temp`).\n2. The response to this request includes the upload token in its `token`\n   field. This is a string like `hcupwhvGDVmHNYyDKdqeqA`. All subsequent\n   requests relating to the upload must include this token as a `token`\n   parameter.\n3. Subsequent requests upload the contents of the file in chunks. The `blob`\n   parameter (which can be an attached file) contains the chunk itself, and the\n   `offset` parameter defines the offset of chunk relative to the file. Chunks\n   may arrive in any order. A chunk that overlaps data already received must\n   match it exactly; a mismatch cancels the upload.\n4. A request with `finish=1` completes the upload. The server seals the upload\n   and responds with the file’s content hash. A `finish=1` request will fail\n   unless all expected chunks have been received.\n\n`start=1` and `finish=1` requests can also include a chunk. The `ranges`\nresponse field represents the ranges of bytes received so far.\n\nThe `size` parameter may be supplied on any request before the upload is\nfinished, but once set it cannot change. It must be at least the end of the\ndata already received, and no chunk may extend past it. If `size` is never\nsupplied, a `finish=1` request sets it to the end of the received data.\n\nThe server computes the file’s content hash as chunks arrive, so the\n`finish=1` request typically returns quickly.\n\nRequests for the same upload are serialized: a request that arrives while\nanother request for the same token is in progress waits for it, and fails\nwith status code 409 Conflict if it waits too long. Clients should send at\nmost one request at a time per upload.\n\nThe upload API is only available on sites that have enabled the document\nstore.\n",
                 "operationId": "upload",
                 "x-order": 20,
                 "tags": [
@@ -1908,9 +1940,7 @@
                 ],
                 "security": [
                     {
-                        "oauth2": [
-                            "document:write"
-                        ]
+                        "oauth2": []
                     },
                     {
                         "apiToken": []
@@ -1968,10 +1998,7 @@
                             "type": "integer",
                             "minimum": 0
                         },
-                        "description": "Size of uploaded file in bytes.",
-                        "x-conditions": [
-                            "start"
-                        ],
+                        "description": "Size of uploaded file in bytes",
                         "x-order": 6
                     },
                     {
@@ -2258,11 +2285,21 @@
                         "x-order": 11
                     },
                     {
+                        "name": "default_tracker_visibility",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "boolean"
+                        },
+                        "description": "Get a `default_tracker_visibility` response field (track managers only).",
+                        "x-order": 12
+                    },
+                    {
                         "name": "session",
                         "in": "query",
                         "required": false,
                         "schema": {},
-                        "x-order": 12
+                        "x-order": 13
                     }
                 ],
                 "responses": {
@@ -2291,6 +2328,13 @@
                                                     "$ref": "#/components/schemas/hotlist",
                                                     "x-conditions": [
                                                         "hotlist"
+                                                    ]
+                                                },
+                                                "default_tracker_visibility": {
+                                                    "type": "string",
+                                                    "description": "Default visibility for a meeting tracker over the matching submissions: `all` for the whole PC, `+TAG` or `-TAG` for PC members with or without a tag, or `+none` for administrators only.",
+                                                    "x-conditions": [
+                                                        "default_tracker_visibility"
                                                     ]
                                                 },
                                                 "fields": {
@@ -3071,7 +3115,7 @@
         "/graphdata": {
             "get": {
                 "summary": "Retrieve formula graph data",
-                "description": "Return the data behind a **formula graph** (HotCRP’s “Graphs” feature)—for\ninstance a scatter plot of one formula against another over a set of\nsubmissions. `x` (required) and `y` are formula expressions for the axes, and\n`gtype` selects the graph type (such as `scatter`). The submissions to plot come\nfrom a search: supply `q` (and optionally `t`). Several series can be overlaid by\nnumbering the searches `q1`, `q2`, … with optional labels `s1`, `s2`, ….\n\nThe response carries the graph in HotCRP’s internal plotting format—the axis\ndescriptions (`x`, `y`), a `data_format` code, and the `data` points—intended\nfor the HotCRP graphing UI rather than for general consumption.\n",
+                "description": "Return the data behind a **formula graph** (HotCRP’s “Graphs” feature)—for\ninstance a scatter plot of one formula against another over a set of\nsubmissions. Available to PC members only.\n\n`x` (required) and `y` are formula expressions for the axes. `gtype` selects\nthe graph type: `scatter` (the default), `dot`, `ldot`, `cdf`, `multicdf`,\n`cumfreq`, `bar`, `fraction`, or `box`; several synonyms are also accepted,\nsuch as `ogive` for `cumfreq` and `count` for `bar`. The graph type may instead\nlead the `y` expression, as in `y=cdf` or `y=count ovemer`; if `gtype` is also\ngiven and disagrees, `gtype` wins and the response warns. For `multicdf`,\n`y` is the formula that splits the data into lines, as in\n`y=multicdf reviewer`.\n\nThe submissions to plot come from a search: supply `q` (and optionally `t`).\nSeveral series can be overlaid by numbering the searches `q1`, `q2`, …, with\noptional labels `s1`, `s2`, … and per-series scopes `t1`, `t2`, … (which\noverride `t`).\n\nThe response carries the graph in HotCRP’s internal plotting format—the axis\ndescriptions (`x`, `y`), the resolved graph type `gtype`, a `data_format`\nstring, and the `data` points—intended for the HotCRP graphing UI rather than\nfor general consumption. If the graph cannot be drawn, the response has\n`ok: false` and `message_list` explains why.\n",
                 "operationId": "graphdata",
                 "x-order": 52,
                 "tags": [
@@ -3108,7 +3152,7 @@
                         "schema": {
                             "type": "string"
                         },
-                        "description": "Formula expression for the y-axis.",
+                        "description": "Formula expression for the y-axis, optionally preceded by a graph type.",
                         "x-order": 1
                     },
                     {
@@ -3118,7 +3162,7 @@
                         "schema": {
                             "type": "string"
                         },
-                        "description": "Graph type, such as `scatter`.",
+                        "description": "Graph type, such as `scatter` or `cdf`.",
                         "x-order": 2
                     },
                     {
@@ -3171,7 +3215,7 @@
                                     "type": "object",
                                     "required": [
                                         "ok",
-                                        "type",
+                                        "gtype",
                                         "data_format",
                                         "data",
                                         "x",
@@ -3184,16 +3228,16 @@
                                         "message_list": {
                                             "$ref": "#/components/schemas/message_list"
                                         },
-                                        "type": {
-                                            "type": "object",
-                                            "description": "Description of the graph type."
+                                        "gtype": {
+                                            "type": "string",
+                                            "description": "Graph type as drawn: `scatter`, `dot`, `ldot`, `cdf`, `cumfreq`, `bar`, `fraction`, or `box`. (`multicdf` graphs report `cdf`.)"
                                         },
                                         "data_format": {
-                                            "type": "integer",
-                                            "description": "Code identifying the encoding of `data`."
+                                            "type": "string",
+                                            "description": "Encoding of `data`: `cdf`, `xyis`, or `style_xyi`."
                                         },
                                         "data": {
-                                            "description": "The plotted data points; the exact shape depends on the graph type and `data_format`."
+                                            "description": "The plotted data points; the exact shape depends on `data_format`."
                                         },
                                         "x": {
                                             "type": "object",
@@ -3202,6 +3246,22 @@
                                         "y": {
                                             "type": "object",
                                             "description": "Y-axis description (scale, ticks, labels)."
+                                        },
+                                        "series": {
+                                            "type": "object",
+                                            "description": "Series-axis description, for graphs that split data into series."
+                                        },
+                                        "xorder": {
+                                            "type": "object",
+                                            "description": "Description of the `xorder` ordering."
+                                        },
+                                        "id_format": {
+                                            "type": "string",
+                                            "description": "Whether non-CDF data points identify submissions (`pid`) or reviews (`rid`)."
+                                        },
+                                        "mark_object_type": {
+                                            "type": "string",
+                                            "description": "Kind of object a data point represents for “find on graph”: `paper`, `review`, or `user`."
                                         }
                                     }
                                 }
@@ -3478,7 +3538,7 @@
         "/assigntags": {
             "post": {
                 "summary": "Change tags on several submissions",
-                "description": "Apply tags to many submissions in one request. `tagassignment` is a\nwhitespace/comma-separated stream of submission IDs and tags: each number sets\nthe “current” submission, and each following tag (until the next number) is\nassigned to it. For example, `1 discuss 2 discuss reject` tags submission 1 with\n`discuss` and submission 2 with `discuss` and `reject`.\n\nThe response’s `p` array carries refreshed [tag objects](#tag-tags) for the\naffected submissions. Supplying `search` adds that search’s results to the\nresponse as well.\n",
+                "description": "Apply tags to many submissions in one request. `tagassignment` is a\nwhitespace/comma-separated stream of submission IDs and tags: each number sets\nthe “current” submission, and each following tag (until the next number) is\nassigned to it. For example, `1 discuss 2 discuss reject` tags submission 1 with\n`discuss` and submission 2 with `discuss` and `reject`.\n\nThe response’s `papers` array carries refreshed [tag objects](#tag-tags) for the\naffected submissions. Supplying `search` adds that search’s results to the\nresponse as well.\n",
                 "operationId": "assigntags",
                 "x-order": 98,
                 "tags": [
@@ -3539,7 +3599,7 @@
                                         {
                                             "type": "object",
                                             "properties": {
-                                                "p": {
+                                                "papers": {
                                                     "type": "array",
                                                     "items": {
                                                         "$ref": "#/components/schemas/tag_response"
@@ -3566,7 +3626,7 @@
                                                 }
                                             },
                                             "required": [
-                                                "p"
+                                                "papers"
                                             ]
                                         }
                                     ]
@@ -4069,7 +4129,7 @@
                 "security": [
                     {
                         "oauth2": [
-                            "review:read"
+                            "preference:read"
                         ]
                     },
                     {
@@ -4154,7 +4214,7 @@
             },
             "post": {
                 "summary": "Set a review preference",
-                "description": "Set a PC member’s review preference for submission `p`, then return it as\n[`revpref` GET](#get-revpref) does. By default the change applies to the caller;\nadministrators may set another PC member’s preference with `u`.\n\nSupply the new preference in `pref`, in text form: a signed integer, optionally\nfollowed by an expertise letter (`X`, `Y`, or `Z`)—for example `10`, `-5`, or\n`20X`. An empty value clears the preference.\n",
+                "description": "Set a PC member’s review preference for submission `p`, then return it as\n[`revpref` GET](#get-revpref) does. By default the change applies to the caller;\nadministrators may set another PC member’s preference with `u`, which\nrequires `preference:admin` scope.\n\nSupply the new preference in `pref`, in text form: a signed integer, optionally\nfollowed by an expertise letter (`X`, `Y`, or `Z`)—for example `10`, `-5`, or\n`20X`. An empty value clears the preference.\n",
                 "operationId": "revpref-post",
                 "x-order": 42,
                 "tags": [
@@ -4168,7 +4228,7 @@
                 "security": [
                     {
                         "oauth2": [
-                            "review:write"
+                            "preference:write"
                         ]
                     },
                     {
@@ -6065,7 +6125,7 @@
                         "schema": {
                             "type": "boolean"
                         },
-                        "description": "Administrators only: bypass deadline and other soft checks.",
+                        "description": "Submission administrators only: edit reviews whose editing deadline has passed.",
                         "x-order": 8
                     },
                     {
@@ -6509,7 +6569,7 @@
                         "schema": {
                             "type": "boolean"
                         },
-                        "description": "Administrators only: bypass deadline and other soft checks.",
+                        "description": "Submission administrators only: edit reviews whose editing deadline has passed.",
                         "x-order": 5
                     },
                     {
@@ -6785,7 +6845,8 @@
                 "security": [
                     {
                         "oauth2": [
-                            "review:read"
+                            "review:read",
+                            "reaction:read"
                         ]
                     },
                     {
@@ -6875,7 +6936,7 @@
             },
             "post": {
                 "summary": "Set a review rating",
-                "description": "Record the caller’s rating of a review in `user_rating`, then return the updated\nratings as for [`reviewrating` GET](#get-reviewrating).\n\nA rating is a space-separated list of flags, the string `none` to clear the\ncaller’s rating, or the equivalent integer bitmask. The flags are `good`,\n`needswork`, `short`, `vague`, `narrow`, `disrespectful`, and `wrong`.\nAdministrators may pass `clearall` to remove *every* rating on the review.\n",
+                "description": "Record the caller’s rating of a review in `user_rating`, then return the updated\nratings as for [`reviewrating` GET](#get-reviewrating).\n\nA rating is a space-separated list of flags, the string `none` to clear the\ncaller’s rating, or the equivalent integer bitmask. The flags are `good`,\n`needswork`, `short`, `vague`, `narrow`, `disrespectful`, and `wrong`.\nAdministrators may pass `clearall` to remove *every* rating on the review;\nthis also requires the `reaction:admin` scope.\n",
                 "operationId": "reviewrating-post",
                 "x-order": 33,
                 "tags": [
@@ -6884,7 +6945,8 @@
                 "security": [
                     {
                         "oauth2": [
-                            "review:write"
+                            "review:read",
+                            "reaction:write"
                         ]
                     },
                     {
@@ -7424,7 +7486,7 @@
         "/reviewtoken": {
             "get": {
                 "summary": "List active review tokens",
-                "description": "Return the review tokens currently active in the caller’s session, in the\n`token` array (encoded form). Review tokens grant the ability to edit specific\nanonymous reviews.\n",
+                "description": "Return the review tokens currently active in the caller’s session, in the\n`token` array (encoded form). Review tokens grant the ability to edit specific\nanonymous reviews.\n\nBearer tokens can’t use this endpoint, since review tokens are stored in\nthe session; it requires a session cookie.\n",
                 "operationId": "reviewtoken",
                 "x-order": 38,
                 "tags": [
@@ -7432,9 +7494,7 @@
                 ],
                 "security": [
                     {
-                        "oauth2": [
-                            "review:read"
-                        ]
+                        "oauth2": []
                     },
                     {
                         "apiToken": []
@@ -7487,7 +7547,7 @@
             },
             "post": {
                 "summary": "Activate or clear review tokens",
-                "description": "Set the review tokens active in the caller’s session and return the resulting\nlist as for [`reviewtoken` GET](#get-reviewtoken). Pass `token` as one or more\ntokens (whitespace/comma separated, or a JSON array of strings); each valid\ntoken is activated. Submitting with no usable tokens clears the active tokens.\n\nFor security, the session is locked out after five failed token attempts until\nthe user signs out. Per-token results are reported in `message_list`.\n",
+                "description": "Set the review tokens active in the caller’s session and return the resulting\nlist as for [`reviewtoken` GET](#get-reviewtoken). Pass `token` as one or more\ntokens (whitespace/comma separated, or a JSON array of strings); each valid\ntoken is activated. Submitting with no usable tokens clears the active tokens.\n\nFor security, the session is locked out after five failed token attempts until\nthe user signs out. Per-token results are reported in `message_list`.\n\nBearer tokens can’t use this endpoint, since review tokens are stored in\nthe session; it requires a session cookie.\n",
                 "operationId": "reviewtoken-post",
                 "x-order": 39,
                 "tags": [
@@ -7495,9 +7555,7 @@
                 ],
                 "security": [
                     {
-                        "oauth2": [
-                            "review:write"
-                        ]
+                        "oauth2": []
                     },
                     {
                         "apiToken": []
@@ -7680,7 +7738,7 @@
             },
             "post": {
                 "summary": "Create or modify comment",
-                "description": "Create or modify a comment on submission `p`. Select the comment with `c` (see\n[Identifying a comment](#tag-comments)): a numeric comment ID modifies or\ndeletes an existing comment, `new` creates an ordinary comment, and\n`response`/`R2response` creates or updates a response.\n\nThe modification is specified in JSON in any of these forms:\n\n* In a `json` request parameter;\n* As an `application/json` request body;\n* As an `application/zip` archive whose `data.json` (or `*-data.json`) member is\n  the object—other members may be referenced as attachments;\n* Or via an [upload token](#post-upload) in the `upload` request parameter,\n  pointing at a previously-uploaded JSON or ZIP file.\n\nThe object’s `cid` (or `response`) selects the target comment; its `text`,\n`visibility`, `topic`, `tags`, `blind`, `draft`, and `delete` fields carry the\nupdate. (A one-element array holding a single object is also accepted.) The\n`dry_run` and `if_unmodified_since` controls are still read from the query\nstring.\n\nAttachments are given as a `docs` array, each entry either retaining an existing\nattachment by `docid` or uploading a new one: inline via `content` (raw text) or\n`content_base64`, or by `content_file`, which names a file in the ZIP archive or\nan uploaded file field in a `json` form request. An omitted `docs` key keeps the\ncomment’s current attachments.\n\nThe API also supports form upload using the parameter conventions of the HotCRP\nweb application (such as a `text` parameter for the comment body). These\nconventions are subject to change, and third-party applications should prefer\nJSON.\n\nSaving with `text` empty and no attachments is refused for a new comment, but\ndeletes an existing one (it is treated as `delete=1`).\n\nTo test a modification without saving, supply a `dry_run=1` parameter. This will\ntest the uploaded JSON but make no visible changes to the database. Supply\n`dry_run=if_warning` to save only if the modification produces no warnings, or\n`dry_run=if_error` to save unless it produces an error; the response reports\n`dry_run` when a save was withheld.\n\n\n## Concurrency\n\nAn edit conflict returns `\"ok\": false`, `\"valid\": false`, and `\"conflict\": true`,\nwith the `comment` field holding the server’s current version so the client can\nreconcile. Conflicts arise two ways:\n\n* Editing a response can collide with a concurrent edit automatically.\n* Any comment edit can be guarded explicitly with `if_unmodified_since`: pass the\n  comment’s last-known `modified_at`, and the edit is rejected—with a message\n  keyed to `if_unmodified_since`—if the comment has changed since. Pass\n  `if_unmodified_since=0` to require that the comment not already exist.\n\n## Attachments\n\nComment attachments may be uploaded as files (requiring a request body in\n`multipart/form-data` encoding), or using the [upload API](#post-upload).\nTo upload a single new attachment:\n\n* Set the `attachment:1` body parameter to `new`\n* Either:\n\t* Set `attachment:1:file` as a uploaded file containing the relevant data\n\t* Or use the [upload API](#post-upload) to upload the file,\n\t  and supply the upload token in the `attachment:1:upload` body parameter\n\nTo upload multiple attachments, number them sequentially (`attachment:2`,\n`attachment:3`, and so forth). To delete an existing attachment, supply its\n`docid` as an `attachment:N` parameter, and set `attachment:N:delete` to 1.\n",
+                "description": "Create or modify a comment on submission `p`. Select the comment with `c` (see\n[Identifying a comment](#tag-comments)): a numeric comment ID modifies or\ndeletes an existing comment, `new` creates an ordinary comment, and\n`response`/`R2response` creates or updates a response.\n\nThe modification is specified in JSON in any of these forms:\n\n* In a `json` request parameter;\n* As an `application/json` request body;\n* As an `application/zip` archive whose `data.json` (or `*-data.json`) member is\n  the object—other members may be referenced as attachments;\n* Or via an [upload token](#post-upload) in the `upload` request parameter,\n  pointing at a previously-uploaded JSON or ZIP file.\n\nThe object’s `cid` (or `response`) selects the target comment; its `text`,\n`visibility`, `topic`, `tags`, `blind`, `draft`, and `delete` fields carry the\nupdate. (A one-element array holding a single object is also accepted.) The\n`dry_run` and `if_unmodified_since` controls are still read from the query\nstring.\n\nAttachments are given as a `docs` array, each entry either retaining an existing\nattachment by `docid` or uploading a new one: inline via `content` (raw text) or\n`content_base64`, or by `content_file`, which names a file in the ZIP archive or\nan uploaded file field in a `json` form request. An omitted `docs` key keeps the\ncomment’s current attachments, and an omitted `text` key keeps its current text.\n\nChanging a comment’s attachments requires `document:write` scope as well as\n`comment:write`. This covers adding, replacing, or removing an attachment, and\ndeleting a comment that has attachments. Edits that leave the attachments\nunchanged need only `comment:write`.\n\nThe API also supports form upload using the parameter conventions of the HotCRP\nweb application (such as a `text` parameter for the comment body). These\nconventions are subject to change, and third-party applications should prefer\nJSON.\n\nSaving with `text` empty and no attachments is refused for a new comment, but\ndeletes an existing one (it is treated as `delete=1`).\n\nThe [`GET /comment`](#get-comment) endpoint defaults to truncating comments\nat their soft word limits. A comment truncated this way (marked `soft`\nunder the uploaded JSON‘s `truncated` key) is not saved, and is reported as an\nerror. Provide `word_limit=hard` to `GET /comment` to avoid this error.\n\nTo test a modification without saving, supply a `dry_run=1` parameter. This will\ntest the uploaded JSON but make no visible changes to the database. Supply\n`dry_run=if_warning` to save only if the modification produces no warnings, or\n`dry_run=if_error` to save unless it produces an error; the response reports\n`dry_run` when a save was withheld.\n\n\n## Concurrency\n\nAn edit conflict returns `\"ok\": false`, `\"valid\": false`, and `\"conflict\": true`,\nwith the `comment` field holding the server’s current version so the client can\nreconcile. Conflicts arise two ways:\n\n* Editing a response can collide with a concurrent edit automatically.\n* Any comment edit can be guarded explicitly with `if_unmodified_since`: pass the\n  comment’s last-known `modified_at`, and the edit is rejected—with a message\n  keyed to `if_unmodified_since`—if the comment has changed since. Pass\n  `if_unmodified_since=0` to require that the comment not already exist.\n\n## Attachments\n\nComment attachments may be uploaded as files (requiring a request body in\n`multipart/form-data` encoding), or using the [upload API](#post-upload).\nTo upload a single new attachment:\n\n* Set the `attachment:1` body parameter to `new`\n* Either:\n\t* Set `attachment:1:file` as a uploaded file containing the relevant data\n\t* Or use the [upload API](#post-upload) to upload the file,\n\t  and supply the upload token in the `attachment:1:upload` body parameter\n\nTo upload multiple attachments, number them sequentially (`attachment:2`,\n`attachment:3`, and so forth). To delete an existing attachment, supply its\n`docid` as an `attachment:N` parameter, and set `attachment:N:delete` to 1.\nChanging attachments requires `document:write` scope (see\n[JSON upload](#tag-comments)).\n",
                 "operationId": "comment-post",
                 "x-order": 10,
                 "tags": [
@@ -8518,9 +8576,7 @@
                 ],
                 "security": [
                     {
-                        "oauth2": [
-                            "other:read"
-                        ]
+                        "oauth2": []
                     },
                     {
                         "apiToken": []
@@ -8719,7 +8775,7 @@
         "/trackerconfig": {
             "post": {
                 "summary": "Configure meeting trackers",
-                "description": "Create, modify, or stop trackers and set their display options (name, logo,\nvisibility, conflict hiding). Restricted to track managers. On success the\nresponse reports the updated tracker status (above), plus\n`new_trackerid` for any tracker newly created.\n\nTrackers are configured as a numbered list of structured parameters\n`tr/<n>/<field>`, one group per tracker. The fields are:\n\n* `id`—the tracker’s ID, or `new` to create one.\n* `name`, `logo`—display label and logo.\n* `visibility`, `visibility_type`—who may see the tracker (the whole PC, or a\n  specific PC tag).\n* `hideconflicts`—whether to hide conflicted submissions (paired with a\n  `has_tr/<n>/hideconflicts` presence marker).\n* `listinfo`—the encoded submission list the tracker walks.\n* `p`—the submission to position at.\n* `stop`—stop this tracker.\n\nSet `stopall` to stop every tracker at once. (A legacy flat parameter form,\n`tr<n>-<field>`, is also accepted and translated.)\n",
+                "description": "Create, modify, or stop trackers and set their display options (name, logo,\nvisibility, conflict hiding). Restricted to track managers. On success the\nresponse reports the updated tracker status (above), plus\n`new_trackerid` for any tracker newly created.\n\nTrackers are configured as a numbered list of structured parameters\n`tr/<n>/<field>`, one group per tracker. The fields are:\n\n* `id`—the tracker’s ID, or `new` to create one.\n* `name`, `logo`—display label and logo.\n* `visibility`, `visibility_type`—who may see the tracker. `visibility_type` is\n  `all` (the whole PC), `+` or `-` (PC members with or without the tag given\n  in `visibility`), or `none` (administrators only). Alternatively, give\n  `visibility` alone as `all`, `+TAG`, `-TAG`, or `none`. If both are empty\n  or absent, a new tracker gets the default visibility for its submissions’\n  tracks, and an existing tracker keeps its visibility.\n* `hideconflicts`—whether to hide conflicted submissions (paired with a\n  `has_tr/<n>/hideconflicts` presence marker).\n* `listinfo`—the encoded submission list the tracker walks.\n* `p`—the submission to position at.\n* `stop`—stop this tracker.\n\nSet `stopall` to stop every tracker at once.\n",
                 "operationId": "trackerconfig",
                 "x-order": 109,
                 "tags": [
@@ -9648,7 +9704,7 @@
         "/job": {
             "get": {
                 "summary": "Monitor job",
-                "description": "The `/job` endpoint monitors the progress of long-running jobs and can return\ntheir output upon completion. Jobs represent HotCRP tasks that take too long for\na single API request; requests such as `/autoassign` may start a job and return\nits unique identifier.\n\nThe `status` response field is `\"wait\"` before the job starts, `\"run\"` while\nit is running, `\"done\"` after completion, and `\"failed\"` when it is known to\nhave failed. The `update_at` field gives the UNIX timestamp of the most\nrecent job update; if it’s far in the past but `status` is still `\"run\"`, the\njob has likely crashed. Specific jobs may return other response fields, such\nas a `progress` string that describes the current phase of job execution.\n\nSome jobs produce output when they complete. When `status` is `\"done\"` and\noutput is present, the response’s `output_mimetype` and `output_size` fields\ndescribe this output. To fetch the output itself, supply an `output` parameter.\nIf `output=string`, the `output` field contains the output as a string. If\n`output=json`, the `output` field contains the output as parsed JSON. If\n`output=body`, then the output is returned as the response body with the proper\nContent-Type header. `/job?output=body` understands range requests.\n\nA `/job` response uses HTTP response status code 202 Accepted for in-progress\njobs, and 200 OK for completed or failed jobs. However, if a job’s output is\nincompatible with the requested format (`output=string` but the output is not\nUTF-8 encoded, `output=json` but the output is not JSON, or `output=body` but\nthe job failed), then the response uses status code 409 Conflict.\n",
+                "description": "The `/job` endpoint monitors the progress of long-running jobs and can return\ntheir output upon completion. Jobs represent HotCRP tasks that take too long for\na single API request; requests such as `/autoassign` may start a job and return\nits unique identifier.\n\nThe `status` response field is `\"wait\"` before the job starts, `\"run\"` while\nit is running, `\"done\"` after completion, and `\"failed\"` when it is known to\nhave failed. The `update_at` field gives the UNIX timestamp of the most\nrecent job update; if it’s far in the past but `status` is still `\"run\"`, the\njob has likely crashed. Specific jobs may return other response fields, such\nas a `progress` string that describes the current phase of job execution.\n\nSome jobs produce output when they complete. When `status` is `\"done\"` and\noutput is present, the response’s `output_mimetype` and `output_size` fields\ndescribe this output. To fetch the output itself, supply an `output` parameter.\nIf `output=string`, the `output` field contains the output as a string. If\n`output=json`, the `output` field contains the output as parsed JSON. If\n`output=body`, then the output is returned as the response body with the proper\nContent-Type header. `/job?output=body` understands range requests.\n\nA `/job` response uses HTTP response status code 202 Accepted for in-progress\njobs, and 200 OK for completed or failed jobs. However, if a job’s output is\nincompatible with the requested format (`output=string` but the output is not\nUTF-8 encoded, `output=json` but the output is not JSON, or `output=body` but\nthe job failed), then the response uses status code 409 Conflict.\n\nThis endpoint requires no authentication: the job ID itself grants access to\nthe job’s status and output.\n",
                 "operationId": "job",
                 "x-order": 105,
                 "tags": [
@@ -9661,9 +9717,7 @@
                 ],
                 "security": [
                     {
-                        "oauth2": [
-                            "other:read"
-                        ]
+                        "oauth2": []
                     },
                     {
                         "apiToken": []
@@ -10280,7 +10334,7 @@
                 "security": [
                     {
                         "oauth2": [
-                            "settings:read"
+                            "other:read"
                         ]
                     },
                     {
@@ -10784,7 +10838,7 @@
         "/whoami": {
             "get": {
                 "summary": "Identify the current user",
-                "description": "Report which user the request authenticates as. This is the simplest way to\nconfirm that a set of credentials (a session cookie or an `Authorization:\nbearer` token) is valid and to learn whom it identifies.\n\nThe response includes the user’s `email`, `given_name`, `family_name`, and\n`affiliation`. When the user holds any conference roles, a `roles` array lists\nthem, drawn from:\n\n* `chair`—a conference chair\n* `pc`—a program committee member; this is also present for chairs\n* `sysadmin`—a system administrator\n* `manager`—an administrator of some submissions who is not a full chair\n* `author`—an author or contact of at least one submission\n* `reviewer`—assigned at least one review\n",
+                "description": "Report which user the request authenticates as. This is the simplest way to\nconfirm that a set of credentials (a session cookie or an `Authorization:\nbearer` token) is valid and to learn whom it identifies.\n\nThe response includes the user’s `email`, `given_name`, `family_name`, and\n`affiliation`. When the user holds any conference roles, a `roles` array lists\nthem, drawn from:\n\n* `chair`—a conference chair\n* `pc`—a program committee member; this is also present for chairs\n* `unlistedpc`—a program committee member who is left off PC lists, such as a\n  bot account; such a user has PC permissions but not `pc`\n* `sysadmin`—a system administrator\n* `manager`—an administrator of some submissions who is not a full chair\n* `author`—an author or contact of at least one submission\n* `reviewer`—assigned at least one review\n",
                 "operationId": "whoami",
                 "x-order": 54,
                 "tags": [
@@ -10930,7 +10984,7 @@
             },
             "post": {
                 "summary": "Update session UI preferences",
-                "description": "Update a small set of per-user, per-session UI preferences and return the same\nsession information as [`GET /session`](#get-session). This endpoint\nbacks the HotCRP Javascript client’s “remember my view” behavior; the\npreferences it manages are cosmetic (folding state, which columns are shown in\npaper and user lists, score-sort order) and have no effect on submissions,\nreviews, or permissions. Unlike `GET /session`, it requires an authenticated,\nsame-origin request with a valid `post` CSRF token.\n\nThe preferences to change are encoded in the `v` parameter as a\nwhitespace-separated list of assignments. Each assignment has the form\n`name[.key][=value]`:\n\n* `name` selects the preference. Recognized names include `foldpaper`,\n  `foldpscollab`, `foldhomeactivity` (folding toggles), `pldisplay`,\n  `pfdisplay`, `uldisplay` (which columns/fields are shown in the paper list,\n  paper form, and user list), and `scoresort` / `ulscoresort` (score sort\n  order).\n* `.key` is an optional sub-selector. For the `*display` preferences it names\n  the column or field being shown or hidden; for `foldpaper` it names an\n  individual foldable region.\n* `=value` is an optional integer. `0` (or an omitted value) means “unfold” or\n  “show”; a nonzero value means “fold” or “hide”.\n\nFor example, `v=pldisplay.authors=0 foldhomeactivity=1` reveals the authors\ncolumn in the paper list and folds the home-page activity region.\n\nParsing is best-effort: every recognized assignment is applied, and any\ncomponent that is not understood is silently ignored. A successful request\nreturns `ok` of `true` whether or not every component was recognized.\n",
+                "description": "Update a small set of per-user, per-session UI preferences and return the same\nsession information as [`GET /session`](#get-session). This endpoint\nbacks the HotCRP Javascript client’s “remember my view” behavior; the\npreferences it manages are cosmetic (which columns are shown in paper and user\nlists, score-sort order) and have no effect on submissions, reviews, or\npermissions. It does not require a signed-in user, but unlike `GET /session`\nit requires a valid `post` CSRF token.\n\nThe preferences to change are encoded in the `v` parameter as a\nwhitespace-separated list of assignments:\n\n* `pldisplay.COLUMN[=value]`, `pfdisplay.COLUMN[=value]`, and\n  `uldisplay.COLUMN[=value]` show or hide a column in the search paper list,\n  the review preferences paper list, and the user list, respectively. A\n  `value` of `0` (or an omitted value) shows the column; a nonzero integer\n  hides it.\n* `scoresort=SORT` sets the score sort order for the search paper list. `SORT` is\n  `counts`, `average`, `median`, `variance`, `maxmin`, or `my`.\n* `ulscoresort=SORT` (or `uldisplay.scoresort=SORT`) sets the score sort\n  order for the user list. `SORT` is `variance` or `maxmin`; any other value\n  restores the default, `average`.\n\nFor example, `v=pldisplay.authors=0 pldisplay.abstract=1` shows the authors\ncolumn in the paper list and hides the abstract column.\n\nParsing is best-effort: every recognized assignment is applied, and any\ncomponent that is not understood is silently ignored. A successful request\nreturns `ok` of `true` whether or not every component was recognized.\n",
                 "operationId": "session-post",
                 "x-order": 56,
                 "tags": [
@@ -10947,7 +11001,8 @@
                     },
                     {
                         "session": []
-                    }
+                    },
+                    {}
                 ],
                 "parameters": [
                     {
@@ -11004,7 +11059,7 @@
         "/reauth": {
             "post": {
                 "summary": "Reconfirm the signed-in user’s identity",
-                "description": "Reconfirm the credentials of the already-signed-in user. HotCRP requires\nreauthentication before especially sensitive actions (for example, changing\naccount email or managing security settings); a successful call records a\nrecent-authentication marker in the session so those actions can proceed.\n\nSupply the user’s `password`. On success the response has `ok` of `true`; if the\npassword is wrong, the response is an error (`ok` is `false`) whose\n`message_list` describes the problem.\n\nThe `reason` parameter is a short tag describing why reauthentication is being\nrequested (HotCRP uses values such as `manageemail`); it can influence how long\nthe resulting confirmation remains valid. `confirm=1` requests an explicit\nsuccess message in `message_list` on success. The `email` and `totpcode`\nparameters support alternate verification flows (such as time-based one-time\npasswords) where those are configured.\n",
+                "description": "Reconfirm the credentials of the already-signed-in user. HotCRP requires\nreauthentication before especially sensitive actions (for example, changing\naccount email or managing security settings); a successful call records a\nrecent-authentication marker in the session so those actions can proceed.\n\nSupply the user’s `password`. On success the response has `ok` of `true`; if the\npassword is wrong, the response is an error (`ok` is `false`) whose\n`message_list` describes the problem.\n\n`confirm=1` requests an explicit success message in `message_list` on success.\nThe `email` and `totpcode` parameters support alternate verification flows (such\nas time-based one-time passwords) where those are configured.\n",
                 "operationId": "reauth",
                 "x-order": 57,
                 "tags": [
@@ -11040,24 +11095,19 @@
                             "schema": {
                                 "type": "object",
                                 "properties": {
-                                    "reason": {
-                                        "type": "string",
-                                        "description": "Short tag describing why reauthentication is requested",
-                                        "x-order": 1
-                                    },
                                     "email": {
                                         "$ref": "#/components/schemas/email",
-                                        "x-order": 2
+                                        "x-order": 1
                                     },
                                     "password": {
                                         "type": "string",
                                         "description": "Account password",
-                                        "x-order": 3
+                                        "x-order": 2
                                     },
                                     "totpcode": {
                                         "type": "string",
                                         "description": "Time-based one-time password code, if applicable",
-                                        "x-order": 4
+                                        "x-order": 3
                                     }
                                 }
                             }
@@ -11945,12 +11995,13 @@
                 "enum": [
                     "chair",
                     "pc",
+                    "unlistedpc",
                     "sysadmin",
                     "manager",
                     "author",
                     "reviewer"
                 ],
-                "description": "A user’s standing in the conference. `chair` is a conference chair; `pc` is a program committee member (also present for chairs); `sysadmin` is a system administrator; `manager` administers some submissions without being a full chair; `author` is an author or contact of some submission; `reviewer` has been assigned at least one review."
+                "description": "A user’s standing in the conference. `chair` is a conference chair; `pc` is a program committee member (also present for chairs); `unlistedpc` is a program committee member left off PC lists, such as a bot; `sysadmin` is a system administrator; `manager` administers some submissions without being a full chair; `author` is an author or contact of some submission; `reviewer` has been assigned at least one review."
             },
             "potential_conflict": {
                 "type": "object",
@@ -13328,15 +13379,21 @@
                             "comment:read": "Read comments and responses.",
                             "comment:write": "Read and write comments and responses.",
                             "comment:admin": "Read and write comments with administrator privilege, including comments the caller does not own.",
+                            "preference:read": "Read review preferences.",
+                            "preference:write": "Read and set review preferences.",
+                            "preference:admin": "Read and set review preferences with administrator privilege, including other PC members’ preferences.",
+                            "reaction:read": "Read review ratings and other reactions.",
+                            "reaction:write": "Read and record the caller’s own review ratings and other reactions.",
+                            "reaction:admin": "Read and change review ratings and other reactions with administrator privilege, including clearing all ratings on a review.",
                             "other:read": "Read everything not covered by another family: users, search metadata, the meeting tracker, notifications, and session state.",
                             "other:write": "Read and modify everything not covered by another family.",
                             "other:admin": "Read and modify everything not covered by another family, with administrator privilege — including modifying accounts other than the caller’s.",
                             "settings:read": "Read site settings.",
                             "settings:write": "Read site settings. Modifying settings requires `settings:admin`, since any settings change is an administrative act.",
                             "settings:admin": "Read and modify site settings.",
-                            "paper:read": "Read submissions, documents, reviews, tags, and comments. Equivalent to `submission:read review:read tag:read comment:read`.",
-                            "paper:write": "Read and write submissions, documents, reviews, tags, and comments.",
-                            "paper:admin": "Read and write submissions, documents, reviews, tags, and comments with administrator privilege.",
+                            "paper:read": "Read submissions, documents, reviews, tags, comments, preferences, and reactions. Equivalent to `submission:read review:read tag:read comment:read preference:read reaction:read`.",
+                            "paper:write": "Read and write submissions, documents, reviews, tags, comments, preferences, and reactions.",
+                            "paper:admin": "Read and write submissions, documents, reviews, tags, comments, preferences, and reactions with administrator privilege.",
                             "read": "Read access across every family, including settings.",
                             "write": "Read and write access across every family. Does not grant administrator privilege.",
                             "admin": "Full access, including administrator privilege. Equivalent to `all`.",

@@ -19,12 +19,13 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Start mysql
       run: |
-        (echo '[mysqld]'; echo 'default-authentication-plugin=mysql_native_password') | sudo sh -c "cat > /etc/mysql/conf.d/nativepassword.cnf"
         sudo systemctl start mysql
+        sudo systemctl status mysql.service
+        sudo journalctl -xeu mysql.service
         mysql -V
 
     - name: Prepare the application
@@ -39,6 +40,7 @@ jobs:
       with:
         php-version: ${{ matrix.php-versions }}
         extensions: mbstring, intl, mysqlnd
+        ini-values: opcache.enable_cli=1
 
     - name: Install poppler
       run: |
@@ -71,7 +73,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Prepare the application
       run: |
@@ -91,6 +93,7 @@ jobs:
       with:
         php-version: ${{ matrix.php-versions }}
         extensions: mbstring, intl, mysqlnd
+        ini-values: opcache.enable_cli=1
 
     - name: Install poppler
       run: |

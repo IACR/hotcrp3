@@ -49,11 +49,20 @@ class Revpref_SearchTerm extends SearchTerm {
     private $user;
     /** @var RevprefSearchMatcher */
     private $rpsm;
+    /** @var 0|1|2|3|4|5 */
+    private $view_bound;
 
     function __construct(Contact $user, RevprefSearchMatcher $rpsm) {
         parent::__construct("revpref");
         $this->user = $user;
         $this->rpsm = $rpsm;
+        if ($rpsm->single_cid() === $user->contactXid) {
+            $this->view_bound = Contact::VIEWPREF_OWN;
+        } else if ($rpsm->aggregate) {
+            $this->view_bound = Contact::VIEWPREF_AGG;
+        } else {
+            $this->view_bound = Contact::VIEWPREF_ALL;
+        }
     }
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
         if (!$srch->user->isPC) { // PC only
@@ -64,10 +73,10 @@ class Revpref_SearchTerm extends SearchTerm {
         $utype = -1;
         if (preg_match('/\A((?:(?!≠|≤|≥)[^:=!<>])+)(.*)\z/s', $word, $m)
             && !ctype_digit($m[1])) {
-            $contacts = $srch->matching_special_uids($m[1], $sword->quoted, true);
-            if ($contacts === null) {
-                $contacts = $srch->matching_uids($m[1], $sword->quoted, true);
-            } else if (in_array(trim(strtolower($m[1])), ["pc", "all", "any", "*"], true)) {
+            $usword = SearchWord::make_maybe_quoted($m[1]);
+            $usrch = $srch->user_search(ContactSearch::F_USER | ContactSearch::F_PC, $usword);
+            if ($usrch->is_roles()
+                && in_array(strtolower($usrch->text), ["pc", "all", "any", "*"], true)) {
                 // searching safe aggregate group of users
                 $utype = 1;
             }
@@ -75,16 +84,17 @@ class Revpref_SearchTerm extends SearchTerm {
             if ($word === "") {
                 $word = "any";
             }
+            $contacts = $usrch->user_ids();
         } else if ($srch->user->can_view_pc()) {
-            $contacts = array_keys($srch->conf->pc_members());
             $utype = 0;
+            $contacts = array_keys($srch->conf->pc_members());
         } else {
             $contacts = [$srch->user->contactXid];
         }
 
         // how many users must match?
         $ucount = "";
-        if (preg_match('/\A:?\s*((?:[=!<>]=?|≠|≤|≥|)\s*\d+|any|none)\s*((?:[:=!<>]|≠|≤|≥).*)\z/si', $word, $m)) {
+        if (preg_match('/\A:?\s*+((?:[=!<>]=?|≠|≤|≥|)\s*+\d++|any|none)\s*+((?:[:=!<>]|≠|≤|≥).*)\z/si', $word, $m)) {
             if (strcasecmp($m[1], "any") == 0) {
                 $ucount = ">0";
             } else if (strcasecmp($m[1], "none") == 0) {
@@ -107,7 +117,7 @@ class Revpref_SearchTerm extends SearchTerm {
         $value = new RevprefSearchMatcher($ucount, $contacts, $utype >= 0);
         if (strcasecmp($word, "any") == 0 || strcasecmp($word, "none") == 0) {
             $value->is_any = true;
-        } else if (preg_match('/\A\s*([=!<>]=?|≠|≤|≥|)\s*(-?\d*)\s*([xyz]?)\z/is', $word, $m)
+        } else if (preg_match('/\A\s*+([=!<>]=?|≠|≤|≥|)\s*+(-?\d*+)\s*+([xyz]?)\z/is', $word, $m)
                    && ($m[2] !== "" || $m[3] !== "")) {
             if ($m[2] !== "") {
                 $value->preference_match = new CountMatcher($m[1] . $m[2]);
@@ -138,13 +148,13 @@ class Revpref_SearchTerm extends SearchTerm {
         if (($match = $this->rpsm->preference_expertise_match())) {
             $where[] = $match;
         }
-        return "coalesce((select count(*) from PaperReviewPreference where " . join(" and ", $where) . "),0)" . $this->rpsm->comparison();
+        return "coalesce((select count(*) from PaperReviewPreference where " . join(" and ", $where) . "),0)" . $this->rpsm->conservative_nonnegative_comparison();
     }
     function test(PaperInfo $row, $xinfo) {
-        $can_view = $this->user->can_view_preference($row, $this->rpsm->aggregate);
+        $vps = $this->user->view_preference_state($row);
         $n = 0;
         foreach ($this->rpsm->contact_set() as $cid) {
-            if (($cid == $this->user->contactXid || $can_view)
+            if ($vps >= ($cid === $this->user->contactXid ? Contact::VIEWPREF_OWN : $this->view_bound)
                 && $this->rpsm->test_preference($row->preference($cid)))
                 ++$n;
         }

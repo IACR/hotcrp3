@@ -227,7 +227,7 @@ withheld.
 
     * oneof body
 * param ?dry_run dry_run_mode: True checks input for errors, but does not save changes; `if_warning` saves only if there are no errors or warnings, `if_error` only if there are no errors.
-* param ?override boolean: Administrators only: bypass deadline and other soft checks.
+* param ?override boolean: Submission administrators only: edit reviews whose editing deadline has passed.
 * param ?if_vtag_match integer: Reject the modification unless the review’s
   current version tag equals this value. `0` matches only a review that does not
   yet exist, so `r=new` implies `if_vtag_match=0`.
@@ -410,7 +410,7 @@ particular, `if_vtag_match=0` requires that every saved review be newly created.
 
     * oneof body
 * param ?dry_run dry_run_mode: True checks every item for errors, but does not save changes; `if_warning` saves each item only if that item has no errors or warnings, `if_error` only if it has no errors.
-* param ?override boolean: Administrators only: bypass deadline and other soft checks.
+* param ?override boolean: Submission administrators only: edit reviews whose editing deadline has passed.
 * param ?if_vtag_match integer: Batch-wide default version-tag precondition,
   overridable by a review object’s own `if_vtag_match`. `if_vtag_match=0`
   requires that every saved review be newly created.
@@ -472,7 +472,7 @@ only when the caller is allowed to rate this review. Each value is a rating (see
 [`reviewrating` POST](#post-reviewrating) for the vocabulary): the string `none`,
 a single flag, or an array of flags.
 
-* scope review:read
+* scope review:read reaction:read
 * param r rid: Review whose ratings to return.
 * response ?ratings string|[string]: Aggregate rating flags, or `none`.
 * response ?user_rating string|[string]: The caller’s own rating, or `none`.
@@ -488,9 +488,10 @@ ratings as for [`reviewrating` GET](#get-reviewrating).
 A rating is a space-separated list of flags, the string `none` to clear the
 caller’s rating, or the equivalent integer bitmask. The flags are `good`,
 `needswork`, `short`, `vague`, `narrow`, `disrespectful`, and `wrong`.
-Administrators may pass `clearall` to remove *every* rating on the review.
+Administrators may pass `clearall` to remove *every* rating on the review;
+this also requires the `reaction:admin` scope.
 
-* scope review:write
+* scope review:read reaction:write
 * param r rid: Review to rate.
 * param =user_rating string: New rating: a space-separated list of flags, `none`, or (administrators) `clearall`.
 * response ?ratings string|[string]: Updated aggregate rating flags, or `none`.
@@ -588,7 +589,10 @@ Return the review tokens currently active in the caller’s session, in the
 `token` array (encoded form). Review tokens grant the ability to edit specific
 anonymous reviews.
 
-* scope review:read
+Bearer tokens can’t use this endpoint, since review tokens are stored in
+the session; it requires a session cookie.
+
+* scope none
 * response token [string]: Encoded review tokens active in the session.
 
 
@@ -604,6 +608,9 @@ token is activated. Submitting with no usable tokens clears the active tokens.
 For security, the session is locked out after five failed token attempts until
 the user signs out. Per-token results are reported in `message_list`.
 
-* scope review:write
+Bearer tokens can’t use this endpoint, since review tokens are stored in
+the session; it requires a session cookie.
+
+* scope none
 * param ?token string: Review token(s) to activate, separated by whitespace or commas, or a JSON array. Omit (or pass none) to clear active tokens.
 * response token [string]: Encoded review tokens active after the change.

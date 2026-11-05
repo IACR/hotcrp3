@@ -4,11 +4,11 @@
 
 class Sharing_API extends MessageSet {
     static function run(Contact $user, Qrequest $qreq, PaperInfo $prow) {
-        // require `can_manage` (admin scope) because this yields a bearer
-        // credential
-        if (!$prow->has_author($user)
-            && !$user->can_manage($prow)) {
-            return JsonResult::make_permission_error();
+        // Obtaining or modifying the share link requires S_SUB_ADMIN scope,
+        // which subsumes perm_allow_edit_paper.
+        if (($fr = $user->perm_scope_allows(TokenScope::S_SUB_ADMIN | TokenScope::S_DOC_READ | TokenScope::S_REV_READ | TokenScope::S_CMT_READ, $prow)
+                   ?? $user->perm_allow_edit_paper($prow))) {
+            return Conf::paper_error_json_result($fr);
         }
         if (!$qreq->is_getlike()) {
             if ($qreq->method() === "DELETE") {
@@ -20,10 +20,10 @@ class Sharing_API extends MessageSet {
             } else if (($share = friendly_boolean($qreq->share)) === null) {
                 return JsonResult::make_parameter_error("share");
             }
-            if (!isset($qreq->expires_in)) {
+            if (($qreq->expires_in ?? "") === "") {
                 $invalid_at = 0;
             } else if (($ei = SettingParser::parse_duration($qreq->expires_in)) !== null) {
-                $invalid_at = $ei < 0 ? 0 : Conf::$now + (int) round($ei);
+                $invalid_at = $ei <= 0 ? 0 : Conf::$now + (int) round($ei);
             } else {
                 return JsonResult::make_parameter_error("expires_in");
             }

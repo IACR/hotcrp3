@@ -15,21 +15,26 @@ class ViewCommand {
     /** @var ?SearchWord
      * @readonly */
     public $sword;
+    /** @var ?int */
+    public $order;
+    /** @var bool */
+    private $_own_options = false;
 
-    const F_SHOW = 1;
-    const F_HIDE = 2;
-    const F_SORT = 4;
-    const FM_VISIBILITY = 3;
-    const FM_ACTION = 7;
+    const ORIGIN_NONE = -1;
+    const ORIGIN_REPORT = 0;
+    const ORIGIN_DEFAULT_DISPLAY = 1;
+    const ORIGIN_SESSION = 2;
+    const ORIGIN_SEARCH = 3;
+    const ORIGIN_REQUEST = 4;
+    const ORIGIN_MAX = 5;
+    const FM_ORIGIN = 0xF;
 
-    const ORIGIN_REPORT = 0x000;
-    const ORIGIN_DEFAULT_DISPLAY = 0x100;
-    const ORIGIN_SESSION = 0x200;
-    const ORIGIN_SEARCH = 0x300;
-    const ORIGIN_REQUEST = 0x400;
-    const ORIGIN_MAX = 0x500;
-    const FM_ORIGIN = 0xF00;
-    const ORIGIN_SHIFT = 8;
+    const F_SHOW = 0x10;
+    const F_HIDE = 0x20;
+    const F_SORT = 0x40;
+    const FM_VISIBILITY = 0x30;
+    const FM_ACTION = 0x70;
+    const ACTION_SHIFT = 4;
 
 
     /** @param int $flags
@@ -37,13 +42,66 @@ class ViewCommand {
      * @param ?ViewOptionList $view_options
      * @param ?SearchWord $sword */
     function __construct($flags, $keyword, $view_options = null, $sword = null) {
-        assert(($flags & ($flags - 1) & self::FM_ACTION) === 0);
+        assert($flags >= 0 && (($flags & self::FM_ACTION) & (($flags & self::FM_ACTION) - 1)) === 0);
         $this->flags = $flags;
         $this->keyword = $keyword;
         if ($view_options && !$view_options->is_empty()) {
             $this->view_options = $view_options;
         }
         $this->sword = $sword;
+    }
+
+    /** @param string $keyword
+     * @param bool $visible
+     * @param int $origin
+     * @return ViewCommand */
+    static function make_visibility($keyword, $visible, $origin = self::ORIGIN_MAX) {
+        return new ViewCommand(($visible ? self::F_SHOW : self::F_HIDE) | $origin, $keyword);
+    }
+
+    /** Return the result of applying `$b` after `$a`. If `$b` shows or hides,
+     * its visibility and origin replace `$a`’s; otherwise `$a`’s are kept.
+     * Options combine, with `$b`’s taking precedence. The result is a new
+     * object that has `$a`’s keyword and order. It supersedes `$a`: if `$a`
+     * is itself a merge result, the result may take over `$a`’s option list.
+     * @param ?ViewCommand $a
+     * @param ViewCommand $b
+     * @return ViewCommand */
+    static function merge($a, $b) {
+        // a null option in `$b` removes that option
+        $vol = $b->view_options;
+        $own = true;
+        if ($vol) {
+            // copy `$a`’s options only if another command might share them
+            if (!$a || !$a->view_options) {
+                $vol = new ViewOptionList;
+            } else if ($a->_own_options) {
+                $vol = $a->view_options;
+            } else {
+                $vol = clone $a->view_options;
+            }
+            foreach ($b->view_options as $n => $x) {
+                if ($x === null) {
+                    $vol->remove($n);
+                } else {
+                    $vol->add($n, $x);
+                }
+            }
+        } else if ($a) {
+            $vol = $a->view_options;
+            $own = $a->_own_options;
+        }
+        $fm = self::FM_VISIBILITY | self::FM_ORIGIN;
+        if (($b->flags & self::FM_VISIBILITY) !== 0) {
+            $flags = $b->flags & $fm;
+        } else {
+            $flags = $a ? $a->flags & $fm : 0;
+        }
+        $vc = new ViewCommand($flags, $a ? $a->keyword : $b->keyword, $vol,
+                              $b->sword ?? ($a ? $a->sword : null));
+        $vc->order = $a ? $a->order : null;
+        $vc->_own_options = $own;
+        return $vc;
     }
 
     /** @param string $s
@@ -73,7 +131,7 @@ class ViewCommand {
             $sort = $edit = true;
         } else if ($as === "hide") {
             $a = self::F_HIDE;
-        } else if ($as === "viewoptions" || $as === "decor") {
+        } else if ($as === "view" || $as === "viewoptions") {
             $a = 0;
         } else {
             $a = self::F_SHOW;
@@ -170,6 +228,11 @@ class ViewCommand {
     }
 
 
+    /** @return 0|1|2|3|4|5 */
+    function origin() {
+        return $this->flags & self::FM_ORIGIN;
+    }
+
     /** @return bool */
     function is_show() {
         return ($this->flags & self::F_SHOW) !== 0;
@@ -187,7 +250,7 @@ class ViewCommand {
 
     /** @return string */
     function unparse() {
-        $s = (["viewoptions:", "show:", "hide:", null, "sort:"])[$this->flags & self::FM_ACTION];
+        $s = (["view:", "show:", "hide:", null, "sort:"])[($this->flags & self::FM_ACTION) >> self::ACTION_SHIFT];
         if (!ctype_alnum($this->keyword)
             && SearchParser::span_balanced_parens($this->keyword) !== strlen($this->keyword)) {
             $s .= "\"{$this->keyword}\"";

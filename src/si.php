@@ -104,6 +104,9 @@ class Si {
     public $spellcheck;
     /** @var ?bool
      * @readonly */
+    public $wrap;
+    /** @var ?bool
+     * @readonly */
     public $explicit_placeholder;
     /** @var 0|1|2|3
      * @readonly */
@@ -141,7 +144,8 @@ class Si {
         "title" => "is_string",
         "title_pattern" => "is_string",
         "type" => "is_string",
-        "values" => "Si::is_auto_or_list"
+        "values" => "Si::is_auto_or_list",
+        "wrap" => "is_bool"
     ];
 
     static function is_auto_or_list($x) {
@@ -517,11 +521,8 @@ class Si {
             return $this->name_parts !== null
                 && $this->name2 === "/id";
         }
-        $f = str_replace("\\*", ".*", preg_quote($expr->text, "/"));
-        if (!str_starts_with($f, ".*")) {
-            $f = "\\A" . $f;
-        }
-        return preg_match("/{$f}/", $this->name);
+        $f = Text::one_wildcard_regex($expr->text, "", "", "");
+        return preg_match("{\\A{$f}}", $this->name);
     }
 
     /** @return bool */

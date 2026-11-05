@@ -22,6 +22,9 @@ class SessionList {
      * @readonly */
     public $digest;
 
+    /** Most IDs (or, with ranges, entries) `decode_ids` returns. */
+    const DECODE_LIMIT = 100000;
+
     /** @param string $listid
      * @param list<int> $ids
      * @param ?string $description */
@@ -54,19 +57,27 @@ class SessionList {
     }
 
     /** @param string $s
-     * @return ?list<int> */
-    static function decode_ids($s) {
+     * @return ?list<int|array{int,int}> */
+    static function decode_ids($s, $allow_ranges = false) {
         if (str_starts_with($s, "[")
+            && strpos($s, "{") === false
             && ($a = json_decode($s)) !== null) {
-            return is_int_list($a) ? $a : null;
+            return is_int_list($a) && count($a) <= self::DECODE_LIMIT ? $a : null;
         }
 
         $a = [];
         $l = strlen($s);
-        $next = null;
+        $i = 0;
+        $next = 0;
         $sign = 1;
         $include_after = false;
-        for ($i = 0; $i !== $l; ) {
+        while (true) {
+            if (!is_int($next) || count($a) > self::DECODE_LIMIT) {
+                return null;
+            } else if ($i === $l) {
+                return $a;
+            }
+
             $ch = ord($s[$i]);
             if ($ch >= 48 && $ch <= 57) {
                 $n1 = 0;
@@ -86,9 +97,19 @@ class SessionList {
                         $ch = $i !== $l ? ord($s[$i]) : 0;
                     }
                 }
-                while ($n1 <= $n2) {
-                    $a[] = $n1;
-                    ++$n1;
+                if (!is_int($n1) || !is_int($n2)) {
+                    return null;
+                }
+                if ($n2 - $n1 > 10 && $allow_ranges) {
+                    $a[] = [$n1, $n2];
+                    $n1 = $n2 + 1;
+                } else if ($n2 - $n1 >= self::DECODE_LIMIT - count($a)) {
+                    return null;
+                } else {
+                    while ($n1 <= $n2) {
+                        $a[] = $n1;
+                        ++$n1;
+                    }
                 }
                 $next = $n1;
                 $sign = 1;
@@ -139,10 +160,17 @@ class SessionList {
                 return null;
             }
 
-            while ($add0 !== 0) {
-                $a[] = $next;
-                $next += $sign;
-                --$add0;
+            if ($add0 > 10 && $allow_ranges) {
+                $a[] = [$next, $next + $sign * $add0 - $sign];
+                $next += $add0 * $sign;
+            } else if (!is_int($add0) || $add0 > self::DECODE_LIMIT - count($a)) {
+                return null;
+            } else {
+                while ($add0 !== 0) {
+                    $a[] = $next;
+                    $next += $sign;
+                    --$add0;
+                }
             }
             $next += $skip * $sign;
             if ($skip !== 0 && $include_after) {
@@ -150,7 +178,6 @@ class SessionList {
                 $next += $sign;
             }
         }
-        return $a;
     }
 
     /** @param list<string> $a
@@ -170,7 +197,16 @@ class SessionList {
     /** @param list<int> $ids
      * @return string */
     static function encode_ids($ids) {
-        if (empty($ids)) {
+        return self::encode_ranges($ids);
+    }
+
+    /** Encode a list of IDs given as ints and/or inclusive `[first, last]`
+     * ranges. A range with `first > last` runs downward. The result is the
+     * same as `encode_ids` on the expanded list.
+     * @param list<int|array{int,int}> $rs
+     * @return string */
+    static function encode_ranges($rs) {
+        if (empty($rs)) {
             return "";
         }
         // Q at start: i-p, r, t, Z, A-P are followed by implicit `a` (1 present paper)
@@ -186,15 +222,43 @@ class SessionList {
         // A-H: like a-h + i
         // I-P: like a-h + j
         // [#s\[\],']: ignored
-        $n = count($ids);
-        $a = ["Q", (string) $ids[0]];
+        $lo = $hi = [];
+        foreach ($rs as $r) {
+            if (is_int($r)) {
+                $lo[] = $hi[] = $r;
+            } else {
+                $lo[] = $r[0];
+                $hi[] = $r[1];
+            }
+        }
+        $nr = count($lo);
+        $a = ["Q", (string) $lo[0]];
         '@phan-var list<string> $a';
         $sign = 1;
-        $next = $ids[0] + 1;
-        for ($i = 1; $i !== $n; ) {
+        $next = $lo[0] + 1;
+        // cursor: ID `$x` within run `$r`
+        $r = 0;
+        $x = $lo[0];
+        while (true) {
+            // advance cursor
+            if ($x !== $hi[$r]) {
+                $x += $hi[$r] > $lo[$r] ? 1 : -1;
+            } else if (++$r !== $nr) {
+                $x = $lo[$r];
+            } else {
+                break;
+            }
+
             // maybe switch direction
-            if ($ids[$i] < $next
-                && ($sign === -1 || ($i + 1 !== $n && $ids[$i + 1] < $ids[$i]))) {
+            if ($x !== $hi[$r]) {
+                $nx = $x + ($hi[$r] > $lo[$r] ? 1 : -1);
+            } else if ($r + 1 !== $nr) {
+                $nx = $lo[$r + 1];
+            } else {
+                $nx = null;
+            }
+            if ($x < $next
+                && ($sign === -1 || ($nx !== null && $nx < $x))) {
                 $want_sign = -1;
             } else {
                 $want_sign = 1;
@@ -204,12 +268,25 @@ class SessionList {
                 $a[] = "z";
             }
 
-            $skip = ($ids[$i] - $next) * $sign;
+            // extend run of sequential IDs in direction `$sign`
+            $skip = ($x - $next) * $sign;
             $include = 1;
-            while ($i + 1 !== $n && $ids[$i + 1] === $ids[$i] + $sign) {
-                ++$i;
-                ++$include;
+            while (true) {
+                if ($x !== $hi[$r] && ($hi[$r] <=> $lo[$r]) === $sign) {
+                    $include += abs($hi[$r] - $x);
+                    $x = $hi[$r];
+                }
+                if ($x === $hi[$r]
+                    && $r + 1 !== $nr
+                    && $lo[$r + 1] === $x + $sign) {
+                    ++$r;
+                    $x = $lo[$r];
+                    ++$include;
+                } else {
+                    break;
+                }
             }
+
             $last = $a[count($a) - 1];
             if ($skip < 0) {
                 if ($sign === 1 && $skip <= -100) {
@@ -247,10 +324,18 @@ class SessionList {
                 }
             }
 
-            $next = $ids[$i] + $sign;
-            ++$i;
+            $next = $x + $sign;
         }
         return join("", $a);
+    }
+
+    /** @param string $urlbase
+     * @return bool */
+    static function urlbase_is_site_relative($urlbase) {
+        // `urlbase` round-trips through the browser; accept only a
+        // site-relative page reference like those `hoturl` generates:
+        // no scheme, no leading slash, no backslash, no dot segments
+        return !!preg_match('/\A[a-z][-a-z0-9_.]*+(?:\/(?!(?:\.|%2e){2}|[\/\\\\])[^\/\\\\?#]*+)*+(?:\z|[?#])/i', $urlbase);
     }
 
     /** @param Contact $user
@@ -258,7 +343,7 @@ class SessionList {
      * @param string $type
      * @return ?SessionList */
     static function decode_info_string($user, $info, $type) {
-        if (($j = json_decode($info))
+        if (($j = Json::decode_user($info, 1 << 20))
             && is_object($j)
             && (!isset($j->listid) || is_string($j->listid))) {
             return self::decode_hotlist($user, $j, $type);
@@ -306,7 +391,9 @@ class SessionList {
             /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
             $list->description = $j->description;
         }
-        if (isset($j->urlbase) && is_string($j->urlbase)) {
+        if (isset($j->urlbase)
+            && is_string($j->urlbase)
+            && self::urlbase_is_site_relative($j->urlbase)) {
             $list->urlbase = $j->urlbase;
         }
         if ($j->highlight ?? false) {
@@ -370,7 +457,7 @@ class SessionList {
         if ($this->ids !== null) {
             $j["ids"] = self::encode_ids($this->ids);
         }
-        return json_encode_browser($j);
+        return json_encode_db($j);
     }
 
     /** @param 'p'|'u' $type

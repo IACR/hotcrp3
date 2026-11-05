@@ -47,6 +47,8 @@ them, drawn from:
 
 * `chair`—a conference chair
 * `pc`—a program committee member; this is also present for chairs
+* `unlistedpc`—a program committee member who is left off PC lists, such as a
+  bot account; such a user has PC permissions but not `pc`
 * `sysadmin`—a system administrator
 * `manager`—an administrator of some submissions who is not a full chair
 * `author`—an author or contact of at least one submission
@@ -92,28 +94,27 @@ when a user is signed in.
 Update a small set of per-user, per-session UI preferences and return the same
 session information as [`GET /session`](#get-session). This endpoint
 backs the HotCRP Javascript client’s “remember my view” behavior; the
-preferences it manages are cosmetic (folding state, which columns are shown in
-paper and user lists, score-sort order) and have no effect on submissions,
-reviews, or permissions. Unlike `GET /session`, it requires an authenticated,
-same-origin request with a valid `post` CSRF token.
+preferences it manages are cosmetic (which columns are shown in paper and user
+lists, score-sort order) and have no effect on submissions, reviews, or
+permissions. It does not require a signed-in user, but unlike `GET /session`
+it requires a valid `post` CSRF token.
 
 The preferences to change are encoded in the `v` parameter as a
-whitespace-separated list of assignments. Each assignment has the form
-`name[.key][=value]`:
+whitespace-separated list of assignments:
 
-* `name` selects the preference. Recognized names include `foldpaper`,
-  `foldpscollab`, `foldhomeactivity` (folding toggles), `pldisplay`,
-  `pfdisplay`, `uldisplay` (which columns/fields are shown in the paper list,
-  paper form, and user list), and `scoresort` / `ulscoresort` (score sort
-  order).
-* `.key` is an optional sub-selector. For the `*display` preferences it names
-  the column or field being shown or hidden; for `foldpaper` it names an
-  individual foldable region.
-* `=value` is an optional integer. `0` (or an omitted value) means “unfold” or
-  “show”; a nonzero value means “fold” or “hide”.
+* `pldisplay.COLUMN[=value]`, `pfdisplay.COLUMN[=value]`, and
+  `uldisplay.COLUMN[=value]` show or hide a column in the search paper list,
+  the review preferences paper list, and the user list, respectively. A
+  `value` of `0` (or an omitted value) shows the column; a nonzero integer
+  hides it.
+* `scoresort=SORT` sets the score sort order for the search paper list. `SORT` is
+  `counts`, `average`, `median`, `variance`, `maxmin`, or `my`.
+* `ulscoresort=SORT` (or `uldisplay.scoresort=SORT`) sets the score sort
+  order for the user list. `SORT` is `variance` or `maxmin`; any other value
+  restores the default, `average`.
 
-For example, `v=pldisplay.authors=0 foldhomeactivity=1` reveals the authors
-column in the paper list and folds the home-page activity region.
+For example, `v=pldisplay.authors=0 pldisplay.abstract=1` shows the authors
+column in the paper list and hides the abstract column.
 
 Parsing is best-effort: every recognized assignment is applied, and any
 component that is not understood is silently ignored. A successful request
@@ -137,16 +138,12 @@ Supply the user’s `password`. On success the response has `ok` of `true`; if t
 password is wrong, the response is an error (`ok` is `false`) whose
 `message_list` describes the problem.
 
-The `reason` parameter is a short tag describing why reauthentication is being
-requested (HotCRP uses values such as `manageemail`); it can influence how long
-the resulting confirmation remains valid. `confirm=1` requests an explicit
-success message in `message_list` on success. The `email` and `totpcode`
-parameters support alternate verification flows (such as time-based one-time
-passwords) where those are configured.
+`confirm=1` requests an explicit success message in `message_list` on success.
+The `email` and `totpcode` parameters support alternate verification flows (such
+as time-based one-time passwords) where those are configured.
 
 * scope none
 * param ?confirm boolean: If true, include a success message on success
-* param ?=reason string: Short tag describing why reauthentication is requested
 * param ?=email email: Email of the account being confirmed
 * param ?=password string: Account password
 * param ?=totpcode string: Time-based one-time password code, if applicable

@@ -149,7 +149,7 @@ class CheckFormat extends MessageSet {
     /** @param string $filename
      * @return ?object */
     function run_banal($filename) {
-        $env = ["PATH" => getenv("PATH")];
+        $env = Subprocess::basic_env();
         $command = $this->banal_command();
         if ($this->banal_command_default
             && ($pdftohtml = $this->conf->opt("pdftohtmlCommand"))) {
@@ -249,8 +249,8 @@ class CheckFormat extends MessageSet {
             && ($allow_run !== CheckFormat::RUN_ALWAYS
                 || $bj->at >= Conf::$now - 86400)
             && (!isset($bj->npages) /* i.e., banal JSON is not truncated */
-                || ($this->last_spec->timestamp
-                    && isset($bj->msx)
+                || !$this->last_spec->timestamp /* no spec to re-verify */
+                || (isset($bj->msx)
                     && is_array($bj->msx)
                     && ($bj->msx[0] ?? null) === $this->last_spec->timestamp))) {
             // existing banal JSON should suffice
@@ -485,11 +485,11 @@ class CheckFormat extends MessageSet {
     /** @return MessageItem */
     function front_report_item() {
         if ($this->has_error()) {
-            return MessageItem::urgent_note("<5>This document violates formatting requirements");
+            return MessageItem::urgent_note("<0>Document violates formatting requirements");
         } else if ($this->has_problem()) {
-            return MessageItem::warning("<0>This document may violate formatting requirements");
+            return MessageItem::warning("<0>Document has potential formatting issues");
         }
-        return MessageItem::success("<0>Congratulations, this document seems to comply with the format guidelines. However, the automated checker may not verify all formatting requirements. It is your responsibility to ensure correct formatting.");
+        return MessageItem::success("<0>Congratulations, the document passed the automated format checks!");
     }
 
     /** @return MessageSet */
@@ -563,8 +563,7 @@ class Default_FormatChecker implements FormatChecker {
         }
 
         // maybe use existing messages
-        if ($spec->timestamp
-            && isset($bj->msx)
+        if (isset($bj->msx)
             && is_array($bj->msx)
             && ($bj->msx[0] ?? null) === $spec->timestamp) {
             for ($i = 1; $i !== count($bj->msx); ++$i) {
@@ -988,23 +987,18 @@ class Default_FormatChecker implements FormatChecker {
     function append_report(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc,
                            MessageSet $ms) {
         if (!$ms->has_message()) {
-            $mi = $cf->front_report_item();
-            if ($cf->has_error()) {
-                $mi->message = "<5><strong>" . $mi->message_as(5) . ".</strong> The most serious errors are marked with <span class=\"error-mark\"></span>.";
+            $ms->append_item($cf->front_report_item());
+            if (!$cf->has_problem()) {
+                $ms->append_item(MessageItem::inform("<0>Nevertheless, the checker can’t verify every requirement and can make mistakes. Authors are responsible for ensuring correct formatting."));
             }
-            $ms->append_item($mi);
-        }
-        if ($cf->has_problem()) {
-            $ms->append_item(MessageItem::inform("<0>Submissions that violate the requirements will not be considered. However, the checker can report false positives—for example, it can miscalculate margins or misinterpret text in figures. If you are confident that your document meets all formatting requirements, you can keep it as is."));
         }
         $ms->append_list($cf->message_list());
+        if ($cf->has_problem()) {
+            $ms->append_item(MessageItem::marked_note("<0>Submissions that violate the requirements will not be considered. However, the checker can report false positives—for example, it can miscalculate margins or misinterpret text in figures. If you are confident that the document meets all formatting requirements, keep it as is."));
+            if ($cf->has_error() && $cf->has_warning()) {
+                $ms->append_item(MessageItem::inform("<5><span class=\"error-mark\" role=\"img\" aria-label=\"Error\"></span> marks serious errors."));
+            }
+        }
         return true;
-    }
-
-    /** @return string */
-    function report(CheckFormat $cf, FormatSpec $spec, DocumentInfo $doc) {
-        $ms = new MessageSet;
-        $this->append_report($cf, $spec, $doc, $ms);
-        return Ht::fmt_feedback_msg($doc->conf, $ms);
     }
 }

@@ -19,7 +19,7 @@ class CheckUpdates_Page {
         $status = 0;
         if ($user->privChair
             && isset($qreq->data)
-            && ($data = json_decode($qreq->data, true))
+            && ($data = (new JsonParser($qreq->data))->set_assoc(true)->set_user()->decode())
             && isset($data["updates"])
             && is_array($data["updates"])) {
             foreach ($data["updates"] as $update) {
@@ -121,6 +121,10 @@ class CheckUpdates_Page {
             }
         }
 
-        json_exit(empty($ml) ? ["ok" => true] : ["ok" => true, "message_list" => $ml]);
+        if (empty($ml)) {
+            json_exit(["ok" => true]);
+        }
+        $qreq->unset_gsession("updatecheck");
+        json_exit(["ok" => true, "message_list" => $ml]);
     }
 }

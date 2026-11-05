@@ -393,6 +393,15 @@ class ConfInvariants {
     }
 
     /** @return $this */
+    function check_tag_prefixes() {
+        $any = $this->invariantq("select tag from PaperTag where tag like '0%' limit 1");
+        if ($any) {
+            $this->invariant_error("noncanonical_tag", "PaperTag has malformed tag {0}");
+        }
+        return $this;
+    }
+
+    /** @return $this */
     function check_automatic_tags() {
         $dt = $this->conf->tags();
         $user = $this->conf->root_user();
@@ -616,8 +625,9 @@ class ConfInvariants {
                 $this->invariant_error("user_nonascii", sprintf("user {$u->email}/{$u->contactId} has incorrect nonascii cflag %x", $u->cflags & Contact::CF_NEANONASCII));
             }
 
-            // roles have only expected bits
-            if (($u->roles & ~Contact::ROLE_DBMASK) !== 0) {
+            // roles have only expected bits, and are normalized
+            if (($u->roles & ~Contact::ROLE_DBMASK) !== 0
+                || Contact::normalize_roles($u->roles) !== $u->roles) {
                 $this->invariant_error("roles", "user {$u->email} has funky roles {$u->roles}");
             }
 

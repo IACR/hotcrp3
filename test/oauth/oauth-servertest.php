@@ -34,6 +34,12 @@ class ServerTestState {
     public $txns = [];
     /** @var ?object */
     public $report;
+    /** Who each server last authenticated, by server label. A run that names
+     * an account with `login_hint` narrows the consent page to it, which is
+     * what makes `prompt=none` reachable: the server answers
+     * `account_selection_required` when several accounts are signed in.
+     * @var object */
+    public $subjects;
     /** @var ServerTestState */
     static public $main;
 
@@ -47,12 +53,15 @@ class ServerTestState {
                     self::$main->txns[] = $t;
             }
             self::$main->report = $j->report ?? null;
+            self::$main->subjects = $j->subjects ?? null;
         }
+        self::$main->subjects = self::$main->subjects ?? (object) [];
     }
 
     static function save() {
         file_put_contents(SERVER_STATE_FILE, json_encode([
-            "txns" => self::$main->txns, "report" => self::$main->report
+            "txns" => self::$main->txns, "report" => self::$main->report,
+            "subjects" => self::$main->subjects
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
     }
 
@@ -352,12 +361,18 @@ function server_handle_start(ServerRequestInterface $req, Response $res) {
         "token_endpoint" => $endpoints->token,
         "redirect_uri" => "{$self_uri}" . SERVER_CALLBACK,
         "scope" => $cf->scope ?? "openid",
-        "exp" => time() + 900
+        "exp" => time() + 900,
+        // what this run asks the server to do about authentication
+        "prompt" => $q["prompt"] ?? null,
+        "max_age" => isset($q["max_age"]) && ctype_digit($q["max_age"])
+            ? intval($q["max_age"]) : null,
+        "login_hint" => $q["login_hint"] ?? null,
+        "sent_at" => time()
     ];
     ServerTestState::$main->txns[] = $txn;
     ServerTestState::save();
 
-    return redirection($res, $endpoints->authorization, [
+    $param = [
         "response_type" => "code",
         "client_id" => $txn->client_id,
         "redirect_uri" => $txn->redirect_uri,
@@ -366,7 +381,13 @@ function server_handle_start(ServerRequestInterface $req, Response $res) {
         "nonce" => $txn->nonce,
         "code_challenge" => rtrim(strtr(base64_encode(hash("sha256", $verifier, true)), "+/", "-_"), "="),
         "code_challenge_method" => "S256"
-    ]);
+    ];
+    foreach (["prompt", "max_age", "login_hint"] as $k) {
+        if ($txn->$k !== null) {
+            $param[$k] = (string) $txn->$k;
+        }
+    }
+    return redirection($res, $endpoints->authorization, $param);
 }
 
 
@@ -431,6 +452,29 @@ function server_verify_id_token(ServerTestReport $rep, $id_token, $txn) {
         "id_token has `sub`", (string) ($claims->sub ?? "(none)"));
     $rep->check(isset($claims->exp) && $claims->exp > time(),
         "id_token is unexpired");
+
+    // A server asked for a fresh sign-in has to say when the sign-in happened,
+    // or the client has nothing to judge: `auth_time` is that statement, and
+    // OpenID Connect requires it in a response to `max_age`. `prompt=login`
+    // asks for the same thing with no window at all.
+    $want_fresh = $txn->max_age !== null || $txn->prompt === "login";
+    $auth_time = $claims->auth_time ?? null;
+    if (!$want_fresh) {
+        $rep->skip("id_token `auth_time`", "this run did not ask for a fresh sign-in");
+    } else if (!is_int($auth_time)) {
+        $rep->check(false, "id_token carries `auth_time` for a freshness request",
+            $auth_time === null ? "(absent)" : "not an integer");
+    } else {
+        $rep->check(true, "id_token carries `auth_time` for a freshness request",
+            date("Y-m-d H:i:s", $auth_time));
+        // the same test the relying party makes: the sign-in must be no older
+        // than the window, measured from when the request was sent
+        $window = max($txn->max_age ?? 0, 300);
+        $rep->check($auth_time >= $txn->sent_at - $window,
+            "`auth_time` is within the window this run asked for",
+            (time() - $auth_time) . "s ago, window {$window}s");
+        $rep->check($auth_time <= time() + 60, "`auth_time` is not in the future");
+    }
     return $claims;
 }
 
@@ -479,7 +523,24 @@ function server_handle_callback(ServerRequestInterface $req, Response $res) {
     }
 
     // authorization response
-    if (isset($q["error"])) {
+    if (($txn->prompt ?? null) === "none") {
+        // `prompt=none` forbids the server from showing anything, so an error
+        // naming what it could not do without asking is the successful outcome.
+        // Only these four say that; anything else is a different complaint.
+        $silent = ["login_required", "consent_required",
+                   "interaction_required", "account_selection_required"];
+        $err = $q["error"] ?? null;
+        if ($err === null) {
+            $rep->check(true, "silent request was answered without asking the user",
+                "server had everything it needed");
+        } else {
+            $rep->check(in_array($err, $silent, true),
+                "silent request names what it would have had to ask for", $err);
+            $rep->check(($q["state"] ?? null) === $txn->state,
+                "error response carries `state`");
+            return server_report_page($res, $rep);
+        }
+    } else if (isset($q["error"])) {
         $rep->check(false, "authorization succeeded",
             $q["error"] . " " . ($q["error_description"] ?? ""));
         $rep->check(($q["state"] ?? null) === $txn->state, "error response carries `state`");
@@ -526,15 +587,44 @@ function server_handle_callback(ServerRequestInterface $req, Response $res) {
     // the access token actually works. This needs an API to call, which a
     // server described only by `auth_uri` and `token_uri` may not name.
     $email = null;
-    if ($txn->api !== null) {
-        $whoami = server_api($txn, "whoami", $tok->access_token);
+    // An identity-only (`openid`)-scoped grant conveys the user through the
+    // id_token and gets no API access: the provider returns a placeholder
+    // access token (HotCRP uses `hct_invalid_token`, `expires_in` 0) only
+    // because OIDC requires the field. There is nothing to accept at the API,
+    // so skip the check, as the id_token check is skipped when `openid` was not
+    // asked for.
+    $identity_only = ($tok->access_token ?? "") === "hct_invalid_token"
+        || ($tok->access_token_expires_in ?? null) === 0
+        || ($tok->expires_in ?? null) === 0;
+    if ($txn->api !== null && $identity_only) {
+        $rep->skip("access token is accepted by the API",
+            "identity-only grant: the access token carries no API scope");
+    } else if ($txn->api !== null) {
+        // call whoami with the bearer token; capture the raw response too, so a
+        // failure can say whether the token was rejected (status), what scope
+        // it carried, and what the endpoint actually returned
+        [$wstatus, $whdr, $wbody] = server_http("GET", "{$txn->api}whoami", [
+            "headers" => ["Authorization" => "Bearer {$tok->access_token}"]
+        ]);
+        $wj = json_decode($wbody);
+        $whoami = is_object($wj) ? (object) ["status" => $wstatus, "headers" => $whdr, "body" => $wj] : null;
         $email = $whoami->body->email ?? null;
+        $detail = $email;
+        if ($email === null) {
+            $detail = "no email: HTTP {$wstatus}"
+                . ", requested scope " . json_encode($txn->scope)
+                . ", token scope " . json_encode($tok->scope ?? null)
+                . ", body " . substr(trim($wbody), 0, 300);
+        }
         $rep->check($whoami && $whoami->status === 200 && $email,
-            "access token is accepted by the API", (string) ($email ?? "no email"));
+            "access token is accepted by the API", (string) $detail);
         if ($claims && $email) {
             $rep->check(strcasecmp((string) ($claims->sub ?? ""), $email) === 0
                         || strcasecmp((string) ($claims->email ?? ""), $email) === 0,
                 "id_token identifies the same user as the API");
+        }
+        if ($email !== null) {
+            ServerTestState::$main->subjects->{$txn->server ?? "?"} = $email;
         }
     } else {
         $rep->skip("access token is accepted by the API",
@@ -631,7 +721,23 @@ function server_handle_index(ServerRequestInterface $req, Response $res) {
             '<p><code>', htmlspecialchars($s->hotcrp_uri ?? $s->auth_uri), '</code></p>',
             '<p><a class="start" href="/servers/start?mode=configured', $sel, '">Configured client</a>',
             '<a class="start" href="/servers/start?mode=dynamic', $sel, '">Dynamic registration</a>',
-            '<a class="start" href="/servers/start?mode=document', $sel, '">Metadata document</a></p>';
+            '<a class="start" href="/servers/start?mode=document', $sel, '">Metadata document</a></p>',
+            '<p><a class="start" href="/servers/start?mode=configured&amp;prompt=login', $sel, '">Force a fresh sign-in (<code>prompt=login</code>)</a>',
+            '<a class="start" href="/servers/start?mode=configured&amp;max_age=600', $sel, '">Ask for one within 10 minutes (<code>max_age</code>)</a>',
+            '<a class="start" href="/servers/start?mode=configured&amp;max_age=30', $sel, '">Ask for one within 30 seconds (<code>max_age</code>)</a>',
+            '<a class="start" href="/servers/start?mode=configured&amp;prompt=none', $sel, '">Silent check (<code>prompt=none</code>)</a></p>';
+        $subj = ServerTestState::$main->subjects->{server_label($s)} ?? null;
+        if ($subj !== null) {
+            $hint = "&amp;login_hint=" . urlencode($subj);
+            echo '<p>Last authenticated as <code>', htmlspecialchars($subj), '</code>. ',
+                'A hinted run narrows the consent page to that account, which is what ',
+                '<code>prompt=none</code> needs — otherwise a browser with several ',
+                'accounts signed in answers <code>account_selection_required</code>.</p>',
+                '<p><a class="start" href="/servers/start?mode=configured&amp;prompt=none', $hint, $sel, '">Silent check as this user</a>',
+                '<a class="start" href="/servers/start?mode=configured&amp;max_age=600', $hint, $sel, '">Within 10 minutes as this user</a>',
+                '<a class="start" href="/servers/start?mode=configured&amp;max_age=30', $hint, $sel, '">Within 30 seconds as this user</a>',
+                '<a class="start" href="/servers/start?mode=configured&amp;prompt=login', $hint, $sel, '">Fresh sign-in as this user</a></p>';
+        }
     }
     if (($r = ServerTestState::$main->report)) {
         $cls = $r->nfailed ? "sum-bad" : "sum-ok";

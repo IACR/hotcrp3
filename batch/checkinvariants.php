@@ -323,6 +323,7 @@ class CheckInvariants_Batch {
     private function fix_roles() {
         $this->conf->qe("update ContactInfo set roles=roles&? where (roles&~?)!=0",
             Contact::ROLE_DBMASK, Contact::ROLE_DBMASK);
+        (new UpdateSchema($this->conf))->v332_listed_unlisted_pc();
     }
 
     private function fix_cdbroles() {
@@ -479,7 +480,7 @@ class CheckInvariants_Batch {
     }
 
     static function list_fixes() {
-        return prefix_word_wrap("", "PROBLEMs for `--fix` include summary, autosearch, inactive, document-match, whitespace, reviews, roles, user_nonascii, and cdbroles.", 0);
+        return prefix_word_wrap("", "PROBLEMs for `--fix` include summary, autosearch, inactive, document-match, whitespace, reviews, roles, user_nonascii, cdbroles, authors, and unnamed_authors.", 0);
     }
 
     /** @return CheckInvariants_Batch */

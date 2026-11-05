@@ -8,21 +8,21 @@
     ["average {0} score {1}", "{0} score {1}", ["{2}=1"]],
 
     {
-        "in": "You have submitted {n} of <a href=\"{url}\">{na} reviews</a> with {scores:list}.",
+        "in": "<5>You have submitted {n} of <a href=\"{url}\">{na} reviews</a> with {scores:list}.",
         "m": [
-            ["You have submitted {n} of <a href=\"{url}\">{na} reviews</a>.", ["!#{scores}"]],
-            ["You have submitted <a href=\"{url}\">{na} review</a>.", ["!#{scores}", "{n}=1", "{na}=1"]],
-            ["You have submitted <a href=\"{url}\">{na} review</a> with {scores:list}.", ["{n}=1", "{na}=1"]],
-            ["You have submitted <a href=\"{url}\">{na} reviews</a>.", ["!#{scores}", "{n}={na}"]],
-            ["You have submitted <a href=\"{url}\">{na} reviews</a> with {scores:list}.", ["{n}={na}"]]
+            ["<5>You have submitted {n} of <a href=\"{url}\">{na} reviews</a>.", ["!#{scores}"]],
+            ["<5>You have submitted <a href=\"{url}\">{na} review</a>.", ["!#{scores}", "{n}=1", "{na}=1"]],
+            ["<5>You have submitted <a href=\"{url}\">{na} review</a> with {scores:list}.", ["{n}=1", "{na}=1"]],
+            ["<5>You have submitted <a href=\"{url}\">{na} reviews</a>.", ["!#{scores}", "{n}={na}"]],
+            ["<5>You have submitted <a href=\"{url}\">{na} reviews</a> with {scores:list}.", ["{n}={na}"]]
         ]
     },
     {
-        "in": "The average PC member has submitted {n:.1f} reviews with {scores:list}.",
+        "in": "<5>The average PC member has submitted {n:.1f} reviews with {scores:list}.",
         "m": [
-            ["The average PC member has submitted {n:.1f} reviews.", ["!#{scores}"]],
-            ["The average PC member has submitted {n:.1f} review with {scores:list}.", ["{n}=1"]],
-            ["The average PC member has submitted {n:.1f} review.", ["{n}=1", "!#{scores}"]]
+            ["<5>The average PC member has submitted {n:.1f} reviews.", ["!#{scores}"]],
+            ["<5>The average PC member has submitted {n:.1f} review with {scores:list}.", ["{n}=1"]],
+            ["<5>The average PC member has submitted {n:.1f} review.", ["{n}=1", "!#{scores}"]]
         ]
     },
 
@@ -54,6 +54,16 @@
     ["<5>{round} external review deadline", "<5>External review deadline", ["!{round}"]],
     ["<5>{round} external review hard deadline", "<5>External review hard deadline", ["!{round}"]],
 
+    {
+        "in": "<5>This {submission} is under review. You can still edit its {fields:list or}, but other fields can’t be changed.",
+        "m": [
+            ["<5>This {submission} is under review. You can still edit its {fields:list or} or withdraw it from consideration, but other fields can’t be changed.", ["{can_withdraw}"]],
+            ["<5>This {submission} is under review and can’t be changed, but you can still withdraw it from consideration.", ["!#{fields}", "{can_withdraw}"]],
+            ["<5>This {submission} is under review and can’t be changed or withdrawn.", ["!#{fields}"]],
+            ["<5>The deadline for updating final versions has passed. You can still edit its {fields:list or}, but other fields can’t be changed.", ["{phase}=final"]],
+            ["<5>The deadline for updating final versions has passed. This {submission} can’t be changed.", ["{phase}=final", "!#{fields}"]]
+        ]
+    },
     ["<0>Updated {submission} (changed {:list})", "<0>Updated {submission}", ["#{0}=0"]],
     ["<0>Updated {submission} (changed {:list})", "<0>Updated final version (changed {:list})", ["{phase}=final"]],
     ["<0>Updated {submission} (changed {:list})", "<0>Updated final version", ["{phase}=final", "#{0}=0"]],
@@ -174,9 +184,12 @@
     ["<0>“{}” in global profile", "<0>Differs in global profile", ["{field}=collaborators"]],
 
     ["permission_error", "<0>Permission error"],
+    ["permission_error", "<0>{Submission} does not exist, or you’re not allowed to view it", ["{action}=paper:view", "{not_found}"]],
+    ["permission_error", "<0>{Submission} #{pid} does not exist, or you’re not allowed to view it", ["{action}=paper:view", "{not_found}", "{pid}"]],
     ["permission_error", "<0>You aren’t allowed to view {submission} #{pid}", ["{action}=paper:view"]],
     ["permission_error", "<0>You aren’t allowed to view {submission} #{pid}’s documents", ["{action}=document:view"]],
     ["permission_error", "<0>You aren’t allowed to view reviews for {submission} #{pid}", ["{action}=review:view"]],
+    ["permission_error", "<0>Review does not exist, or you’re not allowed to view it", ["{action}=review:view", "{not_found}"]],
     ["permission_error", "<0>You aren’t allowed to withdraw {submission} #{pid}", ["{action}=paper:withdraw"]],
     ["permission_error", "<0>You aren’t allowed to request reviews for {submission} #{pid}", ["{action}=review:request"]],
     ["permission_error", "<0>You aren’t allowed to review {submission} #{pid}", ["{action}=review:edit"]],

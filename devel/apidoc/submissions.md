@@ -87,6 +87,11 @@ The API also supports form upload using the parameter conventions of the HotCRP
 web application. These conventions are subject to change, and third-party
 applications should prefer JSON.
 
+The [`GET /paper`](#get-paper) endpoint defaults to truncating word-limited text
+fields at their soft word limits. A field truncated this way (marked `soft`
+under the uploaded JSON‘s `truncated` key) is not saved, and is reported as an
+error. Provide `word_limit=hard` to `GET /paper` to avoid this error.
+
 To test a modification without saving, supply a `dry_run=1` parameter. This
 will test the uploaded JSON but make no visible changes to the database.
 Supply `dry_run=if_warning` to save only if the modification produces no
@@ -123,6 +128,11 @@ This shell session does the same, but using `multipart/form-data`.
 $ curl -H "Authorization: bearer hct_XXX" -F "json=<data.json" -F paper.pdf=@paper.pdf SITEURL/api/paper
 ```
 
+> [!CAUTION]
+> `multipart/form-data` uploads are processed by PHP, which mangles field names
+> containing spaces, periods, and brackets (for instance, `paper.pdf` becomes
+> `paper_pdf`). The example above works, but an upload may fail or have
+> unexpected results if mangled names collide.
 
 ## Administrator use
 
@@ -177,6 +187,10 @@ existing submission, set the submission JSON’s `if_unmodified_since` to
 
     * default true
     * badge admin
+* param ?word_limit =soft|hard: Which word limit applies to long text fields
+  in the returned submission object.
+
+    * default hard
 * response ?dry_run boolean: True for `dry_run` requests.
 * response ?pid pid: ID of the modified or newly created submission.
 * response ?+valid boolean: True if and only if the modification was valid.
@@ -344,6 +358,10 @@ be applied to all papers returned by the `q` search query.
 * param reviewer
 
     * group Search modifiers
+* param ?word_limit =soft|hard: Which word limit applies to long text fields
+  in the returned submission objects.
+
+    * default hard
 * response ?papers [paper]: The modified submission objects.
 
     * condition !dry_run
@@ -413,7 +431,7 @@ Retrieve the share link for a submission. This link can be accessed by users not
 signed in to HotCRP; it grants view-only access to the submission and its
 documents. Only authors and submission administrators can fetch the share link.
 
-* scope submeta:read
+* scope submeta:admin document:read review:read comment:read
 * response ?url: The share link
 * response ?token author_view_token: Token for this share link
 * response ?token_type string: `"author_view"`
@@ -442,7 +460,7 @@ whether a link should be created; it must be one of:
 
 Only authors and submission administrators can modify a share link.
 
-* scope submeta:write
+* scope submeta:admin document:read review:read comment:read
 * param !share share_action
 * param ?expires_in integer
 * response !token ?author_view_token
@@ -457,5 +475,5 @@ Only authors and submission administrators can modify a share link.
 
 Delete the share link for a submission, if any has been created.
 
-* scope submeta:write
+* scope submeta:admin document:read review:read comment:read
 * response !token null

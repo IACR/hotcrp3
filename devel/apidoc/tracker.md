@@ -50,7 +50,7 @@ Return a lightweight snapshot of the meeting tracker for change detection. This
 endpoint requires no authentication, so the poller (and read-only kiosk
 displays) can call it without a session.
 
-* scope other:read
+* scope none
 * response tracker_status string: Compact status token—`<trackerid>@<position>`, or `off` when no tracker is running.
 * response tracker_eventid integer: Counter that increases whenever the tracker changes.
 
@@ -106,16 +106,19 @@ Trackers are configured as a numbered list of structured parameters
 
 * `id`—the tracker’s ID, or `new` to create one.
 * `name`, `logo`—display label and logo.
-* `visibility`, `visibility_type`—who may see the tracker (the whole PC, or a
-  specific PC tag).
+* `visibility`, `visibility_type`—who may see the tracker. `visibility_type` is
+  `all` (the whole PC), `+` or `-` (PC members with or without the tag given
+  in `visibility`), or `none` (administrators only). Alternatively, give
+  `visibility` alone as `all`, `+TAG`, `-TAG`, or `none`. If both are empty
+  or absent, a new tracker gets the default visibility for its submissions’
+  tracks, and an existing tracker keeps its visibility.
 * `hideconflicts`—whether to hide conflicted submissions (paired with a
   `has_tr/<n>/hideconflicts` presence marker).
 * `listinfo`—the encoded submission list the tracker walks.
 * `p`—the submission to position at.
 * `stop`—stop this tracker.
 
-Set `stopall` to stop every tracker at once. (A legacy flat parameter form,
-`tr<n>-<field>`, is also accepted and translated.)
+Set `stopall` to stop every tracker at once.
 
 * scope other:write
 * param ?=stopall boolean: Stop all trackers.

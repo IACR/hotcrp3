@@ -95,6 +95,61 @@ class Tags_Tester {
         xassert_search_all($this->u_chair, "#lotsau", "");
     }
 
+    function test_automatic_tag_formula_references() {
+        $conf = $this->conf;
+        // a value formula may use another automatic tag's value
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "automatic_tag": [
+                {"tag": "nau", "search": "all", "value": "au"},
+                {"tag": "nau1", "search": "all", "value": "#nau + 1"}
+            ]
+        }');
+        xassert($sv->execute());
+        xassert_eqq($conf->checked_paper_by_id(1)->tag_value("nau"), 4.0);
+        xassert_eqq($conf->checked_paper_by_id(1)->tag_value("nau1"), 5.0);
+
+        // but not its own
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "automatic_tag": [{"tag": "nau1", "search": "all", "value": "#nau1 + 1"}]
+        }');
+        xassert(!$sv->execute());
+        xassert_str_contains($sv->full_feedback_text(), "Automatic tag #nau1 refers to itself");
+
+        // nor may its search depend on its own value through a formula
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "automatic_tag": [{"tag": "nau1", "search": "formula:(#nau1 > 0)", "value": "1"}]
+        }');
+        xassert(!$sv->execute());
+        xassert_str_contains($sv->full_feedback_text(), "Automatic tag #nau1 refers to itself");
+
+        // nor may its search depend on a value that depends on its own value
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "automatic_tag": [
+                {"tag": "nau", "search": "#nau1>0", "value": "1"},
+                {"tag": "nau1", "search": "all", "value": "#nau + 1"}
+            ]
+        }');
+        xassert(!$sv->execute());
+        xassert_str_contains($sv->full_feedback_text(), "refers to itself");
+
+        // nor may two value formulas depend on each other
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "automatic_tag": [
+                {"tag": "nau", "search": "all", "value": "#nau1 + 1"},
+                {"tag": "nau1", "search": "all", "value": "#nau + 1"}
+            ]
+        }');
+        xassert(!$sv->execute());
+        xassert_str_contains($sv->full_feedback_text(), "refers to itself");
+
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "automatic_tag": [{"tag": "nau", "delete": true}, {"tag": "nau1", "delete": true}]
+        }');
+        xassert($sv->execute());
+        xassert_search_all($this->u_chair, "#nau", "");
+        xassert_search_all($this->u_chair, "#nau1", "");
+    }
+
     function test_tag_patterns() {
         $sv = new SettingValues($this->u_chair);
         xassert_eqq($sv->oldv("tag_readonly"), "accept pcpaper reject");
@@ -124,6 +179,66 @@ class Tags_Tester {
             "tag_sitewide": ""
         }');
         xassert($sv->execute());
+    }
+
+    function test_wildcard_tag_search() {
+        $tags = [];
+        for ($i = 0; $i !== 20; ++$i) {
+            $tags[] = "~" . str_repeat("a", 60) . "bc" . sprintf("%02d", $i);
+        }
+        xassert_assign($this->u_chair, "paper,tag\n1," . join(" ", $tags) . "\n");
+        xassert_assign($this->u_chair, "paper,tag\n2,~xab ~xbxc\n");
+        try {
+            // results
+            xassert_search($this->u_chair, "#~a*b*c*0*7", [1]);
+            xassert_search($this->u_chair, "#~a*c19", [1]);
+            xassert_search($this->u_chair, "#~a*c2", []);
+            xassert_search($this->u_chair, "#~x*b", [2]);
+            xassert_search($this->u_chair, "#~x*c", [2]);
+            xassert_search($this->u_chair, "#~x*a", []);
+            xassert_search($this->u_chair, "#~*b*c", [2]);
+            xassert_search($this->u_chair, "#~*b*c*", [1, 2]);
+            xassert_search($this->u_chair, "#~x*", [2]);
+            xassert_search($this->u_chair, "#~a_*", []);
+            xassert_search($this->u_chair, "#chair~a*b*c*0*7", [1]);
+            xassert_search($this->u_chair, "#*~a*b*c*0*7", [1]);
+
+            // near misses do not backtrack, in SQL or in PHP
+            $t0 = microtime(true);
+            xassert_search($this->u_chair, "#~a*a*a*a*a*a*b", []);
+            xassert_eqq(count(search_json($this->u_chair, "-#~a*a*a*a*a*a*a*b")),
+                        count(search_json($this->u_chair, "all")));
+            xassert_lt(microtime(true) - $t0, 1.0);
+        } finally {
+            xassert_assign($this->u_chair, "paper,action,tag\n1,cleartag," . join(" ", $tags) . "\n2,cleartag,~xab ~xbxc\n");
+        }
+    }
+
+    function test_tag_pattern_styles() {
+        $old = $this->conf->setting_data("tag_color");
+        $qtag = str_repeat("q", 75) . "y";
+        try {
+            $this->conf->save_refresh_setting("tag_color", 1, "a*b=red q*q*q*q*q*q*q*q*q*q*q*z=blue");
+            $tags = $this->conf->tags();
+            $styled = function ($tag) use ($tags) {
+                return !empty($tags->find($tag)->styles ?? null);
+            };
+            foreach (["abb" => true, "ab" => true, "axbxb" => true, "abc" => false, "ba" => false] as $tag => $match) {
+                xassert_eqq($styled($tag), $match, $tag);
+                xassert_eqq($tags->color_classes(" x#1 {$tag}#2 y#3") === "tag-red tagbg", $match, $tag);
+            }
+            xassert_eqq($tags->color_classes("abb"), "tag-red tagbg");
+            xassert_eqq($tags->color_classes(" 7~abb#1"), "tag-red tagbg");
+
+            $t0 = microtime(true);
+            for ($i = 0; $i !== 200; ++$i) {
+                xassert(!$styled($qtag . $i));
+                xassert_eqq($tags->color_classes(" {$qtag}{$i}#1 {$qtag}x#2"), "");
+            }
+            xassert_lt(microtime(true) - $t0, 1.0);
+        } finally {
+            $this->conf->save_refresh_setting("tag_color", $old === null ? null : 1, $old);
+        }
     }
 
     function test_implicit_tag_patterns() {
@@ -194,6 +309,19 @@ class Tags_Tester {
         xassert_eqq($p1->tag_value("testtag"), 3.0);
 
         xassert_assign($this->u_chair, "action,paper,tag\ntag,1,testtag#clear\n");
+    }
+
+    function test_search_value_ranges() {
+        xassert_assign($this->u_chair, "paper,tag\n1,rangetest#1\n2,rangetest#1.5\n3,rangetest#2\n4,rangetest#5\n5,rangetest#-1\n");
+        xassert_search($this->u_chair, "#rangetest#1..2", "1 2 3");
+        xassert_search($this->u_chair, "#rangetest#1...2", "1 2 3");
+        xassert_search($this->u_chair, "#rangetest#1.-2", "1 2 3");
+        xassert_search($this->u_chair, "#rangetest#1.5-5", "2 3 4");
+        xassert_search($this->u_chair, "#rangetest#1.5..", "2 3 4");
+        xassert_search($this->u_chair, "#rangetest#.5..1.5", "1 2");
+        xassert_search($this->u_chair, "#rangetest=-1..1", "5 1");
+        xassert_assign($this->u_chair, "paper,tag\n1,rangetest#clear\n2,rangetest#clear\n3,rangetest#clear\n4,rangetest#clear\n5,rangetest#clear\n");
+        xassert_search($this->u_chair, "#rangetest", "");
     }
 
     function test_assign_override_conflicts() {
@@ -406,6 +534,111 @@ class Tags_Tester {
         xassert_eqq($p7->tag_value("order"), 5.0);
     }
 
+    function test_next_alternating_with_direct_tags() {
+        // In one assignment file, `seqnexttag` continues after the highest
+        // value the order has at that point, including direct `tag` rows
+        // above it. (`nexttag` is the same, but leaves random gaps.)
+        $root = $this->conf->root_user();
+        xassert_search_all($root, "#altorder", "");
+        $values = function () use ($root) {
+            $v = [];
+            foreach ($root->paper_set(["paperId" => [1, 2, 3, 4, 5, 6]]) as $prow) {
+                $v[$prow->paperId] = $prow->tag_value("altorder");
+            }
+            return $v;
+        };
+
+        xassert_assign($root, "action,paper,tag
+seqnexttag,1,altorder
+tag,2,altorder#10
+seqnexttag,3,altorder
+tag,4,altorder#5
+seqnexttag,5,altorder
+tag,3,altorder#2
+seqnexttag,6,altorder\n");
+        xassert_eqq($values(), [1 => 1.0, 2 => 10.0, 3 => 2.0, 4 => 5.0, 5 => 12.0, 6 => 13.0]);
+
+        // a paper's own value is ignored, so the paper at the end stays there
+        xassert_assign($root, "action,paper,tag\nseqnexttag,6,altorder\n");
+        xassert_eqq($values()[6], 13.0);
+
+        // clearing in the same file lowers the next value
+        xassert_assign($root, "action,paper,tag\ntag,6,altorder#clear\nseqnexttag,1,altorder\n");
+        $v = $values();
+        xassert_eqq($v[6], null);
+        xassert_eqq($v[1], 13.0);
+
+        // `nexttag` lands after the maximum, within its largest gap
+        xassert_assign($root, "action,paper,tag\ntag,2,altorder#20\nnexttag,4,altorder\n");
+        $v4 = $values()[4];
+        xassert($v4 >= 21.0 && $v4 <= 24.0);
+
+        xassert_assign($root, "action,paper,tag\ncleartag,all,altorder\n");
+        xassert_search_all($root, "#altorder", "");
+    }
+
+    function test_next_skips_hidden_papers() {
+        // A PC member's #next/#seqnext and checktag must ignore tag values
+        // on submissions they cannot view (drafts, withdrawn papers).
+        xassert_search_all($this->u_chair, "#nxorder", "");
+        $p3 = $this->conf->checked_paper_by_id(3);
+        $p3_submitted = $p3->timeSubmitted;
+        xassert_gt($p3_submitted, 0);
+
+        // paper 3 becomes a draft, which PC members cannot view
+        $ps = new PaperStatus($this->u_chair);
+        xassert($ps->save_paper_json((object) ["id" => 3, "status" => (object) ["submitted" => false]]));
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_eqq($p3->timeSubmitted, 0);
+        xassert(!$this->u_floyd->can_view_paper($p3));
+
+        // chair places the draft in an order
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,3,nxorder#500\n");
+        $p3->load_tags();
+        xassert_eqq($p3->tag_value("nxorder"), 500.0);
+
+        // `#seqnext` by a PC member must not depend on the hidden value
+        $p2 = $this->conf->checked_paper_by_id(2);
+        $jr = call_api("=tags", $this->u_floyd, ["addtags" => "nxorder#seqnext"], $p2);
+        xassert_eqq($jr->ok, true);
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("nxorder"), 1.0);
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,2,nxorder#clear\n");
+
+        // nor may `checktag` test it
+        xassert_assign($this->u_chair, "action,paper,tag\nchecktag,3,nxorder#500\n");
+        xassert_assign_fail($this->u_chair, "action,paper,tag\nchecktag,3,nxorder#499\n");
+        xassert_assign_fail($this->u_floyd, "action,paper,tag\nchecktag,3,nxorder#500\n");
+        xassert_assign_fail($this->u_floyd, "action,paper,tag\nchecktag,3,nxorder#499\n");
+
+        // same for withdrawn submissions
+        xassert($ps->save_paper_json((object) ["id" => 3, "status" => (object) ["submitted" => true]]));
+        xassert_assign($this->u_chair, "paper,action,notify\n3,withdraw,no\n");
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_lt($p3->timeSubmitted, 0);
+        xassert(!$this->u_floyd->can_view_paper($p3));
+        xassert_eqq($p3->tag_value("nxorder"), 500.0);
+        xassert_assign($this->u_floyd, "action,paper,tag\nseqnexttag,2,nxorder\n");
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("nxorder"), 1.0);
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,2,nxorder#clear\n");
+        xassert_assign_fail($this->u_floyd, "action,paper,tag\nchecktag,3,nxorder#500\n");
+
+        // but the chair, who can view the paper, extends its order
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,2,nxorder#seqnext\n");
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("nxorder"), 501.0);
+
+        xassert_assign($this->u_chair, "paper,action,notify\n3,revive,no\n");
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,all,nxorder#clear\n");
+        xassert_search_all($this->u_chair, "#nxorder", "");
+        $this->conf->qe("update Paper set timeSubmitted=? where paperId=3", $p3_submitted);
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_eqq($p3->timeSubmitted, $p3_submitted);
+        xassert_eqq($p3->timeWithdrawn, 0);
+        xassert($this->u_floyd->can_view_paper($p3));
+    }
+
     function test_copy_tag_pattern() {
         $result = $this->conf->qe("select paperId, tagIndex from PaperTag where tag='fart'");
         xassert_search_all($this->u_chair, "#fart", "1 8 2 3 6 5 4 7");
@@ -468,6 +701,20 @@ class Tags_Tester {
 
         // invalid patterns are caught
         xassert_assign_fail($this->u_chair, "action,paper,tag,new_tag,tag_value\ncopytag,all,{$vcid}*,{$fcid}*,max\n");
+    }
+
+    function test_private_tag_length() {
+        // TAG_MAXLEN applies to the stored tag, including the user prefix
+        $vcid = $this->u_varghese->contactId;
+        $tag = str_repeat("a", TAG_MAXLEN - strlen("{$vcid}~"));
+        xassert_assign($this->u_varghese, "paper,tag\n1,~{$tag}\n");
+        xassert_eqq($this->conf->checked_paper_by_id(1)->tag_value("{$vcid}~{$tag}"), 0.0);
+        xassert_assign_fail($this->u_varghese, "paper,tag\n1,~{$tag}a\n");
+        xassert_assign_fail($this->u_varghese, "paper,tag\n1,{$vcid}~{$tag}a\n");
+        xassert_assign_fail($this->u_chair, "paper,tag\n1,{$vcid}~{$tag}a\n");
+        xassert_assign_fail($this->u_chair, "paper,tag\n1,varghese~{$tag}a\n");
+        xassert_assign($this->u_varghese, "paper,tag\n1,~{$tag}#clear\n");
+        xassert_eqq($this->conf->checked_paper_by_id(1)->tag_value("{$vcid}~{$tag}"), null);
     }
 
     function test_assign_sorted_search() {
@@ -574,7 +821,7 @@ class Tags_Tester {
         xassert_str_contains($pset[1]->viewable_tags($u_huitema), " ~~ch2#");
 
         // varghese is administrator, but can't see chair-hidden or chair-public
-        xassert_search($this->u_varghese, "#~~ch", "");
+        xassert_search_ignore_warnings($this->u_varghese, "#~~ch", "");
         xassert(!$this->u_varghese->can_view_tag_somewhere("~~ch"));
         xassert(!$this->u_varghese->can_edit_tag_somewhere("~~ch"));
         xassert(!$this->u_varghese->can_view_tag($pset[1], "~~ch"));
@@ -587,7 +834,7 @@ class Tags_Tester {
         xassert_not_str_contains($pset[1]->viewable_tags($this->u_varghese), " ~~ch2#");
 
         // guerin is normal user, of course can't see chair
-        xassert_search($u_guerin, "#~~ch", "");
+        xassert_search_ignore_warnings($u_guerin, "#~~ch", "");
         xassert(!$u_guerin->can_view_tag_somewhere("~~ch"));
         xassert(!$u_guerin->can_edit_tag_somewhere("~~ch"));
         xassert(!$u_guerin->can_view_tag($pset[1], "~~ch"));
@@ -606,7 +853,7 @@ class Tags_Tester {
         xassert($this->u_varghese->can_view_tag($pset[1], "ch"));
         xassert($this->u_varghese->can_edit_tag($pset[1], "ch", null, 1));
         xassert_str_contains($pset[1]->viewable_tags($this->u_varghese), " ch#");
-        xassert_search($u_guerin, "#ch", "");
+        xassert_search_ignore_warnings($u_guerin, "#ch", "");
         xassert(!$u_guerin->can_view_tag_somewhere("ch"));
         xassert(!$u_guerin->can_edit_tag_somewhere("ch"));
         xassert(!$u_guerin->can_view_tag($pset[1], "ch"));
@@ -649,7 +896,7 @@ class Tags_Tester {
         xassert($this->u_varghese->can_edit_tag($pset[1], "ch", null, 1));
         xassert($this->u_varghese->can_edit_tag_somewhere("ch"));
         xassert_str_contains($pset[1]->viewable_tags($this->u_varghese), "ch");
-        xassert_search($u_guerin, "#ch", "");
+        xassert_search_ignore_warnings($u_guerin, "#ch", "");
         xassert(!$u_guerin->can_view_tag_somewhere("ch"));
         xassert(!$u_guerin->can_view_tag($pset[1], "ch"));
         xassert(!$u_guerin->can_edit_tag($pset[1], "ch", null, 1));
@@ -708,6 +955,107 @@ class Tags_Tester {
         xassert_assign($u_huitema, "action,paper,tag\ntag,1,~~ch\n", true);
 
         xassert_assign($this->u_chair, "action,paper,tag,user\nclearconflict,1-4,,huitema@bellcore.com\nclearadministrator,4\ncleartag,1-4,~~ch ~~chx\n");
+    }
+
+    function test_add_hidden_tag_no_oracle() {
+        // A PC member who cannot view a hidden tag must get the same
+        // response when “adding” it whether or not the paper already
+        // carries the tag, and whatever its value.
+        $this->conf->save_refresh_setting("tag_hidden", 1, "shortlist");
+        xassert_assign($this->u_chair, "paper,tag\n1,shortlist#2\n2,shortlist#clear\n");
+        $p1 = $this->conf->checked_paper_by_id(1);
+        $p2 = $this->conf->checked_paper_by_id(2);
+        xassert(!$this->u_varghese->can_view_tag($p1, "shortlist"));
+        xassert(!$this->u_varghese->can_view_tag($p2, "shortlist"));
+        xassert($this->u_varghese->can_edit_some_tag($p1));
+        xassert($this->u_varghese->can_edit_some_tag($p2));
+
+        $probes = [[1, "shortlist"], [2, "shortlist"],
+                   [1, "shortlist#1"], [1, "shortlist#2"], [1, "shortlist#3"],
+                   [2, "shortlist#2"], [1, "shortlist#some"], [2, "shortlist#some"]];
+        $feedback = [];
+        foreach ($probes as $pt) {
+            $prow = $this->conf->checked_paper_by_id($pt[0]);
+            $jr = call_api("=tags", $this->u_varghese, ["addtags" => $pt[1]], $prow);
+            xassert_eqq($jr->ok, false);
+            $aset = (new AssignmentSet($this->u_varghese))->parse("paper,action,tag\n{$pt[0]},tag,{$pt[1]}\n");
+            xassert(!$aset->execute());
+            $feedback[] = str_replace("#{$pt[0]}", "#N", $aset->full_feedback_text());
+            $jr = $this->run_tag_list_action($this->u_varghese, "tag/add", (string) $pt[0], $pt[1]);
+            xassert_eqq($jr->content["ok"], false);
+            xassert_eqq($jr->status, 403);
+            $feedback[] = str_replace("#{$pt[0]}", "#N", json_encode($jr->content["message_list"] ?? null));
+        }
+        foreach ([1, 2] as $pid) {
+            $aset = (new AssignmentSet($this->u_varghese))->parse("paper,action,tag\n{$pid},nexttag,shortlist\n");
+            xassert(!$aset->execute());
+            $feedback[] = str_replace("#{$pid}", "#N", $aset->full_feedback_text());
+        }
+        xassert_eqq(count(array_unique($feedback)), 2);
+        xassert_str_contains($feedback[0], "can only be changed by administrators");
+
+        // nothing changed; administrators can still set the tag
+        $p1->load_tags();
+        $p2->load_tags();
+        xassert_eqq($p1->tag_value("shortlist"), 2.0);
+        xassert_eqq($p2->tag_value("shortlist"), null);
+        xassert_assign($this->u_chair, "paper,tag\n2,shortlist#3\n");
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("shortlist"), 3.0);
+
+        xassert_assign($this->u_chair, "action,paper,tag\ncleartag,1-2,shortlist\n");
+        $this->conf->save_refresh_setting("tag_hidden", null);
+    }
+
+    function test_copy_hidden_tag_no_oracle() {
+        // Likewise when copying or moving a visible tag onto a hidden tag,
+        // whatever the value combination; and wildcard copies must not
+        // report hidden source tags.
+        $this->conf->save_refresh_setting("tag_hidden", 1, "shortlist");
+        xassert_assign($this->u_chair, "paper,tag\n1,shortlist#2\n2,shortlist#clear\n1-2,srctest#5\n");
+        $p1 = $this->conf->checked_paper_by_id(1);
+        $p2 = $this->conf->checked_paper_by_id(2);
+        xassert(!$this->u_varghese->can_view_tag($p1, "shortlist"));
+        xassert(!$this->u_varghese->can_view_tag($p2, "shortlist"));
+        xassert($this->u_varghese->can_view_tag($p1, "srctest"));
+        xassert($this->u_varghese->can_view_tag($p2, "srctest"));
+
+        $feedback = [];
+        foreach ([1, 2] as $pid) {
+            foreach (["copytag", "movetag"] as $action) {
+                foreach (["old", "new", "min", "max", "sum"] as $tv) {
+                    $csv = "paper,action,tag,new_tag,tag_value\n{$pid},{$action},srctest,shortlist,{$tv}\n";
+                    $aset = (new AssignmentSet($this->u_varghese))->parse($csv);
+                    xassert(!$aset->execute());
+                    $feedback[] = str_replace("#{$pid}", "#N", $aset->full_feedback_text());
+                    $jr = call_api("=assign", $this->u_varghese, TestQreq::post(["assignments" => $csv]));
+                    xassert_eqq($jr->ok, false);
+                    $feedback[] = str_replace("#{$pid}", "#N", json_encode($jr->message_list ?? null));
+                }
+            }
+            // wildcard source matching only the hidden tag
+            $aset = (new AssignmentSet($this->u_varghese))->parse("paper,action,tag,new_tag\n{$pid},copytag,shortl*,shortm*\n");
+            xassert($aset->execute());
+            xassert_eqq($aset->full_feedback_text(), "");
+        }
+        xassert_eqq(count(array_unique($feedback)), 2);
+        xassert_str_contains($feedback[0], "can only be changed by administrators");
+
+        // nothing changed; administrators can still copy onto the tag
+        $p1->load_tags();
+        $p2->load_tags();
+        xassert_eqq($p1->tag_value("shortlist"), 2.0);
+        xassert_eqq($p2->tag_value("shortlist"), null);
+        xassert_eqq($p1->tag_value("shortmist"), null);
+        xassert_eqq($p1->tag_value("srctest"), 5.0);
+        xassert_eqq($p2->tag_value("srctest"), 5.0);
+        xassert_assign($this->u_chair, "paper,action,tag,new_tag\n2,movetag,srctest,shortlist\n");
+        $p2->load_tags();
+        xassert_eqq($p2->tag_value("shortlist"), 5.0);
+        xassert_eqq($p2->tag_value("srctest"), null);
+
+        xassert_assign($this->u_chair, "action,paper,tag\ncleartag,1-2,shortlist srctest\n");
+        $this->conf->save_refresh_setting("tag_hidden", null);
     }
 
     function test_vote_allotment_exceeded() {
@@ -885,6 +1233,65 @@ class Tags_Tester {
         $this->clear_vote_tags("vwd awd");
     }
 
+    function test_withdraw_hides_votes_from_author() {
+        // Withdrawing a paper removes its PC vote tags as a side effect.
+        // An author withdrawing via api/assign, especially with dry_run,
+        // must not be shown those tags.
+        $this->set_vote_allotment("vwd#2");
+        $this->conf->save_refresh_setting("tag_approval", 1, "awd#0");
+        $sub_withdraw = $this->conf->setting("sub_withdraw");
+        $this->conf->save_refresh_setting("sub_withdraw", 2);
+        $vcid = $this->u_varghese->contactId;
+
+        // sclin is paper 3's contact in the fixture; an earlier tester may
+        // have removed them
+        $u_sclin = $this->conf->checked_user_by_email("sclin@leland.stanford.edu");
+        $was_contact = $this->conf->checked_paper_by_id(3)->has_author($u_sclin);
+        if (!$was_contact) {
+            xassert_assign($this->u_chair, "paper,action,user\n3,contact,sclin@leland.stanford.edu\n");
+        }
+        xassert_assign($this->u_varghese, "action,paper,tag\ntag,3,~vwd#2\ntag,3,~awd\n");
+        xassert_assign($this->u_floyd, "action,paper,tag\ntag,3,~vwd#1\n");
+
+        $p3 = $u_sclin->checked_paper_by_id(3);
+        xassert(!$u_sclin->isPC && $u_sclin->can_withdraw_paper($p3));
+        xassert(!$u_sclin->can_view_tag($p3, "{$vcid}~vwd"));
+
+        // the author's dry run reports only the withdrawal...
+        $req = ["assignments" => "paper,action\n3,withdraw\n", "format" => "json"];
+        $jr = call_api("=assign", $u_sclin, TestQreq::post($req + ["dry_run" => 1]));
+        xassert_eqq($jr->ok, true);
+        xassert_eqq(json_encode($jr->assignments), '[{"pid":3,"action":"withdraw"}]');
+        xassert_eqq($jr->assignment_count, 1);
+        xassert_not_str_contains(json_encode($jr), "~vwd");
+        xassert_not_str_contains(json_encode($jr), "~awd");
+
+        // ...and so does the chair's: system changes are never reported
+        $jr = call_api("=assign", $this->u_chair, TestQreq::post($req + ["dry_run" => 1]));
+        xassert_eqq($jr->ok, true);
+        xassert_eqq(json_encode($jr->assignments), '[{"pid":3,"action":"withdraw"}]');
+
+        // the votes are still removed when the author really withdraws
+        $jr = call_api("=assign", $u_sclin, TestQreq::post($req));
+        xassert_eqq($jr->ok, true);
+        xassert_eqq(json_encode($jr->assignments), '[{"pid":3,"action":"withdraw"}]');
+        MailChecker::clear();
+        $p3 = $this->conf->checked_paper_by_id(3);
+        xassert_gt($p3->timeWithdrawn, 0);
+        xassert_eqq($p3->tag_value("{$vcid}~vwd"), null);
+        xassert_eqq($p3->tag_value("vwd"), null);
+        xassert_eqq($p3->tag_value("awd"), null);
+
+        // restore
+        xassert_assign($this->u_chair, "paper,action,notify\n3,revive,no\n");
+        if (!$was_contact) {
+            xassert_assign($this->u_chair, "paper,action,user\n3,clearcontact,sclin@leland.stanford.edu\n");
+        }
+        $this->conf->save_refresh_setting("sub_withdraw", $sub_withdraw);
+        $this->conf->save_refresh_setting("tag_approval", null);
+        $this->clear_vote_tags("vwd awd");
+    }
+
     function test_vote_allotment_other_user() {
         $this->set_vote_allotment("vother#3");
         $fcid = $this->u_floyd->contactId;
@@ -912,6 +1319,56 @@ class Tags_Tester {
         $this->clear_vote_tags("vother");
     }
 
+    function test_pc_can_view_conflicted_private_tags() {
+        $this->set_vote_allotment("vsee#5");
+        $vcid = $this->u_varghese->contactId;
+        $fcid = $this->u_floyd->contactId;
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,1 4,{$vcid}~vsee#2\ntag,4,{$fcid}~vsee#1\ntag,4,{$vcid}~vmine\n");
+        $p4 = $this->conf->checked_paper_by_id(4);
+        xassert($p4->has_conflict($this->u_varghese));
+        xassert(!$p4->has_conflict($this->u_floyd));
+
+        // conflicted PC normally see none of their private tags
+        xassert(!$this->u_varghese->can_view_tag($p4, "{$vcid}~vsee"));
+        xassert(!$this->u_varghese->can_view_tag($p4, "{$fcid}~vsee"));
+        xassert_search($this->u_varghese, "#~vsee", "1");
+
+        // with `tag_seeall`, they see their own private tags and others'
+        // public per-user votes, as unconflicted PC do
+        $this->conf->save_refresh_setting("tag_seeall", 1);
+        $p4 = $this->conf->checked_paper_by_id(4);
+        xassert($this->u_varghese->can_view_tag($p4, "{$vcid}~vsee"));
+        xassert($this->u_varghese->can_view_tag($p4, "{$vcid}~vmine"));
+        xassert($this->u_varghese->can_view_tag($p4, "{$fcid}~vsee"));
+        xassert($this->u_varghese->can_view_peruser_tag($p4, "vsee"));
+        $vt = $p4->viewable_tags($this->u_varghese);
+        xassert_str_contains($vt, " {$vcid}~vmine#0 {$vcid}~vsee#2 ");
+        xassert_str_contains($vt, " vsee#3");
+        xassert_not_str_contains($vt, "{$fcid}~");
+        xassert_search($this->u_varghese, "#~vsee", "1 4");
+        xassert_search($this->u_varghese, "#~vmine", "4");
+        xassert_search($this->u_varghese, "#floyd~vsee", "4");
+        // but cannot change them
+        xassert(!$this->u_varghese->can_edit_tag($p4, "{$vcid}~vsee", 2, 3));
+
+        // private per-user votes stay private
+        $this->conf->save_refresh_setting("tag_vote_private_peruser", 1);
+        $p4 = $this->conf->checked_paper_by_id(4);
+        xassert($this->u_varghese->can_view_tag($p4, "{$vcid}~vsee"));
+        xassert(!$this->u_varghese->can_view_tag($p4, "{$fcid}~vsee"));
+
+        $this->conf->save_refresh_setting("tag_vote_private_peruser", null);
+        $this->conf->save_refresh_setting("tag_seeall", null);
+        xassert_assign($this->u_chair, "action,paper,tag\ncleartag,4,{$vcid}~vmine\n");
+        $this->clear_vote_tags("vsee");
+    }
+
+    function test_find_having() {
+        $dt = $this->conf->tags();
+        xassert_neqq($dt->find_having("red", TagInfo::TF_STYLE), null);
+        xassert_neqq($dt->find_having(":+1:", TagInfo::TF_EMOJI), null);
+    }
+
     /** @suppress PhanDeprecatedClassConstant */
     function test_flag_values() {
         xassert_eqq(Track::FM_REQUIRED, (1 << Track::HIDDENTAG) | (1 << Track::ADMIN));
@@ -933,5 +1390,244 @@ class Tags_Tester {
         xassert_eqq(TagInfo::TFM_EDIT_RESTRICT, TagInfo::TF_OTHER_PRIVATE | TagInfo::TFM_READONLY | TagInfo::TF_ALLOTMENT | TagInfo::TF_AUTOMATIC);
         xassert_eqq(TagInfo::TF_SITEWIDE, TagInfo::TF_ADMIN_PUBLIC);
         xassert_eqq(TagInfo::TF_CONFLICT_FREE, TagInfo::TF_PC_PUBLIC);
+    }
+
+    function test_vote_tag_with_slash() {
+        // tags may contain `/`, which must not terminate regex delimiters
+        $this->conf->save_refresh_setting("tag_vote", 1, "a/b#2");
+        $this->conf->update_automatic_tags();
+        xassert_assign($this->u_varghese, "paper,tag\n1,+~a/b#1\n");
+        $prow = $this->u_chair->checked_paper_by_id(1);
+        xassert_eqq($prow->tag_value("{$this->u_varghese->contactId}~a/b"), 1.0);
+        // compiled formulas quote the tag correctly, so the vote aggregates
+        xassert_eqq($prow->tag_value("a/b"), 1.0);
+        $f = Formula::make($this->u_chair, "#{$this->u_varghese->contactId}~a/b");
+        xassert($f->ok());
+        $f->prepare();
+        xassert_eqq($f->eval($prow, null), 1.0);
+
+        $qreq = TestQreq::get(["p" => 1, "tag" => "a/b"])->set_user($this->u_chair);
+        $jr = Tags_API::votereport_api($this->u_chair, $qreq, $prow);
+        xassert_eqq($jr["ok"], true);
+        xassert_str_contains($jr["vote_report"], "Varghese");
+
+        $search = new PaperSearch($this->u_chair, "1");
+        $pl = new PaperList("empty", $search);
+        $pl->parse_view("show:tagreport:a/b", ViewCommand::ORIGIN_MAX);
+        xassert_str_contains($pl->table_html(), "Varghese");
+
+        $aset = new AssignmentSet($this->u_varghese);
+        $aset->parse("paper,action,tag\n1,cleartag,~a/b\n");
+        xassert($aset->execute());
+        $this->conf->save_refresh_setting("tag_vote", null);
+        $prow = $this->u_chair->checked_paper_by_id(1);
+        xassert_eqq($prow->tag_value("{$this->u_varghese->contactId}~a/b"), null);
+        xassert_eqq($prow->tag_value("a/b"), null);
+    }
+
+    // showing a tag column the viewer can’t see produces a warning, not a
+    // silently missing column
+    function test_hidden_tag_column_warns() {
+        $this->conf->save_refresh_setting("tag_hidden", 1, "award-paper");
+        $u_pc = $this->conf->checked_user_by_email("lixia@cs.ucla.edu");
+        xassert($u_pc->isPC && !$u_pc->privChair);
+        $search = function ($u, $col) {
+            return call_api("search", $u, ["q" => "1-3", "t" => "s", "format" => "json", "report" => "pl", "f" => "show:{$col}"]);
+        };
+        $j = $search($u_pc, "#award-paper");
+        xassert_eqq($j->ok, true);
+        xassert_eqq($j->fields ?? [], []);
+        xassert_str_contains(json_encode($j->message_list ?? []), "permission to access tag");
+        xassert_eqq(($j->message_list[0]->status ?? null), MessageSet::WARNING);
+        $j = $search($this->u_chair, "#award-paper");
+        xassert_eqq(count($j->fields ?? []), 1);
+        xassert(!isset($j->message_list));
+        $this->conf->save_refresh_setting("tag_hidden", null);
+    }
+
+    // `#UID~tag` columns may name PC members, never other accounts
+    function test_numeric_twiddle_prefix_requires_pc() {
+        $this->set_vote_allotment("vnum#3");
+        $u_nonpc = $this->conf->checked_user_by_email("micke@cdt.luth.se");
+        xassert(!$u_nonpc->isPC);
+        xassert($this->u_floyd->isPC && $this->u_varghese->isPC && !$this->u_varghese->privChair);
+        $search = function ($name) {
+            $j = call_api("search", $this->u_varghese, ["q" => "", "t" => "s", "format" => "json", "report" => "pl", "f" => "show:{$name}"]);
+            return json_encode($j->fields ?? []);
+        };
+        $t = $search("#{$this->u_floyd->contactId}~vnum");
+        xassert_str_contains($t, "Floyd");
+        $t = $search("#{$u_nonpc->contactId}~vnum");
+        xassert_eqq($t, "[]");
+        $this->clear_vote_tags("vnum");
+    }
+    // a hidden tag on a conflicted paper must not choose a THEN group's sort
+    function test_hidden_tag_does_not_choose_sort() {
+        $u_mjh = $this->conf->checked_user_by_email("mjh@isi.edu");
+        $p1 = $this->conf->checked_paper_by_id(1);
+        xassert($p1->has_conflict($u_mjh) && !$u_mjh->can_view_tags($p1));
+        $sorters = function ($u) {
+            $pl = new PaperList("pl", new PaperSearch($u, "1 THEN (1 AND #discuss)"));
+            return array_map(function ($s) { return $s->name; }, $pl->sorters());
+        };
+        xassert_eqq($sorters($u_mjh), ["id"]);
+        xassert_assign($this->u_chair, "paper,action,tag\n1,tag,discuss#2\n");
+        xassert_eqq($sorters($u_mjh), ["id"]);
+        xassert_eqq($sorters($this->u_chair), ["#discuss"]);
+        xassert_assign($this->u_chair, "paper,action,tag\n1,cleartag,discuss\n");
+    }
+
+    function test_remove_leading_wildcard_twiddle_tag() {
+        $conf = $this->conf;
+        $cid = $this->u_chair->contactId;
+        $conf->qe("delete from PaperTag where paperId=1 and (tag=? or tag=?)", "{$cid}~wildfoo", "{$cid}~wildbar");
+
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,1,~wildfoo\ntag,1,~wildbar\n");
+        $p1 = $conf->checked_paper_by_id(1);
+        $p1->load_tags();
+        xassert($p1->has_tag("{$cid}~wildfoo"));
+        xassert($p1->has_tag("{$cid}~wildbar"));
+
+        // regression: a leading-wildcard remove on a user-owned tag (`~*foo`)
+        // must match; a wildcard-regex refactor briefly injected an out-of-place
+        // `\A` after the `user~` prefix, so the remove matched nothing
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,1,~*foo#clear\n");
+        $p1->load_tags();
+        xassert(!$p1->has_tag("{$cid}~wildfoo"));
+        xassert($p1->has_tag("{$cid}~wildbar"));
+
+        xassert_assign($this->u_chair, "action,paper,tag\ntag,1,~wildbar#clear\n");
+    }
+
+    function test_calculate_rank() {
+        // PC members rank papers with a private tag; a chair combines them
+        $pids = [];
+        foreach ($this->u_chair->paper_set(["where" => "timeSubmitted>0"]) as $prow) {
+            if (!$prow->has_conflict($this->u_varghese)
+                && !$prow->has_conflict($this->u_floyd)
+                && count($pids) < 3) {
+                $pids[] = $prow->paperId;
+            }
+        }
+        xassert_eqq(count($pids), 3);
+        [$a, $b, $c] = $pids;
+        xassert_assign($this->u_varghese, "paper,action,tag\n{$a},tag,~crank#1\n{$b},tag,~crank#2\n{$c},tag,~crank#3\n");
+        xassert_assign($this->u_floyd, "paper,action,tag\n{$a},tag,~crank#1\n{$c},tag,~crank#2\n{$b},tag,~crank#3\n");
+
+        $jr = $this->run_tag_list_action($this->u_chair, "tag/calculate_rank", join(" ", $pids), "crank");
+        xassert_eqq($jr->content["ok"], true);
+
+        // both rank $a first, so it ranks first
+        $v = [];
+        foreach ($pids as $pid) {
+            $v[$pid] = $this->conf->checked_paper_by_id($pid)->tag_value("crank");
+            xassert($v[$pid] !== null);
+        }
+        xassert($v[$a] < $v[$b] && $v[$a] < $v[$c]);
+
+        xassert_assign($this->u_chair, "paper,action,tag\nall,cleartag,crank\n");
+        xassert_assign($this->u_varghese, "paper,action,tag\nall,cleartag,~crank\n");
+        xassert_assign($this->u_floyd, "paper,action,tag\nall,cleartag,~crank\n");
+    }
+
+    function test_question_and_exclamation_tags() {
+        // tags may end with `?` and `!`, but `!=` is an operator
+        xassert_assign($this->u_chair, "paper,tag\n1,huh?\n1,wow!#2\n2,wow!#5\n2,what?!\n");
+        $prow = $this->u_chair->checked_paper_by_id(1);
+        xassert_eqq($prow->tag_value("huh?"), 0.0);
+        xassert_eqq($prow->tag_value("wow!"), 2.0);
+        xassert_assign_fail($this->u_chair, "paper,tag\n1,wow!=3\n");
+        xassert_assign_fail($this->u_chair, "paper,tag\n1,wow!2\n");
+        xassert_assign_fail($this->u_chair, "paper,tag\n1,a!b\n");
+        xassert_assign_fail($this->u_chair, "paper,tag\n1,x?y\n");
+        $tagger = new Tagger($this->u_chair);
+        xassert_eqq($tagger->check_syntax("what?!"), "what?!");
+        xassert_eqq($tagger->check_syntax("a!b"), false);
+        xassert_eqq($tagger->check_syntax("x?y"), false);
+
+        xassert_search($this->u_chair, "#huh?", "1");
+        xassert_search($this->u_chair, "#wow!", "1 2");
+        xassert_search($this->u_chair, "#wow!>3", "2");
+        xassert_search($this->u_chair, "#wow!#2", "1");
+        xassert_search($this->u_chair, "#what?!", "2");
+        xassert_search($this->u_chair, "#wow!!=2", "2");
+        xassert_search($this->u_chair, "#wow!=2", "");
+
+        $f = Formula::make($this->u_chair, "#wow!");
+        xassert($f->ok());
+        $f->prepare();
+        xassert_eqq($f->eval($prow, null), 2.0);
+        $f = Formula::make($this->u_chair, "#wow!!=2");
+        xassert($f->ok());
+        $f->prepare();
+        xassert_eqq($f->eval($prow, null), false);
+
+        // a search with no matches suggests the tag
+        $srch = new PaperSearch($this->u_chair, ["q" => "huh?", "t" => "s"]);
+        xassert_eqq($srch->paper_ids(), []);
+        xassert_eqq($srch->alternate_query(), "#huh?");
+
+        xassert_assign($this->u_chair, "paper,action,tag\nall,cleartag,huh?\nall,cleartag,wow!\nall,cleartag,what?!\n");
+    }
+
+    /** @param string $action
+     * @param string $p
+     * @param string $tag
+     * @return JsonResult */
+    private function run_tag_list_action(Contact $user, $action, $p, $tag) {
+        $qreq = TestQreq::post_page("api/searchaction", ["p" => $p, "tag" => $tag])
+            ->set_user($user);
+        $ssel = SearchSelection::make_papers($qreq, $user);
+        $la = ListAction::lookup($action, $user, $qreq, $ssel, ListAction::F_API);
+        xassert($la instanceof ListAction);
+        $jr = $la->run($user, $qreq, $ssel);
+        xassert($jr instanceof JsonResult);
+        return $jr;
+    }
+
+    function test_define_list_action_quoted_tags() {
+        // a quoted tag list is a single invalid tag, so nothing changes
+        xassert_assign($this->u_chair, "paper,tag\n3,keepme\n");
+        foreach (["tag/define", "tag/define_order"] as $action) {
+            foreach (["\"qa qb\"" => false, "\"qa\nall\"" => false, "qa qb" => true] as $tag => $ok) {
+                $jr = $this->run_tag_list_action($this->u_chair, $action, "1 2", $tag);
+                xassert_eqq($jr->content["ok"], $ok);
+                xassert_eqq($this->conf->checked_paper_by_id(2)->has_tag("qa"), $ok);
+                xassert($this->conf->checked_paper_by_id(3)->has_tag("keepme"));
+            }
+            xassert_assign($this->u_chair, "paper,action,tag\nall,cleartag,qa qb\n");
+        }
+        xassert_assign($this->u_chair, "paper,action,tag\n3,cleartag,keepme\n");
+    }
+
+    function test_tag_list_action_formula_values() {
+        // tag values may be formulas containing spaces and commas
+        xassert_assign($this->u_chair, "paper,tag\n3,qa#7\n");
+        $jr = $this->run_tag_list_action($this->u_chair, "tag/define", "1 2", "qa#(1 + 2), qb#(3 * 4)");
+        xassert_eqq($jr->content["ok"], true);
+        $prow = $this->conf->checked_paper_by_id(2);
+        xassert_eqq($prow->tag_value("qa"), 3.0);
+        xassert_eqq($prow->tag_value("qb"), 12.0);
+        xassert(!$this->conf->checked_paper_by_id(3)->has_tag("qa"));
+
+        $jr = $this->run_tag_list_action($this->u_chair, "tag/add", "1 2", "qc#greatest(1,5)");
+        xassert_eqq($jr->content["ok"], true);
+        xassert_eqq($this->conf->checked_paper_by_id(1)->tag_value("qc"), 5.0);
+        xassert_eqq($this->conf->checked_paper_by_id(2)->tag_value("qa"), 3.0);
+
+        xassert_assign($this->u_chair, "paper,action,tag\nall,cleartag,qa qb qc\n");
+    }
+
+    function test_assigntags_response() {
+        $jr = call_api("=assigntags", $this->u_chair, ["tagassignment" => "1 atr#2 2 atr#1"]);
+        xassert_eqq($jr->ok, true);
+        xassert_eqq(count($jr->papers), 2);
+        $tvs = [];
+        foreach ($jr->papers as $pj) {
+            $tvs[$pj->pid] = $pj->tags;
+        }
+        xassert_in_eqq("atr#2", $tvs[1]);
+        xassert_in_eqq("atr#1", $tvs[2]);
+        xassert_assign($this->u_chair, "paper,action,tag\nall,cleartag,atr\n");
     }
 }

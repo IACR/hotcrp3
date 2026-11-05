@@ -19,6 +19,8 @@ class Ht {
     /** @var string */
     public static $img_base = "";
     /** @var string */
+    public static $icons_url = "";
+    /** @var string */
     private static $_script_open = "<script";
     /** @var ?non-empty-string
      * @readonly */
@@ -582,6 +584,27 @@ class Ht {
         return "<a" . self::extra($js) . ">{$html}</a>";
     }
 
+    /** @param string $name
+     * @param array<string,mixed> $js
+     * @return string */
+    static function make_icon($name, $js = []) {
+        if (empty($js)
+            || (!array_key_exists("aria-hidden", $js)
+                && !isset($js["aria-label"])
+                && !isset($js["aria-labelledby"]))) {
+            $js["aria-hidden"] = "true";
+        }
+        return '<svg' . Ht::extra($js) . "><use href=\"" . Ht::escape_attr(self::$icons_url . "#{$name}") . "\" /></svg>";
+    }
+
+    /** @param string $name
+     * @param null|'s'|'m'|'l' $size
+     * @return string */
+    static function make_licon($name, $size = null) {
+        $size = $size ?? "l";
+        return self::make_icon($name, ["class" => "licon licon-{$size}"]);
+    }
+
     /** @return string
      * @deprecated */
     static function link_raw($html, $href, $js = null) {
@@ -603,7 +626,8 @@ class Ht {
     /** @param string $html
      * @return string */
     static function link_urls($html) {
-        return preg_replace('/((?:https?|ftp):\/\/(?:[^\s<>"&]|&amp;)*[^\s<>"().,:;?!&])(["().,:;?!]*)(?=[\s<>&]|\z)/s', '<a href="$1" rel="noreferrer">$1</a>$2', $html);
+        // Linear-time linkifier
+        return preg_replace('/(?<!\w)((?:https?|ftp):\/\/(?:[^\s<>"&().,:;?!]|&amp;|[().,:;?!]++(?=[^\s<>"&().,:;?!]|&amp;))++)([().,:;?!]*+)(?=[\s<>"&]|\z)/s', '<a href="$1" rel="noreferrer">$1</a>$2', $html);
     }
 
     /** @param string $text
@@ -687,52 +711,68 @@ class Ht {
      * @param int $pos2
      * @return array{string,int,int} */
     static function make_mark_substring($s, $pos1, $pos2) {
-        if ($pos1 > strlen($s) || $pos2 > strlen($s)) {
+        if ($pos1 < 0) {
+            return [$s, -1, 0];
+        } else if ($pos1 > strlen($s) || $pos2 > strlen($s)) {
             error_log("bad arguments [{$pos1}, {$pos2}, " . strlen($s) . "]: " . debug_string_backtrace());
             return [$s, 0, 0];
         }
         $pos2 = max($pos1, $pos2);
-        $nl1 = $pos1 > 0 ? strrpos($s, "\n", $pos1 - strlen($s)) : false;
-        $nl2 = strpos($s, "\n", $pos2);
-        $nlx = (($nl1 !== false && $pos1 - $nl1 < 17)
-                || ($nl2 !== false && $nl2 - $pos2 < 24))
-            && $pos2 - $pos1 < 10;
-        if (!$nlx && $nl1 !== false) {
-            $s = substr($s, $nl1 + 1);
-            $pos1 -= $nl1 + 1;
-            $pos2 -= $nl1 + 1;
-            $nl2 -= $nl1 + 1;
+        if (strlen($s) <= 53 && strpos($s, "\n") === false) {
+            return [$s, $pos1, $pos2];
         }
-        if (!$nlx && $nl2 !== false) {
-            $s = substr($s, 0, $nl2);
-        }
-        $pos1x = max(0, min($pos1 - 17, strlen($s) - 64));
-        if ($pos1x > 0) {
-            $pfxlen = $pos1 - $pos1x;
-            while ($pos1x > 0
-                   && UnicodeHelper::utf8_glyphlen(substr($s, $pos1x, $pos1 - $pos1x)) < $pfxlen) {
-                --$pos1x;
+        // create a grapheme cluster analyzer
+        // (analyze() looks at a constant # of bytes, not O(strlen($s)).)
+        $clusters = UnicodeHelper::utf8_clusters($s, $pos1 - 2000, $pos2 + 2000)->analyze();
+        // find left boundary
+        $bpos1 = $clusters->glyphstep($pos1, -17);
+        $nl1 = $bpos1 + strcspn($s, "\n", $bpos1, $pos1 - $bpos1);
+        if ($nl1 !== $pos1) {
+            while (($d = strcspn($s, "\n", $nl1 + 1, $pos1 - $nl1 - 1)) !== $pos1 - $nl1 - 1) {
+                $nl1 += $d + 1;
             }
-            $s = "…" . substr($s, $pos1x);
-            $pos1 -= $pos1x - 3; /* ellipsis character UTF-8 encoding is 3 bytes long */
-            $pos2 -= $pos1x - 3;
         }
-        if ($pos2 - $pos1 > 12) {
-            $lpos = $pos2;
-            $llen = max(64 - $lpos, 12);
-        } else {
-            $lpos = $pos1;
-            $llen = max(64 - $lpos, 24);
-        }
-        if (strlen($s) > $lpos + $llen) {
-            $ml = $llen - 1;
-            while ($lpos + $ml < strlen($s)
-                   && UnicodeHelper::utf8_glyphlen(substr($s, $lpos, $ml)) < $llen - 1) {
-                ++$ml;
+        // find right boundary
+        $hllen = $clusters->glyphlen($pos1, $pos2, 24);
+        $bpos2 = $clusters->glyphstep($pos2, max(12, 36 - $hllen));
+        $nl2 = $pos2 + strcspn($s, "\n", $pos2, $bpos2 - $pos2);
+        // include newline glyphs in result?
+        $shownl = $hllen <= 12 && ($nl1 < $pos1 || $nl2 < $bpos2);
+        // if not showing newlines, broaden to line boundaries
+        if (!$shownl) {
+            if ($nl1 < $pos1) {
+                $bpos1 = $nl1 + 1;
             }
-            $s = substr($s, 0, $lpos + $ml) . "…";
+            if ($nl2 < $bpos2) {
+                $bpos2 = $nl2;
+            }
+            if (($bpos1 === 0 || $s[$bpos1 - 1] === "\n")
+                && $bpos2 !== strlen($s)
+                && $s[$bpos2] !== "\n"
+                && ($xpos2 = $clusters->glyphstep($bpos1, 53)) > $bpos2) {
+                $bpos2 += strcspn($s, "\n", $bpos2, $xpos2 - $bpos2);
+            } else if (($bpos2 === strlen($s) || $s[$bpos2] === "\n")
+                       && $bpos1 !== 0
+                       && $s[$bpos1 - 1] !== "\n"
+                       && ($xpos1 = $clusters->glyphstep($bpos2, -53)) < $bpos1) {
+                while (($d = strcspn($s, "\n", $xpos1, $bpos1 - $xpos1)) < $bpos1 - $xpos1) {
+                    $xpos1 += $d + 1;
+                }
+                $bpos1 = $xpos1;
+            }
         }
-        if ($nlx) {
+        // substring + ellipses if line continues
+        if ($bpos1 !== 0 || $bpos2 !== strlen($s)) {
+            $leftdots = $bpos1 > 0 && $s[$bpos1 - 1] !== "\n";
+            $rightdots = $bpos2 < strlen($s) && $s[$bpos2] !== "\n";
+            $s = ($leftdots ? "…" : "")
+                . substr($s, $bpos1, $bpos2 - $bpos1)
+                . ($rightdots ? "…" : "");
+            $shift = $leftdots ? $bpos1 - 3 /* ellipsis */ : $bpos1;
+            $pos1 -= $shift;
+            $pos2 -= $shift;
+        }
+        if ($shownl) {
             $s0 = str_replace("\n", "⏎", substr($s, 0, $pos1));
             $s1 = str_replace("\n", "⏎", substr($s, $pos1, $pos2 - $pos1));
             $s2 = str_replace("\n", "⏎", substr($s, $pos2));
@@ -747,16 +787,18 @@ class Ht {
      * @param ?int $status
      * @return string */
     static function mark_substring($s, $pos1, $pos2, $status = 2) {
-        list($s, $pos1, $pos2) = self::make_mark_substring($s, $pos1, $pos2);
+        [$s, $pos1, $pos2] = self::make_mark_substring($s, $pos1, $pos2);
+        if ($pos1 < 0) {
+            return self::escape_text($s);
+        }
         $h0 = self::escape_text(substr($s, 0, $pos1));
         $h1 = self::escape_text(substr($s, $pos1, $pos2 - $pos1));
         $h2 = self::escape_text(substr($s, $pos2));
         $k = $status > 1 ? "is-error" : "is-warning";
         if ($pos2 > $pos1 + 2) {
             return "{$h0}<span class=\"context-mark {$k}\">{$h1}</span>{$h2}";
-        } else {
-            return "{$h0}<span class=\"context-caret-mark {$k}\">{$h1}</span>{$h2}";
         }
+        return "{$h0}<span class=\"context-caret-mark {$k}\">{$h1}</span>{$h2}";
     }
 
     /** @param string $s
@@ -765,7 +807,10 @@ class Ht {
      * @param string $indent
      * @return string */
     static function mark_substring_text($s, $pos1, $pos2, $indent = "") {
-        list($s, $pos1, $pos2) = self::make_mark_substring($s, $pos1, $pos2);
+        [$s, $pos1, $pos2] = self::make_mark_substring($s, $pos1, $pos2);
+        if ($pos1 < 0) {
+            return $s . "\n";
+        }
         $i0 = str_repeat(" ", UnicodeHelper::utf8_glyphlen(substr($s, 0, $pos1)));
         $gl1 = UnicodeHelper::utf8_glyphlen(substr($s, $pos1, $pos2 - $pos1));
         $x = strtr($s, "\n", " ");

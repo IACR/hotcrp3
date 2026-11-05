@@ -91,6 +91,126 @@ class UserStatus_Tester {
         $this->conf->invalidate_caches("users", "pc");
     }
 
+    function test_unlistedpc_new_account_mail() {
+        $email = "unlisted-welcome@_.com";
+        $this->conf->qe("delete from ContactInfo where email=?", $email);
+        $this->conf->invalidate_caches("users", "pc");
+        $npreps = count(MailChecker::$preps);
+
+        $us = (new UserStatus($this->conf->root_user()))->set_notify(true);
+        $acct = $us->save_user((object) ["email" => $email, "roles" => ["unlistedpc"]]);
+        xassert(!!$acct, $us->full_feedback_text());
+        $preps = array_splice(MailChecker::$preps, $npreps);
+        xassert_eqq(count($preps), 1);
+        xassert_str_contains($preps[0]->subject, "Welcome to the program committee");
+
+        $this->conf->qe("delete from ContactInfo where email=?", $email);
+        $this->conf->invalidate_caches("users", "pc");
+    }
+
+    function test_listed_and_unlisted_pc_is_listed() {
+        // an account is never both listed and unlisted PC; listed wins
+        $conf = $this->conf;
+        $root = $conf->root_user();
+        $email = "listedunlisted@_.com";
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $conf->invalidate_caches("users", "pc");
+        $us = new UserStatus($root);
+        xassert(!!$us->save_user((object) ["email" => $email, "roles" => ["unlistedpc"]]));
+        $set_db = function ($roles) use ($conf, $email) {
+            $conf->qe("update ContactInfo set roles=? where email=?", $roles, $email);
+            $conf->invalidate_caches("users", "pc");
+            return $conf->checked_user_by_email($email);
+        };
+        $db = function () use ($conf, $email) {
+            return $conf->fetch_ivalue("select roles from ContactInfo where email=?", $email);
+        };
+        $PC = Contact::ROLE_PC;
+        $UPC = Contact::ROLE_UNLISTEDPC;
+        $ADMIN = Contact::ROLE_ADMIN;
+        $CHAIR = Contact::ROLE_CHAIR;
+
+        xassert_eqq(Contact::normalize_roles($PC | $UPC), $PC);
+        xassert_eqq(Contact::normalize_roles($CHAIR), $PC | $CHAIR);
+        xassert_eqq(Contact::normalize_roles($CHAIR | $UPC), $PC | $CHAIR);
+        xassert_eqq(Contact::normalize_roles($UPC | $ADMIN), $UPC | $ADMIN);
+
+        // a merge that keeps existing roles
+        $set_db($UPC);
+        $us = (new UserStatus($root))->set_if_empty(UserStatus::IF_EMPTY_MOST);
+        $u = $us->save_user((object) ["email" => $email, "roles" => ["pc"]]);
+        xassert_eqq($u->roles & Contact::ROLE_DBMASK, $PC);
+        xassert_eqq($db(), $PC);
+
+        // a sysadmin who can't drop their own privileges
+        $u = $set_db($UPC | $ADMIN);
+        $us = new UserStatus($u);
+        $us->no_deprivilege_self = true;
+        $u = $us->save_user((object) ["email" => $email, "roles" => ["pc"]]);
+        xassert_eqq($db(), $PC | $ADMIN);
+
+        // adding PC through a property change (e.g., OAuth role mapping)
+        $u = $set_db($UPC);
+        $u->set_prop("roles", $u->roles | $PC);
+        $u->save_prop();
+        xassert_eqq($u->roles & Contact::ROLE_DBMASK, $PC);
+        xassert_eqq($db(), $PC);
+
+        // ...even if the database changed underneath
+        $u = $set_db(0);
+        $conf->qe("update ContactInfo set roles=? where email=?", $UPC, $email);
+        $u->set_prop("roles", $PC);
+        $u->save_prop();
+        xassert_eqq($db(), $PC);
+
+        // saving roles directly (e.g., merging accounts)
+        $u = $set_db($UPC);
+        $u->save_roles($u->roles | $PC, $root);
+        xassert_eqq($u->roles & Contact::ROLE_DBMASK, $PC);
+        xassert_eqq($db(), $PC);
+        $u = $set_db(0);
+        $conf->qe("update ContactInfo set roles=? where email=?", $UPC, $email);
+        $u->save_roles($PC, $root);
+        xassert_eqq($db(), $PC);
+
+        // stored conflicts are invariant violations
+        $set_db($PC | $UPC);
+        $ci = new ConfInvariants($conf);
+        $ci->buffer_messages();
+        xassert(!$ci->check_users()->ok());
+        xassert_str_contains($ci->take_buffered_messages(), $email);
+
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $conf->invalidate_caches("users", "pc");
+    }
+
+    function test_role_tags_recognized_but_not_listed() {
+        // role tags name PC subsets wherever a PC tag is expected, but they
+        // are not user tags, so tag lists omit them
+        $conf = $this->conf;
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $roletags = ["pc", "listedpc", "unlistedpc", "bot"];
+        foreach ($roletags as $t) {
+            xassert($conf->pc_tag_exists($t), $t);
+            xassert($conf->pc_tag_exists(strtoupper($t)), $t);
+        }
+        xassert($conf->pc_tag_exists("red"));
+        xassert(!$conf->pc_tag_exists("nosuchpctag"));
+
+        $tags = array_map("strtolower", $conf->viewable_user_tags($chair));
+        xassert_in_eqq("red", $tags);
+        xassert_eqq(array_values(array_intersect($tags, $roletags)), []);
+        // the PC JSON still offers role tags; the client filters them by field
+        $pcj = $conf->hotcrp_pc_json($chair, 0);
+        $want = array_merge($conf->viewable_user_tags($chair), ["pc", "listedpc", "unlistedpc", "bot"]);
+        $conf->collator()->sort($want);
+        xassert_eqq($pcj->tags, $want);
+
+        // help examples use a real tag
+        $hth = new HelpRenderer(new ComponentSet($chair, ["etc/helptopics.json"]), $chair);
+        xassert_in_eqq(strtolower($hth->meaningful_pc_tag() ?? ""), $tags);
+    }
+
     // The address rule is the invariant everything else rests on, so the
     // boundary cases matter: a domain that merely ends in the reserved one is
     // not the reserved one.
@@ -382,6 +502,58 @@ class UserStatus_Tester {
         $conf->invalidate_caches("users", "pc");
     }
 
+    /** The profile page reopens the last tab, but a link that names the main
+     * tab (e.g. to a section there) stays on it. */
+    function test_profile_remembers_tab() {
+        $conf = $this->conf;
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $qs = new MemoryQsession("profiletab", ["u" => $chair->email]);
+        $visit = function (Contact $u, $args) use ($qs) {
+            $qreq = TestQreq::user_get($u, $args, $qs)->set_page("profile");
+            Qrequest::set_main_request($qreq);
+            $old_test_mode = Navigation::$test_mode;
+            Navigation::$test_mode = 2;
+            ob_start();
+            try {
+                $pp = new Profile_Page($u, $qreq);
+                $pp->handle_request();
+                $pp->print();
+                return null;
+            } catch (Redirection $r) {
+                return $r->url;
+            } catch (PageCompletion $pc) {
+                return null;
+            } finally {
+                ob_end_clean();
+                Navigation::$test_mode = $old_test_mode;
+            }
+        };
+        xassert_eqq($visit($chair, ["t" => "preferences"]), null);
+        // a bare profile link returns to that tab
+        xassert_str_contains($visit($chair, []) ?? "", "preferences");
+        // a link that names the main tab stays there
+        xassert_eqq($visit($chair, ["t" => "main"]), null);
+        xassert_eqq($visit($chair, []), null);
+    }
+
+    /** Choosing a theme previews it, but only on the viewer's own profile. */
+    function test_theme_preview_only_for_self() {
+        $chair = $this->conf->checked_user_by_email("chair@_.com");
+        $render = function (Contact $u) use ($chair) {
+            $us = (new UserStatus($chair))->set_qreq((new Qrequest("GET"))->approve_token());
+            $us->set_user($u);
+            ob_start();
+            $us->print_members("preferences");
+            return ob_get_clean();
+        };
+        $self = $render($chair);
+        xassert_str_contains($self, "name=\"theme\"");
+        xassert_str_contains($self, "js-retheme");
+        $other = $render($this->conf->checked_user_by_email("mgbaker@cs.stanford.edu"));
+        xassert_str_contains($other, "name=\"theme\"");
+        xassert_not_str_contains($other, "js-retheme");
+    }
+
     /** Two actions on the profile page are dead ends for a bot: mail is never
      * sent to one, and its reviews cannot be transferred. Neither is offered. */
     function test_bot_profile_dead_ends() {
@@ -419,6 +591,35 @@ class UserStatus_Tester {
 
         $conf->qe("delete from ContactInfo where email=?", $email);
         $conf->invalidate_caches("users", "pc");
+    }
+
+    /** A token's scope is parsed on every request that presents the token, so
+     * its length is limited, as it is for OAuth clients. A malformed scope is
+     * an error, not an unrestricted token. */
+    function test_token_scope_checked() {
+        $email = "mgbaker@cs.stanford.edu";
+        $uid = $this->conf->checked_user_by_email($email)->contactId;
+        $long = [];
+        for ($i = 1; $i <= 200; ++$i) {
+            $long[] = "read#{$i}";
+        }
+        foreach ([[join(" ", $long), 0], ["read#1 read#2", 1], ["read Paper:read", 0],
+                  ["read \"x\"", 0], ["", 1]] as [$scope, $want]) {
+            $this->conf->qe("delete from Capability where capabilityType=? and contactId=?", TokenInfo::BEARER, $uid);
+            list($u, $qreq) = $this->make_qreq_for($email, [
+                "bearer_token/new/enable" => 1,
+                "bearer_token/new/sites" => "here",
+                "bearer_token/new/scope" => $scope
+            ]);
+            $us = (new UserStatus($u))->set_qreq($qreq);
+            $us->start_update();
+            $us->set_user($u);
+            $us->request_group("");
+            xassert_eqq($us->has_error_at("bearer_token/new/scope"), $want === 0);
+            $us->execute_update();
+            xassert_eqq($this->conf->fetch_ivalue("select count(*) from Capability where capabilityType=? and contactId=?", TokenInfo::BEARER, $uid), $want);
+        }
+        $this->conf->qe("delete from Capability where capabilityType=? and contactId=?", TokenInfo::BEARER, $uid);
     }
 
     /** A chair minting or revoking a bot's credential is an act on someone
@@ -608,7 +809,8 @@ class UserStatus_Tester {
         $this->conf->invalidate_caches("users", "pc");
         $us = new UserStatus($this->conf->root_user());
         $acct = $us->save_user((object) ["email" => $email, "roles" => ["unlistedpc"],
-                                         "firstName" => "Unlisted", "lastName" => "Visitor"]);
+                                         "firstName" => "Unlisted", "lastName" => "Visitor",
+                                         "affiliation" => "Luleå University of Technology"]);
         xassert(!!$acct, $us->full_feedback_text());
         $this->conf->invalidate_caches("users", "pc");
         $uid = $acct->contactId;
@@ -648,8 +850,232 @@ class UserStatus_Tester {
             xassert_eqq($rh !== "", $sees, $viewer->email);
         }
 
+        // ...as does an author's potential-conflict list (the author's paper
+        // shares the unlisted member's affiliation)
+        $prow = $this->conf->checked_paper_by_id(2);
+        xassert($prow->has_author($au));
+        xassert(!!$prow->potential_conflict_list($acct));
+        $jr = call_api("potentialconflicts", $au, TestQreq::get(["p" => 2]));
+        xassert_eqq($jr->ok, true);
+        foreach ($jr->potential_conflicts as $pcj) {
+            xassert_neqq($pcj->email, $email);
+        }
+
         $this->conf->qe("delete from ContactInfo where email=?", $email);
         $this->conf->invalidate_caches("users", "pc");
+    }
+
+    // `make_cset` searches only the supplied set. An empty set matches
+    // nothing; it must not fall back to searching the whole user table.
+    function test_contactsearch_empty_cset() {
+        $conf = $this->conf;
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $estrin = $conf->checked_user_by_email("estrin@usc.edu");
+        $puneet = $conf->checked_user_by_email("puneet@catarina.usc.edu"); // non-PC
+        xassert($estrin->isPC);
+        xassert(!$puneet->isPC);
+
+        // a populated set resolves as expected
+        $cs = ContactSearch::make_cset("Estrin", $chair, $conf->pc_members());
+        xassert_eqq($cs->user_ids(), [$estrin->contactId]);
+        $cs = ContactSearch::make_cset("puneet@catarina.usc.edu", $chair, $conf->pc_members());
+        xassert_eqq($cs->user_ids(), []);
+
+        // an empty set resolves nothing, whether by name, by email, or via
+        // the `anonymous` shortcut
+        foreach (["Estrin", "estrin@usc.edu", "Sharma", "puneet@catarina.usc.edu", "anonymous", "chair@_.com"] as $text) {
+            $cs = ContactSearch::make_cset($text, $chair, []);
+            xassert_eqq($cs->user_ids(), [], $text);
+            xassert($cs->is_empty(), $text);
+            xassert(!$cs->resolved_unique(), $text);
+        }
+    }
+
+    function test_contactsearch_many_words() {
+        $conf = $this->conf;
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $floyd = $conf->checked_user_by_email("floyd@ee.lbl.gov");
+        xassert_eqq(ContactSearch::make_pc("floyd sally", $chair)->user_ids(), [$floyd->contactId]);
+        xassert_eqq(ContactSearch::make_pc("floyd sally nobody", $chair)->user_ids(), []);
+    }
+
+    // A name with very many words matches no one, quickly and without
+    // `preg_match` warnings.
+    #[RequirePhp("8.5")]
+    function test_contactsearch_many_words_complexity() {
+        $chair = $this->conf->checked_user_by_email("chair@_.com");
+        $t0 = microtime(true);
+        $cs = ContactSearch::make_pc("floyd" . str_repeat(" sally", 20000), $chair);
+        xassert_eqq($cs->user_ids(), []);
+        xassert_lt(microtime(true) - $t0, 1.0);
+    }
+
+    function test_contactsearch_email_wildcards() {
+        $conf = $this->conf;
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $floyd = $conf->checked_user_by_email("floyd@ee.lbl.gov");
+        $mjh = $conf->checked_user_by_email("mjh@isi.edu");
+        $cset = [$floyd->contactId => $floyd, $mjh->contactId => $mjh];
+        foreach (["fl*@*lbl*" => [$floyd], "*floyd@ee.lbl.gov" => [$floyd],
+                  "FL**D@**.gov" => [$floyd], "*@isi.edu" => [$mjh],
+                  "*.*" => [$floyd, $mjh], "*lbl*" => [$floyd],
+                  // wildcard email words match whole addresses
+                  "fl*@*lbl" => [], "loyd@*" => [], "lbl*" => [], "ee*" => [],
+                  "*@" => [], "fl*\xC3@*" => []] as $pat => $expected) {
+            $ids = ContactSearch::make_cset($pat, $chair, $cset)->user_ids();
+            sort($ids);
+            $xids = array_map(function ($u) { return $u->contactId; }, $expected);
+            sort($xids);
+            xassert_eqq($ids, $xids, $pat);
+        }
+    }
+
+    function test_contactsearch_email_wildcards_complexity() {
+        $chair = $this->conf->checked_user_by_email("chair@_.com");
+        $t0 = microtime(true);
+        for ($i = 0; $i !== 20; ++$i) {
+            xassert_eqq(ContactSearch::make_pc("********@", $chair)->user_ids(), []);
+        }
+        xassert_eqq(ContactSearch::make_pc(str_repeat("*", 5000) . "zzq", $chair)->user_ids(), []);
+        xassert_lt(microtime(true) - $t0, 1.0);
+    }
+
+    // `secretPC` hides the PC from everyone outside it; `privatePC` hides it
+    // from non-PC users. ContactSearch and the viewable PC list obey both.
+    function test_secret_and_private_pc() {
+        $conf = $this->conf;
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $pc = $conf->checked_user_by_email("lixia@cs.ucla.edu");
+        $au = $conf->checked_user_by_email("micke@cdt.luth.se");
+        $estrin = $conf->checked_user_by_email("estrin@usc.edu");
+        xassert(!$au->isPC);
+        xassert($pc->isPC && !$pc->privChair);
+        xassert(!$conf->opt("secretPC") && !$conf->opt("privatePC"));
+
+        $probe = function (Contact $viewer, $sees) use ($conf, $estrin) {
+            xassert_eqq($viewer->can_view_pc(), $sees, $viewer->email);
+            xassert_eqq(isset($conf->viewable_pc_members($viewer)[$estrin->contactId]), $sees, $viewer->email);
+            xassert_eqq($viewer->viewable_roles_mask() !== 0, $sees, $viewer->email);
+            foreach (["pc", "estrin@usc.edu", "Estrin", "chair"] as $text) {
+                $ids = ContactSearch::make_pc($text, $viewer)->user_ids();
+                xassert_eqq(!empty($ids), $sees, "{$viewer->email} {$text}");
+            }
+            $ids = ContactSearch::make_special("pc", $viewer)->user_ids();
+            xassert_eqq(!empty($ids), $sees, $viewer->email);
+            $ids = ContactSearch::make_cset("Estrin", $viewer, $conf->viewable_pc_members($viewer))->user_ids();
+            xassert_eqq(!empty($ids), $sees, $viewer->email);
+        };
+
+        // default: the PC is public
+        $probe($chair, true);
+        $probe($pc, true);
+        $probe($au, true);
+
+        // privatePC: hidden from non-PC users only
+        $conf->set_opt("privatePC", true);
+        Contact::update_rights();
+        $probe($chair, true);
+        $probe($pc, true);
+        $probe($au, false);
+        $conf->set_opt("privatePC", null);
+
+        // secretPC: hidden from everyone but managers
+        $conf->set_opt("secretPC", true);
+        Contact::update_rights();
+        $probe($chair, true);
+        $probe($pc, false);
+        $probe($au, false);
+
+        $conf->set_opt("secretPC", null);
+        Contact::update_rights();
+        $probe($pc, true);
+        $probe($au, true);
+    }
+
+    // `F_USERID` resolves numeric contact IDs. A viewer who can enumerate
+    // the PC can name PC-visible users by ID; a chair can name any user,
+    // unless `F_PC` restricts the search to PC-like roles.
+    function test_contactsearch_userid() {
+        $conf = $this->conf;
+        $email = "unlid@_.com";
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $conf->invalidate_caches("users", "pc");
+        $us = new UserStatus($conf->root_user());
+        $acct = $us->save_user((object) ["email" => $email, "roles" => ["unlistedpc"]]);
+        xassert(!!$acct, $us->full_feedback_text());
+        $conf->invalidate_caches("users", "pc");
+
+        $chair = $conf->checked_user_by_email("chair@_.com");
+        $pc = $conf->checked_user_by_email("lixia@cs.ucla.edu");
+        $au = $conf->checked_user_by_email("micke@cdt.luth.se");
+        $estrin = $conf->checked_user_by_email("estrin@usc.edu");
+        $puneet = $conf->checked_user_by_email("puneet@catarina.usc.edu");
+        $unl = $conf->checked_user_by_email($email);
+        xassert($chair->privChair);
+        xassert($pc->isPC && !$pc->privChair);
+        xassert(!$au->isPC && $au->can_view_pc());
+        xassert($estrin->isPC && !$puneet->isPC);
+        xassert_eqq($unl->roles, Contact::ROLE_UNLISTEDPC);
+        $none = $conf->fetch_ivalue("select max(contactId) from ContactInfo") + 1000;
+        $pcflags = ContactSearch::F_USER | ContactSearch::F_PC | ContactSearch::F_USERID;
+        $uflags = ContactSearch::F_USER | ContactSearch::F_USERID;
+
+        $ids = function (Contact $viewer, $flags, $text) {
+            return (new ContactSearch($flags, $text, $viewer))->user_ids();
+        };
+
+        // chair: any user by ID, but only PC-like users under `F_PC`
+        xassert_eqq($ids($chair, $pcflags, (string) $estrin->contactId), [$estrin->contactId]);
+        xassert_eqq($ids($chair, $pcflags, (string) $unl->contactId), [$unl->contactId]);
+        xassert_eqq($ids($chair, $pcflags, (string) $puneet->contactId), []);
+        xassert_eqq($ids($chair, $uflags, (string) $puneet->contactId), [$puneet->contactId]);
+        xassert_eqq($ids($chair, $uflags, (string) $estrin->contactId), [$estrin->contactId]);
+        xassert_eqq($ids($chair, $pcflags, (string) $none), []);
+        xassert_eqq($ids($chair, $uflags, (string) $none), []);
+        xassert_eqq($ids($chair, $uflags, "0"), []);
+
+        // PC member: PC-like users only, `F_PC` or not
+        foreach ([$pcflags, $uflags] as $flags) {
+            xassert_eqq($ids($pc, $flags, (string) $estrin->contactId), [$estrin->contactId]);
+            xassert_eqq($ids($pc, $flags, (string) $unl->contactId), [$unl->contactId]);
+            xassert_eqq($ids($pc, $flags, (string) $chair->contactId), [$chair->contactId]);
+            xassert_eqq($ids($pc, $flags, (string) $puneet->contactId), []);
+            xassert_eqq($ids($pc, $flags, (string) $none), []);
+        }
+
+        // non-PC user on a public PC: listed PC and chairs, not unlisted PC
+        xassert_eqq($ids($au, $pcflags, (string) $estrin->contactId), [$estrin->contactId]);
+        xassert_eqq($ids($au, $pcflags, (string) $chair->contactId), [$chair->contactId]);
+        xassert_eqq($ids($au, $pcflags, (string) $unl->contactId), []);
+        xassert_eqq($ids($au, $pcflags, (string) $puneet->contactId), []);
+        xassert_eqq($ids($au, $uflags, (string) $puneet->contactId), []);
+
+        // lists keep input order and drop unresolvable entries
+        $list = "{$puneet->contactId}, {$estrin->contactId},{$none},{$chair->contactId}";
+        xassert_eqq($ids($chair, $pcflags, $list), [$estrin->contactId, $chair->contactId]);
+        xassert_eqq($ids($chair, $uflags, $list), [$puneet->contactId, $estrin->contactId, $chair->contactId]);
+        xassert_eqq($ids($pc, $uflags, $list), [$estrin->contactId, $chair->contactId]);
+
+        // a supplied set is the universe
+        $cset = $conf->pc_members();
+        $cs = new ContactSearch($uflags, (string) $estrin->contactId, $au, $cset);
+        xassert_eqq($cs->user_ids(), [$estrin->contactId]);
+        $cs = new ContactSearch($uflags, (string) $puneet->contactId, $chair, $cset);
+        xassert_eqq($cs->user_ids(), []);
+        $cs = new ContactSearch($uflags, $list, $chair, $cset);
+        xassert_eqq($cs->user_ids(), [$estrin->contactId, $chair->contactId]);
+
+        // privatePC: non-PC users can’t resolve IDs at all
+        $conf->set_opt("privatePC", true);
+        Contact::update_rights();
+        xassert_eqq($ids($au, $pcflags, (string) $estrin->contactId), []);
+        xassert_eqq($ids($au, $uflags, (string) $chair->contactId), []);
+        xassert_eqq($ids($pc, $pcflags, (string) $estrin->contactId), [$estrin->contactId]);
+        $conf->set_opt("privatePC", null);
+        Contact::update_rights();
+
+        $conf->qe("delete from ContactInfo where email=?", $email);
+        $conf->invalidate_caches("users", "pc");
     }
 
     function test_edit_own_password() {
@@ -667,6 +1093,83 @@ class UserStatus_Tester {
         xassert($us->execute_update());
 
         xassert($us->user->check_password($newpw));
+    }
+
+    function test_edit_own_password_binary() {
+        // new passwords must be UTF-8...
+        list($u, $qreq) = $this->make_qreq_for("estrin@usc.edu");
+        $newpw = "m\xE4ksdfnqw!";
+        $qreq->set_b("upassword", $newpw)->set_b("upassword2", $newpw);
+        $us = (new UserStatus($u))->set_qreq($qreq);
+        $us->start_update()->set_user($u);
+        $us->request_group("");
+        xassert_eqq($us->jval->new_password ?? null, null);
+        xassert_str_contains($us->full_feedback_text(), "Invalid UTF-8");
+
+        // ...but older passwords might not be, and are checked as raw bytes
+        $oldpw = $u->check_password("MAKsdfnqw") ? "MAKsdfnqw" : "maksdfnqw";
+        $u->change_password($newpw);
+        $this->conf->invalidate_caches("users");
+        $qreq = TestQreq::post(["email" => "estrin@usc.edu", "password" => $newpw])
+            ->set_user(Contact::make($this->conf))->set_page("signin");
+        $info = LoginHelper::login_info($this->conf, $qreq);
+        xassert_eqq($info["ok"], true);
+        xassert(!$this->conf->fresh_user_by_email("estrin@usc.edu")->check_password("m\u{E4}ksdfnqw!"));
+        $u->change_password($oldpw);
+        $this->conf->invalidate_caches("users");
+    }
+
+    function test_edit_own_password_validation() {
+        $cases = [
+            ["ééééé", "Password too short"],
+            ["abcdefg\xff", "Invalid UTF-8"],
+            [str_repeat("a", 73), "Password too long"],
+            [str_repeat("密", 25), "Password too long"],
+            ["éééééé", null]
+        ];
+        foreach ($cases as $c) {
+            list($u, $qreq) = $this->make_qreq_for("estrin@usc.edu");
+            $qreq->set_b("upassword", $c[0])->set_b("upassword2", $c[0]);
+            $us = (new UserStatus($u))->set_qreq($qreq);
+            $us->start_update()->set_user($u);
+            $us->request_group("");
+            if ($c[1] === null) {
+                xassert_eqq($us->jval->new_password ?? null, $c[0]);
+                xassert(!$us->has_problem_at("password"));
+            } else {
+                xassert_eqq($us->jval->new_password ?? null, null);
+                xassert_str_contains($us->feedback_text_at("password"), $c[1]);
+            }
+        }
+    }
+
+    function test_json_new_password_validation() {
+        $email = "estrin@usc.edu";
+        $oldpw = "kwmdsfanq";
+        $this->conf->fresh_user_by_email($email)->change_password($oldpw);
+        list($u, $qreq) = $this->make_qreq_for($email);
+        $cases = [
+            [" lead", "spaces"],
+            ["trail ", "spaces"],
+            ["", "Password too short"],
+            ["ééééé", "Password too short"],
+            ["abcdefg\xff", "Invalid UTF-8"],
+            [str_repeat("a", 73), "Password too long"]
+        ];
+        foreach ($cases as $c) {
+            $us = (new UserStatus($u))->set_qreq($qreq);
+            $us->start_update((object) ["email" => $email, "new_password" => $c[0]])->set_user($u);
+            xassert(!$us->execute_update());
+            xassert_str_contains($us->feedback_text_at("password"), $c[1]);
+            $u2 = $this->conf->fresh_user_by_email($email);
+            xassert($u2->check_password($oldpw));
+        }
+
+        $newpw = "maksdfnqw";
+        $us = (new UserStatus($u))->set_qreq($qreq);
+        $us->start_update((object) ["email" => $email, "new_password" => $newpw])->set_user($u);
+        xassert($us->execute_update());
+        xassert($this->conf->fresh_user_by_email($email)->check_password($newpw));
     }
 
     static function reauth_query($qreq, $email, $bound) {
@@ -993,13 +1496,20 @@ class UserStatus_Tester {
 
     function test_long_collaborators() {
         list($u, $qreq) = $this->make_qreq_for("estrin@usc.edu");
-        $cl = join("\n", array_fill(0, 1024, "Judy Estrin (Packet Design, LLC)"));
+        $cl = join("\n", array_fill(0, 950, "Judy Estrin (Packet Design, LLC)"))
+            . "\nMikael Degermark (Luleå University of Technology)";
+        xassert_lt(strlen($cl), 32768);
         $qreq->collaborators = $cl;
         $us = (new UserStatus($u))->set_qreq($qreq);
         $us->start_update()->set_user($u);
         $us->request_group("");
         xassert($us->execute_update());
         xassert_eqq($us->user->collaborators(), $cl);
+
+        // a long collaborator list still finds potential conflicts
+        $u = $this->conf->fresh_user_by_email("estrin@usc.edu");
+        $prow = $this->conf->checked_paper_by_id(2);
+        xassert(!!$prow->potential_conflict_list($u));
     }
 
     function test_collaborators_ifempty() {
@@ -1435,11 +1945,76 @@ class UserStatus_Tester {
         // `preferred_email` is parsed but only saved where the site allows it
         $this->csv_save("email,preferredemail\ncsvt10@_.com,elsewhere@_.com\n");
         $u = $this->conf->fresh_user_by_email("csvt10@_.com");
-        if ($this->conf->allow_preferred_email()) {
+        if ($this->conf->require_preferred_email()) {
             xassert_eqq($u->preferredEmail, "elsewhere@_.com");
         } else {
             xassert_eqq($u->preferredEmail, null);
         }
+    }
+
+    function test_store_does_not_adopt_similar_email() {
+        // the database collation may match these to chair@_.com
+        foreach (["chair\x01@_.com", "cha\u{ED}r@_.com"] as $email) {
+            foreach ([0, Contact::SAVE_ANY_EMAIL] as $flags) {
+                $u = Contact::make_keyed($this->conf, ["email" => $email, "affiliation" => "Elsewhere"]);
+                $nu = $u->store($flags);
+                if ($nu === null) {
+                    continue;
+                }
+                // collations that distinguish the emails create a new account
+                xassert_eqq($flags, Contact::SAVE_ANY_EMAIL);
+                xassert_eqq($nu->email, $email);
+                $this->conf->qe("delete from ContactInfo where contactId=?", $nu->contactId);
+                if (($cdb = $this->conf->contactdb())) {
+                    Dbl::qe($cdb, "delete from ContactInfo where email=binary ?", $email);
+                }
+                $this->conf->invalidate_caches("users");
+            }
+        }
+        xassert_eqq($this->conf->fresh_user_by_email("chair@_.com")->affiliation, "");
+        $u = Contact::make_keyed($this->conf, ["email" => "CHAIR@_.com"])->store();
+        xassert_eqq($u->email, "chair@_.com");
+    }
+
+    function test_preferred_email_requires_external_login() {
+        $email = "newpreferred@_.com";
+        $this->delete_account($email);
+        xassert(!$this->conf->external_login());
+
+        // unslicing the user cache does not change site policy
+        $this->conf->user_by_id(array_key_first($this->conf->pc_members()));
+        xassert(!$this->conf->require_preferred_email());
+
+        // neither creating nor updating an account stores a preferred email
+        foreach (["preferredEmail", "preferred_email"] as $k) {
+            $u = (new UserStatus($this->conf->root_user()))->save_user((object) [
+                "email" => $email, $k => "elsewhere@_.com"
+            ]);
+            xassert(!!$u);
+            xassert_eqq($this->conf->fresh_user_by_email($email)->preferredEmail, null);
+        }
+
+        // a preferred email stored earlier is ignored
+        $this->conf->qe("update ContactInfo set preferredEmail=? where email=?", "elsewhere@_.com", $email);
+        $u = $this->conf->fresh_user_by_email($email);
+        xassert_eqq($u->preferredEmail, "elsewhere@_.com");
+        xassert_eqq($u->delivery_email(), $email);
+        xassert_eqq(MailPreparation::recipient_address($u), $email);
+
+        // external login sites do store it
+        $this->delete_account($email);
+        $old_login_type = $this->conf->opt("loginType");
+        $this->conf->set_opt("loginType", "htauth");
+        xassert($this->conf->require_preferred_email());
+        $u = (new UserStatus($this->conf->root_user()))->save_user((object) [
+            "email" => $email, "preferredEmail" => "elsewhere@_.com"
+        ]);
+        xassert(!!$u);
+        $u = $this->conf->fresh_user_by_email($email);
+        xassert_eqq($u->preferredEmail, "elsewhere@_.com");
+        xassert_eqq($u->delivery_email(), "elsewhere@_.com");
+        $this->conf->set_opt("loginType", $old_login_type);
+        $this->delete_account($email);
     }
 
     function test_csv_rows_are_independent() {
@@ -1660,5 +2235,148 @@ class UserStatus_Tester {
             Dbl::qe($cdb, "update ContactInfo set cflags=cflags&~? where email?a", Contact::CF_PRIMARY, $emails);
             Dbl::qe($cdb, "delete from ContactPrimary where contactId in (select contactDbId from ContactInfo where email?a)", $emails);
         }
+    }
+
+    /** @param string $email */
+    private function delete_account($email) {
+        $this->conf->qe("delete from ContactInfo where email=?", $email);
+        if (($cdb = $this->conf->contactdb())) {
+            Dbl::qe($cdb, "delete from ContactInfo where email=?", $email);
+        }
+        $this->conf->invalidate_caches("users");
+    }
+
+    function test_long_names_truncated() {
+        $conf = $this->conf;
+        $email = "longname-us@_.com";
+        $this->delete_account($email);
+
+        // over-long fields are truncated to their column widths on save, and
+        // the truncation is reported rather than overflowing the column
+        $us = new UserStatus($conf->root_user());
+        $acct = $us->save_user((object) [
+            "email" => $email,
+            "firstName" => str_repeat("A", 300),
+            "lastName" => str_repeat("B", 300),
+            "affiliation" => str_repeat("C", 3000)
+        ]);
+        xassert(!!$acct);
+        xassert($us->has_problem_at("firstName"));
+        xassert($us->has_problem_at("affiliation"));
+        $u = $conf->fresh_user_by_email($email);
+        xassert_eqq(strlen($u->firstName), 120);
+        xassert_eqq(strlen($u->lastName), 120);
+        xassert_eqq(strlen($u->affiliation), 2048);
+
+        $this->delete_account($email);
+    }
+
+    function test_long_names_truncated_on_create() {
+        $conf = $this->conf;
+        $email = "longname-create@_.com";
+        $this->delete_account($email);
+
+        // creation via make_keyed()->store() assigns names directly, bypassing
+        // set_prop; save_prop must still truncate rather than overflow the column
+        $u = Contact::make_keyed($conf, [
+            "email" => $email,
+            "firstName" => str_repeat("A", 300),
+            "lastName" => str_repeat("B", 300),
+            "affiliation" => str_repeat("C", 3000)
+        ]);
+        xassert(!!$u->store(Contact::SAVE_ANY_EMAIL));
+        $c = $conf->fresh_user_by_email($email);
+        xassert(!!$c);
+        xassert_eqq(strlen($c->firstName), 120);
+        xassert_eqq(strlen($c->lastName), 120);
+        xassert_eqq(strlen($c->affiliation), 2048);
+
+        $this->delete_account($email);
+    }
+
+    function test_json_save_ignores_contact_id() {
+        // a user object's `contactId` can't redirect creation to an existing account
+        $conf = $this->conf;
+        $victim = "jsonvictim@_.com";
+        $email = "jsonnew@_.com";
+        $this->delete_account($victim);
+        $this->delete_account($email);
+        $us = new UserStatus($conf->root_user());
+        $v = $us->save_user((object) ["email" => $victim, "given_name" => "Victim"]);
+        xassert(!!$v);
+
+        $us = new UserStatus($conf->root_user());
+        $u = $us->save_user((object) ["email" => $email, "given_name" => "Other", "contactId" => $v->contactId]);
+        xassert(!!$u);
+        xassert_neqq($u->contactId, $v->contactId);
+        $v = $conf->fresh_user_by_email($victim);
+        xassert_eqq($v->firstName, "Victim");
+        xassert_eqq($conf->fresh_user_by_email($email)->firstName, "Other");
+
+        $this->delete_account($victim);
+        $this->delete_account($email);
+    }
+
+    function test_json_save_rejects_wrong_types() {
+        // values of the wrong type are format errors, not crashes
+        $conf = $this->conf;
+        $email = "jsontypes@_.com";
+        foreach ([["given_name", ["a"]], ["affiliation", (object) []], ["name", [["x"]]],
+                  ["orcid", [1]], ["tags", ["a", 1]], ["change_tags", [["x"]]],
+                  ["bad_follow", 1]] as $kv) {
+            $this->delete_account($email);
+            $us = new UserStatus($conf->root_user());
+            $cj = (object) ["email" => $email];
+            $cj->{$kv[0]} = $kv[1];
+            $us->save_user($cj);
+            if ($kv[0] !== "bad_follow") {
+                xassert_str_contains($us->full_feedback_text(), "Format error", $kv[0]);
+            }
+        }
+        $this->delete_account($email);
+    }
+
+    function test_delete_contact_author_keeps_authorship() {
+        $chair = $this->conf->checked_user_by_email("chair@_.com");
+        $ps = new PaperStatus($chair);
+        xassert($ps->save_paper_json((object) [
+            "id" => "new", "title" => "Deleted contact author", "abstract" => "Abstract",
+            "authors" => [
+                (object) ["email" => "estrin@usc.edu", "name" => "Deborah Estrin"],
+                (object) ["email" => "delauthor@_.com", "name" => "Del Author"]
+            ],
+            "contacts" => [(object) ["email" => "estrin@usc.edu"], (object) ["email" => "delauthor@_.com"]]
+        ]), $ps->full_feedback_text());
+        $pid = $ps->paperId;
+        $u = $this->conf->checked_user_by_email("delauthor@_.com");
+        $cfltq = "select conflictType from PaperConflict where paperId=? and contactId=?";
+        xassert_eqq($this->conf->fetch_ivalue($cfltq, $pid, $u->contactId), CONFLICT_AUTHOR | CONFLICT_CONTACTAUTHOR);
+
+        // deleting a contact author keeps authorship, removes contact status
+        (new UserActions($chair))->delete($u);
+        $u = $this->conf->fresh_user_by_email("delauthor@_.com");
+        xassert($u->is_deleted());
+        xassert_eqq($this->conf->fetch_ivalue($cfltq, $pid, $u->contactId), CONFLICT_AUTHOR);
+        xassert((new ConfInvariants($this->conf))->check_users()->ok());
+    }
+
+    function test_profile_form_converts_to_utf8() {
+        list($u, $qreq) = $this->make_qreq_for("raju@watson.ibm.com", [
+            "firstName" => "Raj\xFA", "affiliation" => "IBM\xFF"
+        ]);
+        $old_first = $u->firstName;
+        $old_aff = $u->affiliation;
+        $us = (new UserStatus($u))->set_qreq($qreq);
+        $us->start_update();
+        $us->set_user($u);
+        $us->request_group("");
+        xassert($us->execute_update(), $us->full_feedback_text());
+        $u = $this->conf->fresh_user_by_email("raju@watson.ibm.com");
+        xassert_eqq($u->firstName, "Rajú");
+        xassert(is_valid_utf8($u->affiliation));
+
+        (new UserStatus($this->conf->root_user()))->save_user((object) [
+            "email" => $u->email, "given_name" => $old_first, "affiliation" => $old_aff
+        ]);
     }
 }

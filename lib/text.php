@@ -14,35 +14,143 @@ class TextTruncation {
     public $truncation_band;
 }
 
+// A text-matching pattern: a PCRE regex, in UTF-8 and (when possible) ASCII
+// forms, or a tree of such patterns combined with any-of or all-of. Patterns
+// whose regexes can only run alone (they use `(*SKIP)`) are never combined
+// into a larger regex; merging them produces a tree instead.
 class TextPregexes {
     /** @var ?string */
-    public $preg_raw;
+    private $preg_raw;
     /** @var string */
-    public $preg_utf8;
-    /** @var ?string */
+    private $preg_utf8;
+    /** @var ?string
+     * @deprecated */
     public $value;
+    /** @var bool */
+    private $_is_merge_and = false;
+    /** @var bool */
+    private $_alone = false;
+    /** @var 0|1|2 */
+    private $_op = 0;
+    /** @var list<TextPregexes> */
+    private $_parts = [];
+
+    const OP_ANY = 1;
+    const OP_ALL = 2;
 
     /** @param ?string $raw
-     * @param string $utf8 */
-    function __construct($raw, $utf8) {
+     * @param string $utf8
+     * @param ?string $value
+     * @param bool $alone */
+    function __construct($raw, $utf8, $value = null, $alone = false) {
         $this->preg_raw = $raw;
         $this->preg_utf8 = $utf8;
+        $this->value = $value;
+        $this->_alone = $alone;
     }
 
-    /** @return TextPregexes */
-    static function make_empty() {
-        return new TextPregexes(null, '(?!)');
+    /** @param ?string $value
+     * @return TextPregexes */
+    static function make_empty($value = null) {
+        return new TextPregexes(null, '(?!)', $value);
     }
 
     /** @return bool */
     function is_empty() {
-        return $this->preg_utf8 === '(?!)';
+        return $this->_op === 0 && $this->preg_utf8 === '(?!)';
+    }
+
+    /** Return true if this pattern is a list of patterns.
+     * @return bool */
+    function is_list() {
+        return $this->_op !== 0;
+    }
+
+    /** Return the regex patterns this pattern comprises.
+     * @return list<TextPregexes> */
+    function leaves() {
+        if ($this->_op === 0) {
+            return [$this];
+        }
+        $l = [];
+        foreach ($this->_parts as $p) {
+            array_push($l, ...$p->leaves());
+        }
+        return $l;
+    }
+
+    /** Return true if the patterns compile. A merge of many patterns can
+     * exceed PCRE's limits.
+     * @return bool */
+    function compiles() {
+        if ($this->_op !== 0) {
+            foreach ($this->_parts as $p) {
+                if (!$p->compiles())
+                    return false;
+            }
+            return true;
+        }
+        $s = "";
+        return @preg_match("{{$this->preg_utf8}}ui", $s) !== false
+            && ($this->preg_raw === null
+                || @preg_match("{{$this->preg_raw}}i", $s) !== false);
+    }
+
+    /** Return the ASCII regex. For a list, the result is for display only.
+     * @return ?string */
+    function preg_raw() {
+        if ($this->_op === 0) {
+            return $this->preg_raw;
+        }
+        $x = [];
+        foreach ($this->_parts as $p) {
+            if (($x[] = $p->preg_raw()) === null)
+                return null;
+        }
+        return $this->unparse_list($x);
+    }
+
+    /** Return the UTF-8 regex. For a list, the result is for display only.
+     * @return string */
+    function preg_utf8() {
+        if ($this->_op === 0) {
+            return $this->preg_utf8;
+        }
+        $x = [];
+        foreach ($this->_parts as $p) {
+            $x[] = $p->preg_utf8();
+        }
+        return $this->unparse_list($x);
+    }
+
+    /** @param list<string> $x
+     * @return string */
+    private function unparse_list($x) {
+        if ($this->_op === self::OP_ANY) {
+            return join("|", $x);
+        }
+        return "\\A(?=[\\s\\S]*" . join(")(?=[\\s\\S]*", $x) . ")";
+    }
+
+    /** @param callable(TextPregexes):bool $f
+     * @return bool */
+    private function match_parts($f) {
+        $any = $this->_op === self::OP_ANY;
+        foreach ($this->_parts as $p) {
+            if ($f($p) === $any)
+                return $any;
+        }
+        return !$any;
     }
 
     /** @param string $text
      * @return bool */
     function match_raw($text) {
-        if ($this->preg_raw === null) {
+        if ($this->_op !== 0) {
+            return $this->match_parts(function ($p) use ($text) {
+                return $p->match_raw($text);
+            });
+        } else if ($this->preg_raw === null) {
             return !!preg_match("{{$this->preg_utf8}}ui", $text);
         }
         return !!preg_match("{{$this->preg_raw}}i", $text);
@@ -51,9 +159,26 @@ class TextPregexes {
     /** @param string $text
      * @return bool */
     function match($text) {
-        if ($this->preg_raw === null) {
+        $text_da = false;
+        return $this->match_lazy_da($text, $text_da);
+    }
+
+    /** @param string $text
+     * @param false|?string &$text_da `UnicodeHelper::maybe_deaccent($text)`,
+     *   or false if not yet computed
+     * @return bool */
+    private function match_lazy_da($text, &$text_da) {
+        if ($this->_op !== 0) {
+            return $this->match_parts(function ($p) use ($text, &$text_da) {
+                return $p->match_lazy_da($text, $text_da);
+            });
+        } else if ($this->preg_raw === null) {
             return !!preg_match("{{$this->preg_utf8}}ui", $text);
-        } else if (($text_da = UnicodeHelper::maybe_deaccent($text)) !== null) {
+        }
+        if ($text_da === false) {
+            $text_da = UnicodeHelper::maybe_deaccent($text);
+        }
+        if ($text_da !== null) {
             return !!preg_match("{{$this->preg_utf8}}ui", $text_da);
         }
         return !!preg_match("{{$this->preg_raw}}i", $text);
@@ -63,7 +188,11 @@ class TextPregexes {
      * @param ?string $text_da
      * @return bool */
     function match_da($text, $text_da) {
-        if ($this->preg_raw === null) {
+        if ($this->_op !== 0) {
+            return $this->match_parts(function ($p) use ($text, $text_da) {
+                return $p->match_da($text, $text_da);
+            });
+        } else if ($this->preg_raw === null) {
             return !!preg_match("{{$this->preg_utf8}}ui", $text);
         } else if ((string) $text_da !== "" && $text_da !== $text) {
             return !!preg_match("{{$this->preg_utf8}}ui", $text_da);
@@ -75,7 +204,11 @@ class TextPregexes {
      * @param bool $isna
      * @return bool */
     function match_isna($text, $isna) {
-        if ($this->preg_raw === null) {
+        if ($this->_op !== 0) {
+            return $this->match_parts(function ($p) use ($text, $isna) {
+                return $p->match_isna($text, $isna);
+            });
+        } else if ($this->preg_raw === null) {
             return !!preg_match("{{$this->preg_utf8}}ui", $text);
         } else if ($isna) {
             return !!preg_match("{{$this->preg_utf8}}ui", UnicodeHelper::deaccent($text));
@@ -83,12 +216,58 @@ class TextPregexes {
         return !!preg_match("{{$this->preg_raw}}i", $text);
     }
 
+    /** @deprecated */
     function add_matches(TextPregexes $r) {
+        return $this->merge_any($r);
+    }
+
+    /** @return bool */
+    private function combinable() {
+        return $this->_op === 0 && !$this->_alone;
+    }
+
+    private function adopt(TextPregexes $r) {
+        $this->preg_utf8 = $r->preg_utf8;
+        $this->preg_raw = $r->preg_raw;
+        $this->_is_merge_and = $r->_is_merge_and;
+        $this->_alone = $r->_alone;
+        $this->_op = $r->_op;
+        $this->_parts = $r->_parts;
+    }
+
+    /** @param 1|2 $op */
+    private function merge_list($op, TextPregexes $r) {
+        if ($this->_op !== $op) {
+            $self = clone $this;
+            $this->preg_utf8 = "";
+            $this->preg_raw = null;
+            $this->_is_merge_and = $this->_alone = false;
+            $this->_op = $op;
+            $this->_parts = [$self];
+        }
+        foreach ($r->_op === $op ? $r->_parts : [$r] as $p) {
+            // combinable patterns share one regex
+            if ($p->combinable()) {
+                foreach ($this->_parts as $i => $q) {
+                    if ($q->combinable()) {
+                        $q = clone $q;
+                        $op === self::OP_ANY ? $q->merge_any($p) : $q->merge_all($p);
+                        $this->_parts[$i] = $q;
+                        continue 2;
+                    }
+                }
+            }
+            $this->_parts[] = clone $p;
+        }
+    }
+
+    function merge_any(TextPregexes $r) {
         if ($r->is_empty()) {
             // do nothing
         } else if ($this->is_empty()) {
-            $this->preg_utf8 = $r->preg_utf8;
-            $this->preg_raw = $r->preg_raw;
+            $this->adopt($r);
+        } else if (!$this->combinable() || !$r->combinable()) {
+            $this->merge_list(self::OP_ANY, $r);
         } else {
             $this->preg_utf8 .= "|{$r->preg_utf8}";
             if ($r->preg_raw === null) {
@@ -96,20 +275,43 @@ class TextPregexes {
             } else if ($this->preg_raw !== null) {
                 $this->preg_raw .= "|{$r->preg_raw}";
             }
+            $this->_is_merge_and = false;
+        }
+    }
+
+    private function wrap_all($s) {
+        if ($this->_is_merge_and) {
+            return substr($s, 2);
+        }
+        return "(?=[\\s\\S]*{$s})";
+    }
+
+    function merge_all(TextPregexes $r) {
+        if ($r->is_empty()) {
+            // do nothing
+        } else if ($this->is_empty()) {
+            $this->adopt($r);
+        } else if (!$this->combinable() || !$r->combinable()) {
+            $this->merge_list(self::OP_ALL, $r);
+        } else {
+            if (!$this->_is_merge_and) {
+                $this->preg_utf8 = "\\A" . $this->wrap_all($this->preg_utf8);
+                if ($this->preg_raw !== null) {
+                    $this->preg_raw = "\\A" . $this->wrap_all($this->preg_raw);
+                }
+                $this->_is_merge_and = true;
+            }
+            $this->preg_utf8 .= $r->wrap_all($r->preg_utf8);
+            if ($r->preg_raw === null) {
+                $this->preg_raw = null;
+            } else if ($this->preg_raw !== null) {
+                $this->preg_raw .= $r->wrap_all($r->preg_raw);
+            }
         }
     }
 }
 
 class Text {
-    /** @readonly */
-    static private $boring_words = [
-        "a" => true, "an" => true, "as" => true, "be" => true,
-        "by" => true, "did" => true, "do" => true, "for" => true,
-        "in" => true, "is" => true, "of" => true, "on" => true,
-        "the" => true, "this" => true, "through" => true, "to" => true,
-        "with" => true
-    ];
-
     /** @param string $firstName
      * @param string $lastName
      * @param string $email
@@ -150,7 +352,10 @@ class Text {
             $name = UnicodeHelper::deaccent($name);
         }
         if (($flags & NAME_MAILQUOTE) !== 0
-            && preg_match('/[\000-\037()[\]<>@,;:\\".\\\\]/', $name)) {
+            && preg_match('/[\000-\037()[\]%{}<>@,;:".\\\\]|“|”|=\?/', $name)) {
+            // will be processed by MimeText::encode_email_header;
+            // quote MIME special characters, plus characters MimeText
+            // treats specially (curly quotes, Q encoding)
             $name = "\"" . addcslashes($name, '"\\') . "\"";
         }
         if ($email !== "" && ($flags & NAME_E) !== 0) {
@@ -215,7 +420,30 @@ class Text {
             . htmlspecialchars($affiliation) . ")</span>";
     }
 
-    const SUFFIX_REGEX = 'Jr\.?|Sr\.?|Esq\.?|Ph\.?D\.?|M\.?[SD]\.?|Junior|Senior|Esquire|I+|IV|V|VI*|IX|XI*|2n?d|3r?d|[4-9]th|1\dth';
+    const SUFFIX_REGEX = 'Jr\.?+|Sr\.?+|Esq\.?+|Ph\.?+D\.?+|M\.?+[SD]\.?+|Junior|Senior|Esquire|I++|IV|VI*+|IX|XI*+|2n?+d|3r?+d|[4-9]th|1\dth';
+
+    /** @param string $name
+     * @return int */
+    static private function suffix_position($name) {
+        // Return the start of `$name`'s trailing suffixes, i.e., the
+        // leftmost match of `(?:[, ]+(?:SUFFIX_REGEX))*\z`, where suffixes
+        // are limited to 7 bytes. Suffixes contain neither commas nor
+        // spaces, so walk backward suffix by suffix, testing an 8-byte window
+        // each time; the equivalent regex backtracks quadratically on
+        // separator runs.
+        $p = $e = strlen($name);
+        while (true) {
+            $s = max(0, $e - 8);
+            if (!preg_match('/[, ](?:' . self::SUFFIX_REGEX . ')\z/i', substr($name, $s, $e - $s), $m)) {
+                return $p;
+            }
+            $e -= strlen($m[0]);
+            while ($e > 0 && ($name[$e - 1] === "," || $name[$e - 1] === " ")) {
+                --$e;
+            }
+            $p = $e;
+        }
+    }
 
     /** @param string $name
      * @return array{string,string,?string} */
@@ -229,12 +457,12 @@ class Text {
                 /* do nothing */;
             } else if ($name[strlen($name) - 1] === ">"
                        && preg_match('/\A(?:\"(.*?)\"|(.*?))\s*<([^<>]+)>\z/', $name, $m)) {
-                list($name, $email) = [$m[1] . $m[2], $m[3]];
+                [$name, $email] = [$m[1] . $m[2], $m[3]];
             } else if (strpos($name, "@") === false) {
                 /* skip */;
             } else if ($name[0] === "\""
-                       && preg_match('/\A\s*\"(.*)\"\s+(\S+@\S+)\z/', $name, $m)) {
-                list($name, $email) = [$m[1], $m[2]];
+                       && preg_match('/\A\s*\"(.*)\"\s+(\S[^\s@]*+@\S++)\z/', $name, $m)) {
+                [$name, $email] = [$m[1], $m[2]];
             } else if (!preg_match('/\A(.*?)\s+(\S+)\z/', $name, $m)) {
                 return ["", "", trim($name)];
             } else if (strpos($m[2], "@") !== false) {
@@ -255,7 +483,8 @@ class Text {
             $paren = $m[2];
         }
 
-        preg_match('/\A(.*?)((?:[, ]+(?:' . self::SUFFIX_REGEX . '))*)\z/i', $name, $m);
+        $sfxpos = self::suffix_position($name);
+        $m = [$name, substr($name, 0, $sfxpos), substr($name, $sfxpos)];
         if (($comma = strrpos($m[1], ",")) !== false) {
             $ret[0] = ltrim(substr($m[1], $comma + 1));
             $ret[1] = rtrim(substr($m[1], 0, $comma)) . $m[2];
@@ -268,7 +497,7 @@ class Text {
             // see also split_von
             if (strpos($ret[0], " ") !== false
                 && preg_match('/\A(\S.*?)((?: (?:v[ao]n|d[aeiu]|de[nr]|l[ae]|al))+)\z/i', $ret[0], $m)) {
-                list($ret[0], $ret[1]) = [$m[1], ltrim($m[2]) . " " . $ret[1]];
+                [$ret[0], $ret[1]] = [$m[1], ltrim($m[2]) . " " . $ret[1]];
             }
         } else if ($m[1] !== ""
                    && $m[2] !== ""
@@ -342,70 +571,156 @@ class Text {
     }
 
 
-    /** @param string $word
-     * @param bool $literal
-     * @return string */
-    static function word_regex($word, $literal = false) {
-        if ($word === "") {
-            return "";
-        }
-        $aw = ctype_alnum($word[0]);
-        $zw = ctype_alnum($word[strlen($word) - 1]);
-        $sp = $literal ? '\s+' : '(?=\s).*\s';
-        return ($aw ? '\b' : '')
-            . str_replace(" ", $sp, preg_quote($word))
-            . ($zw ? '\b' : '');
-    }
-
-    const UTF8_INITIAL_NONLETTERDIGIT = '(?:\A|(?!\pL|\pN)\X)';
-    const UTF8_INITIAL_NONLETTER = '(?:\A|(?!\pL)\X)';
+    const UTF8_INITIAL_NONLETTERDIGIT = '(?:\A|[^\pL\pN\pM]\pM*+)';
+    const UTF8_INITIAL_NONLETTER = '(?:\A|[^\pL\pM]\pM*+)';
     const UTF8_FINAL_NONLETTERDIGIT = '(?:\z|(?!\pL|\pN)(?=\PM))';
     const UTF8_FINAL_NONLETTER = '(?:\z|(?!\pL)(?=\PM))';
 
-    /** @param string $word
-     * @param bool $literal
-     * @return string */
-    static function utf8_word_regex($word, $literal = false) {
-        if ($word === "") {
-            return "";
+    /** @param string $pattern
+     * @return TextPregexes */
+    static function star_text_pregexes($pattern) {
+        if (!is_valid_utf8($pattern)) {
+            $pattern = convert_to_utf8($pattern);
         }
-        $aw = preg_match('/\A(?:\pL|\pN)/u', $word);
-        $zw = preg_match('/(?:\pL|\pN)\z/u', $word);
-        // Maybe `$word` is not valid UTF-8. Avoid warnings later.
-        if ($aw || $zw || is_valid_utf8($word)) {
-            $sp = $literal ? '(?:\s|\p{Zs})+' : '(?=\s|\p{Zs}).*(?:\s|\p{Zs})';
-            return ($aw ? self::UTF8_INITIAL_NONLETTERDIGIT : '')
-                . str_replace(" ", $sp, preg_quote($word))
-                . ($zw ? self::UTF8_FINAL_NONLETTERDIGIT : '');
+        $words = preg_split('/(?:\s|\pZ)++/us', $pattern, -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($words)) {
+            return TextPregexes::make_empty($pattern);
         }
-        return self::utf8_word_regex(convert_to_utf8($word));
+        $nwords = count($words);
+        $letnum_first = preg_match('/\A(?:\pL|\pN)/u', $words[0]);
+        $letnum_last = preg_match('/(?:\pL|\pN)\z/u', $words[$nwords - 1]);
+
+        $utf8s = [];
+        foreach ($words as $i => $word) {
+            if (strpos($word, "*") !== false) {
+                $tail = $i + 1 < $nwords
+                    ? '(?=\s|\pZ)'
+                    : ($letnum_last ? self::UTF8_FINAL_NONLETTERDIGIT : "");
+                $r = self::one_wildcard_regex($word, '(?<=\A|\s|\pZ)', '\s\pZ', $tail, false, true);
+            } else {
+                $r = preg_quote($word);
+            }
+            $utf8s[] = $r;
+        }
+        $preg_utf8 = ($letnum_first ? self::UTF8_INITIAL_NONLETTERDIGIT : "")
+            . join("(?:\\s|\\pZ)++", $utf8s)
+            . ($letnum_last ? self::UTF8_FINAL_NONLETTERDIGIT : "");
+
+        if (is_usascii($pattern)) {
+            $raws = [];
+            foreach ($words as $i => $word) {
+                if (strpos($word, "*") !== false) {
+                    $tail = $i + 1 < $nwords
+                        ? '(?=\s)'
+                        : ($letnum_last ? '(?![0-9A-Za-z])' : "");
+                    $r = self::one_wildcard_regex($word, '(?<=\A|\s)', '\s', $tail, false, true);
+                } else {
+                    $r = preg_quote($word);
+                }
+                $raws[] = $r;
+            }
+            $preg_raw = ($letnum_first ? '(?<![0-9A-Za-z])' : "")
+                . join("\\s++", $raws)
+                . ($letnum_last ? '(?![0-9A-Za-z])' : "");
+        } else {
+            $preg_raw = null;
+        }
+
+        // patterns with `(*SKIP)` must run alone
+        return new TextPregexes($preg_raw, $preg_utf8, $pattern, str_contains($preg_utf8, "(*SKIP)"));
     }
 
-    /** @param string $word
-     * @param bool $literal
-     * @return TextPregexes */
-    static function star_text_pregexes($word, $literal = false) {
-        if (is_object($word)) {
-            $reg = $word;
-        } else {
-            $reg = new TextPregexes(null, "");
-            $reg->value = $word;
-        }
-
-        $word = preg_replace('/\s+/', " ", $reg->value);
-        if (is_usascii($word)) {
-            $reg->preg_raw = Text::word_regex($word, $literal);
-        }
-        $reg->preg_utf8 = Text::utf8_word_regex($word, $literal);
-
-        if (!$literal && strpos($word, "*") !== false) {
-            if ($reg->preg_raw !== null) {
-                $reg->preg_raw = str_replace('\\\\\S*', '\*', str_replace('\*', '\S*', $reg->preg_raw));
+    /** @param string $pattern
+     * @param bool $utf8
+     * @param string $head lookbehind the first literal must satisfy
+     * @param string $reject character specification (interpolated into []) a wildcard must reject
+     * @param string $tail lookahead the final literal must satisfy (word boundary)
+     * @param bool $capture if true, make capture groups for the wildcards
+     * @param bool $skip if true, `(*SKIP)` past failed wildcards. This makes
+     *   unanchored matching linear, but the regex must run alone: the skip
+     *   would also skip matches of any alternatives
+     * @return string */
+    static function one_wildcard_regex($pattern, $head, $reject, $tail, $capture = false, $skip = false) {
+        $cseg = "";
+        $pos0 = 0;
+        $regex = preg_quote($pattern);
+        $pos = strcspn($regex, "\\");
+        $len = strlen($regex);
+        $litseg = []; // literal segments between *s
+        while ($len - $pos > 1) {
+            if ($regex[$pos + 1] === "*") {
+                if ($pos !== $pos0 || $cseg !== "" || empty($litseg)) {
+                    $litseg[] = $cseg . substr($regex, $pos0, $pos - $pos0);
+                }
+                $pos0 = $pos + 2;
+                $cseg = "";
+            } else if ($len - $pos > 3
+                       && $regex[$pos + 1] === "\\"
+                       && $regex[$pos + 2] === "\\"
+                       && ($regex[$pos + 3] === "\\" || $regex[$pos + 3] === "*")) {
+                $cseg .= substr($regex, $pos0, $pos - $pos0);
+                $pos += 2;
+                $pos0 = $pos;
             }
-            $reg->preg_utf8 = str_replace('\\\\\S*', '\*', str_replace('\*', '\S*', $reg->preg_utf8));
+            $pos += 2 + strcspn($regex, "\\", $pos + 2);
         }
+        $litseg[] = $cseg . substr($regex, $pos0);
+        $nlitseg = count($litseg);
 
-        return $reg;
+        // combine
+        $out = "";
+        foreach ($litseg as $i => $seg) {
+            $out .= $seg;
+            if ($i === 0 && $seg === "") {
+                // initial star: ensure it starts at a word boundary
+                $out .= $head;
+            }
+            if ($i === $nlitseg - 1) {
+                break;
+            }
+            $next = $litseg[$i + 1];
+            if ($next === "") {
+                // trailing star: no following literal to protect
+                $pat = $reject === "" ? "[\\s\\S]*+" : "[^{$reject}]*+";
+            } else {
+                // unrolled `\S*` that stops before the next literal. The guard
+                // keeps the possessive scan from swallowing that literal; the
+                // final literal additionally requires the word-boundary $tail.
+                preg_match('/\A(?:\\\\.|[\xC0-\xFF][\x80-\xBF]++|[\s\S])/', $next, $m);
+                $ch = $m[0];
+                if (strlen($ch) > 1 && ord($ch[0]) >= 0xC0) {
+                    // a multibyte character in a byte class would also reject
+                    // other characters that share its bytes
+                    $notch = "(?:(?!{$ch})" . ($reject === "" ? "[\\s\\S]" : "[^{$reject}]") . ")";
+                } else {
+                    $notch = "[^{$ch}{$reject}]";
+                }
+                $boundary = $i + 2 === $nlitseg ? $tail : "";
+                // if the wildcard rejects $ch, it ends at the first $ch
+                $chx = strlen($ch) === 2 && $ch[0] === "\\" ? $ch[1] : $ch;
+                if (($ch === $next && $boundary === "")
+                    || ($reject !== "" && @preg_match("{\\A[{$reject}]\\z}u", $chx) === 1)) {
+                    $pat = "{$notch}*+";
+                } else {
+                    $neg = "(?!{$next}{$boundary})";
+                    $pat = "{$notch}*+(?:{$neg}{$ch}{$notch}*+)*+";
+                }
+            }
+            $out .= $capture ? "({$pat})" : $pat;
+            // If the rest of the pattern fails after a wildcard, it would
+            // also fail from any later start that reached the same point
+            if ($skip) {
+                $out .= "(*SKIP)";
+            }
+        }
+        return $out;
+    }
+
+    /** @param string $pattern
+     * @param bool $capture
+     * @return string */
+    static function wildcard_pregex($pattern, $capture = false) {
+        return self::one_wildcard_regex($pattern, '\A', '', '\z', $capture);
     }
 
     /** @param ?TextPregexes $reg
@@ -418,6 +733,10 @@ class Text {
     }
 
 
+    // Highlight at most this many matches per string; the remainder is shown
+    // unhighlighted. Bounds output size and work regardless of match count.
+    const HIGHLIGHT_LIMIT = 200;
+
     /** @param string $text
      * @param null|string|TextPregexes $match
      * @param ?int &$n
@@ -427,19 +746,62 @@ class Text {
         if ($match === null || $match === false || $match === "" || $text == "") {
             return htmlspecialchars($text);
         }
+        if (!($match instanceof TextPregexes) || !$match->is_list()) {
+            $spans = self::highlight_spans($text, $match, $n);
+        } else {
+            // highlight each pattern separately, then join overlapping spans
+            $spans = [];
+            foreach ($match->leaves() as $leaf) {
+                array_push($spans, ...self::highlight_spans($text, $leaf, $n1));
+            }
+            usort($spans, function ($a, $b) {
+                return $a[0] <=> $b[0] ? : $b[1] <=> $a[1];
+            });
+            $out = [];
+            foreach ($spans as $sp) {
+                $last = count($out) - 1;
+                if ($last >= 0 && $sp[0] < $out[$last][1]) {
+                    $out[$last][1] = max($out[$last][1], $sp[1]);
+                } else if ($last + 1 < self::HIGHLIGHT_LIMIT) {
+                    $out[] = $sp;
+                } else {
+                    break;
+                }
+            }
+            $spans = $out;
+            $n = count($spans);
+        }
+        $x = "";
+        $p = 0;
+        foreach ($spans as $sp) {
+            $x .= htmlspecialchars(substr($text, $p, $sp[0] - $p))
+                . '<em class="match">' . htmlspecialchars(substr($text, $sp[0], $sp[1] - $sp[0])) . "</em>";
+            $p = $sp[1];
+        }
+        return $x . htmlspecialchars(substr($text, $p));
+    }
 
+    /** Return the nonempty spans of `$text` that `$match` highlights, as
+     * [start, end] offsets. Sets `$n` to the number of matches.
+     * @param string $text
+     * @param string|TextPregexes $match
+     * @param ?int &$n
+     * @return list<array{int,int}> */
+    static private function highlight_spans($text, $match, &$n) {
+        $n = 0;
         $mtext = $text;
-        $offsetmap = null;
+        $do = null;
         $flags = "";
         if (is_object($match)) {
-            if ($match->preg_raw === null) {
-                $match = $match->preg_utf8;
+            if ($match->preg_raw() === null) {
+                $match = $match->preg_utf8();
                 $flags = "u";
             } else if (is_usascii($text)) {
-                $match = $match->preg_raw;
+                $match = $match->preg_raw();
             } else {
-                list($mtext, $offsetmap) = UnicodeHelper::deaccent_offsets($mtext);
-                $match = $match->preg_utf8;
+                $do = UnicodeHelper::deaccent_offsets($mtext);
+                $mtext = $do->out;
+                $match = $match->preg_utf8();
                 $flags = "u";
             }
         }
@@ -452,18 +814,18 @@ class Text {
             if ($match[0] !== "{") {
                 $match = "{(" . $match . ")}is" . $flags;
             }
-            $s = preg_split($match, $mtext, -1, PREG_SPLIT_DELIM_CAPTURE);
+            $s = preg_split($match, $mtext, self::HIGHLIGHT_LIMIT + 1, PREG_SPLIT_DELIM_CAPTURE);
         }
         if (!$s || count($s) == 1) {
-            return htmlspecialchars($text);
+            return [];
         }
 
         $n = (int) (count($s) / 2);
-        if ($offsetmap) {
+        if ($do) {
             for ($i = $b = $o = 0; $i < count($s); ++$i) {
                 if ($s[$i] !== "") {
                     $o += strlen($s[$i]);
-                    $e = UnicodeHelper::deaccent_translate_offset($offsetmap, $o);
+                    $e = $do->reverse($o);
                     $s[$i] = substr($text, $b, $e - $b);
                     $b = $e;
                 }
@@ -472,62 +834,21 @@ class Text {
         if ($clean_initial_nonletter) {
             for ($i = 1; $i < count($s); $i += 2) {
                 if ($s[$i] !== ""
-                    && preg_match('/\A((?!\pL|\pN)\X)(.*)\z/us', $s[$i], $m)) {
+                    && preg_match('/\A([^\pL\pN\pM]\pM*+)(.*)\z/us', $s[$i], $m)) {
                     $s[$i - 1] .= $m[1];
                     $s[$i] = $m[2];
                 }
             }
         }
-        for ($i = 0; $i < count($s); ++$i) {
-            if (($i % 2) && $s[$i] !== "") {
-                $s[$i] = '<em class="match">' . htmlspecialchars($s[$i]) . "</em>";
-            } else {
-                $s[$i] = htmlspecialchars($s[$i]);
+        $spans = [];
+        for ($i = $p = 0; $i < count($s); ++$i) {
+            $l = strlen($s[$i]);
+            if (($i % 2) && $l !== 0) {
+                $spans[] = [$p, $p + $l];
             }
+            $p += $l;
         }
-        return join("", $s);
-    }
-
-    const SEARCH_UNPRIVILEGE_EXACT = 2;
-
-    static function simple_search($needle, $haystacks, $flags = 0) {
-        if (!($flags & self::SEARCH_UNPRIVILEGE_EXACT)) {
-            $matches = [];
-            foreach ($haystacks as $k => $v) {
-                if (strcasecmp($needle, $v) === 0)
-                    $matches[$k] = $v;
-            }
-            if (!empty($matches)) {
-                return $matches;
-            }
-        }
-
-        $rewords = [];
-        foreach (preg_split('/[^A-Za-z_0-9*]+/', $needle) as $word) {
-            if ($word !== "")
-                $rewords[] = str_replace("*", ".*", $word);
-        }
-        $i = $flags & self::SEARCH_UNPRIVILEGE_EXACT ? 1 : 0;
-        for (; $i <= 2; ++$i) {
-            if ($i == 0) {
-                $re = ',\A' . join('\b.*\b', $rewords) . '\z,i';
-            } else if ($i == 1) {
-                $re = ',\A' . join('\b.*\b', $rewords) . '\b,i';
-            } else {
-                $re = ',\b' . join('.*\b', $rewords) . ',i';
-            }
-            $matches = preg_grep($re, $haystacks);
-            if (!empty($matches)) {
-                return $matches;
-            }
-        }
-        return [];
-    }
-
-    /** @param string $word
-     * @return bool */
-    static function is_boring_word($word) {
-        return isset(self::$boring_words[strtolower($word)]);
+        return $spans;
     }
 
     /** @param string $text
@@ -565,7 +886,18 @@ class Text {
      * @param string $b
      * @return string */
     static function merge_whitespace($a, $b) {
-        $al = strlen($a);
+        list($apx, $bpx) = self::merge_whitespace_offsets($a, strlen($a), $b);
+        return substr($a, 0, $apx) . substr($b, $bpx);
+    }
+
+    /** Return offsets `[$apx, $bpx]` such that
+     * `merge_whitespace(substr($a, 0, $al), $b)` equals
+     * `substr($a, 0, $apx) . substr($b, $bpx)`.
+     * @param string $a
+     * @param int $al
+     * @param string $b
+     * @return array{int,int} */
+    static function merge_whitespace_offsets($a, $al, $b) {
         $bl = strlen($b);
         $ap = $apx = $al;
         $bp = $bpx = 0;
@@ -573,14 +905,16 @@ class Text {
 
         while (true) {
             // skip whitespace
-            while ($bp !== $bl && ($b[$bp] === " " || $b[$bp] === "\t")) {
-                ++$bp;
-            }
-            while ($ap !== 0 && ($a[$ap - 1] === " " || $a[$ap - 1] === "\t")) {
+            $bp += strspn($b, " \t", $bp);
+            $bnl = $bp !== $bl && ($b[$bp] === "\r" || $b[$bp] === "\n");
+            // unless `$b` continues with a newline, at most `$bp - $bpx` bytes
+            // of `$a` will be removed; do not rescan whitespace that stays
+            $ap0 = $bnewline || $bnl ? 0 : max($apx - ($bp - $bpx), 0);
+            while ($ap !== $ap0 && ($a[$ap - 1] === " " || $a[$ap - 1] === "\t")) {
                 --$ap;
             }
 
-            if ($bp !== $bl && ($b[$bp] === "\r" || $b[$bp] === "\n")) {
+            if ($bnl) {
                 // consume trailing whitespace
                 if (!$bnewline) {
                     $bpx = $bp;
@@ -609,7 +943,7 @@ class Text {
             } else if ($ap < $apx && $bp > $bpx) {
                 $apx -= min($apx - $ap, $bp - $bpx);
             }
-            return substr($a, 0, $apx) . substr($b, $bpx);
+            return [$apx, $bpx];
         }
     }
 

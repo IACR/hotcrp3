@@ -95,6 +95,8 @@ class PaperOption implements JsonSerializable {
     private $editable_if;
     /** @var ?SearchTerm */
     private $_editable_term;
+    /** @var ?bool */
+    private $_deadline_exempt;
     /** @var int */
     private $_recursion = 0;
     public $max_size;
@@ -345,7 +347,7 @@ class PaperOption implements JsonSerializable {
      * @return list<FmtArg> */
     final function edit_field_fmt_context($prow = null) {
         $req = $this->required > 0 && (!$prow || $this->test_required($prow));
-        return make_array(new FmtArg("edit", true), new FmtArg("required", $req), ...$this->field_fmt_context());
+        return [new FmtArg("edit", true), new FmtArg("required", $req), ...$this->field_fmt_context()];
     }
     /** @param FmtArg ...$context
      * @return string */
@@ -443,7 +445,7 @@ class PaperOption implements JsonSerializable {
         if ($this->_dtype_name === null) {
             if ($this->name !== "") {
                 $am = $this->abbrev_matcher();
-                $e = AbbreviationEntry::make_lazy($this->name, [$this->conf->options(), "option_by_id"], [$this->id], Conf::MFLAG_OPTION);
+                $e = AbbreviationEntry::make_lazy($this->name, [$this->conf->options(), "option_by_id"], [$this->id], Conf::MFLAG_OPTION | Conf::MFLAG_GLOBAL);
                 $this->_dtype_name = $am->find_entry_keyword($e, AbbreviationMatcher::KW_UNDERSCORE | AbbreviationMatcher::KW_FULLPHRASE);
             }
             $this->_dtype_name = $this->_dtype_name ?? $this->formid;
@@ -567,6 +569,7 @@ class PaperOption implements JsonSerializable {
         if ($this->_exists_state === 0) {
             $s = new PaperSearch($this->conf->root_user(), $this->exists_if);
             $s->set_expand_automatic(true);
+            $s->set_use_viewer_permissions(true);
             $this->_exists_term = $s->full_term();
             /** @phan-suppress-next-line PhanAccessReadOnlyProperty */
             $this->_phase = Phase_SearchTerm::term_phase($this->_exists_term);
@@ -645,22 +648,45 @@ class PaperOption implements JsonSerializable {
             $this->editable_if = self::clean_condition($x);
             $this->_editable_term = null;
         }
+        $this->_deadline_exempt = null;
+    }
+    /** @return SearchTerm */
+    final function editable_term() {
+        if ($this->editable_if === null) {
+            return new True_SearchTerm;
+        } else if ($this->_editable_term !== null) {
+            return $this->_editable_term;
+        }
+        $s = new PaperSearch($this->conf->root_user(), $this->editable_if);
+        $s->set_use_viewer_permissions(true);
+        $this->_editable_term = $s->full_term();
+        return $this->_editable_term;
+    }
+    /** Return true if this field can be edited regardless of submission
+     * deadlines. The contacts field is always exempt; other fields are
+     * exempt when their edit condition mentions time (`before:`, `after:`),
+     * in which case the condition replaces the deadline. Withdrawal,
+     * freeze, and rejection still apply (see `perm_edit_paper_state`).
+     * @return bool */
+    final function deadline_exempt() {
+        if ($this->_deadline_exempt === null) {
+            $this->_deadline_exempt = $this->id === self::CONTACTSID
+                || ($this->editable_if !== null
+                    && Time_SearchTerm::has_time_term($this->editable_term()));
+        }
+        return $this->_deadline_exempt;
     }
     /** @return bool */
     final function test_editable(PaperInfo $prow) {
         if ($this->editable_if === null) {
             return true;
         }
-        if ($this->_editable_term === null) {
-            $s = new PaperSearch($this->conf->root_user(), $this->editable_if);
-            $this->_editable_term = $s->full_term();
-        }
         ++$this->_recursion;
         if ($this->_recursion > 5) {
             $this->_editable_term = new False_SearchTerm;
             $this->mark_condition_recursion("editable_if");
         }
-        $x = $this->_editable_term->test($prow, null);
+        $x = $this->editable_term()->test($prow, null);
         --$this->_recursion;
         return $x;
     }
@@ -1609,9 +1635,6 @@ class Document_PaperOption extends PaperOption {
             $ov->set_value_data([], []);
         }
     }
-    function is_value_present_trivial() {
-        return $this->id > 0;
-    }
     function value_present(PaperValue $ov) {
         return ($ov->value ?? 0) > 1 || $ov->value === PaperValue::NEWDOC_VALUE;
     }
@@ -1640,7 +1663,9 @@ class Document_PaperOption extends PaperOption {
         if (!$this->value_present($ov)) {
             return null;
         }
-        return $pex->document_json($ov->document(0)) ?? false;
+        $want_filename = $pex->viewer->allow_view_authors($ov->prow);
+        return $pex->document_json($ov->document(0, $want_filename),
+            ["want_filename" => $want_filename]) ?? false;
     }
     function value_check(PaperValue $ov, Contact $user) {
         parent::value_check($ov, $user);
@@ -1675,9 +1700,30 @@ class Document_PaperOption extends PaperOption {
         }
     }
 
+    /** Return the ID of the document in `$cur` that `$docj` names: the
+     * current document an upload of `$docj` would reuse. Pass the same
+     * `$importer` for a field's documents, so its stored documents are
+     * indexed once.
+     * @param object|DocumentInfo $docj
+     * @param ?DocumentImporter $importer
+     * @return ?int */
+    static function current_docid(PaperValue $cur, $docj, $importer = null) {
+        $dids = $cur->option->value_dids($cur);
+        if (empty($dids)) {
+            return null;
+        }
+        $importer = $importer ?? new DocumentImporter($cur->prow, $cur->option->id, 0, new MessageSet);
+        $doc = $importer->find_stored($docj);
+        return $doc && in_array($doc->paperStorageId, $dids, true) ? $doc->paperStorageId : null;
+    }
+
     function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
         $fk = $this->field_key();
         if (($doc = DocumentInfo::make_request($qreq, $fk, $prow->paperId, $this->id, $this->conf))) {
+            // a repeated upload of the current document is no change
+            if (($did = self::current_docid($prow->force_option($this), $doc))) {
+                return PaperValue::make($prow, $this, $did);
+            }
             $ov = PaperValue::make($prow, $this, PaperValue::NEWDOC_VALUE);
             $ov->set_anno("document", $doc);
             if ($doc->has_error()) {
@@ -1699,6 +1745,10 @@ class Document_PaperOption extends PaperOption {
         } else if (!DocumentInfo::check_json_upload($j)) {
             return PaperValue::make_estop($prow, $this, "<0>Format error");
         }
+        // naming the current document, as a GET returns it, is no change
+        if (($did = self::current_docid($prow->force_option($this), $j))) {
+            return PaperValue::make($prow, $this, $did);
+        }
         $ov = PaperValue::make($prow, $this, PaperValue::NEWDOC_VALUE);
         $ov->set_anno("document", $j);
         if (isset($j->error_html)) {
@@ -1708,7 +1758,7 @@ class Document_PaperOption extends PaperOption {
     }
     function print_web_edit(PaperTable $pt, $ov, $reqov) {
         if (($this->id === DTYPE_SUBMISSION || $this->id === DTYPE_FINAL)
-            && ($this->id === DTYPE_FINAL) !== ($pt->user->edit_paper_state($ov->prow) === 2)
+            && ($this->id === DTYPE_FINAL) !== ($ov->prow->viewable_phase($pt->user) === PaperInfo::PHASE_FINAL)
             && !$pt->settings_mode) {
             $this->print_web_edit_hidden($pt, $ov);
             return;
@@ -1845,7 +1895,7 @@ class Document_PaperOption extends PaperOption {
     }
 
     function view_option_schema() {
-        return ["format=type|time,timestamp^"];
+        return ["format=type|time,timestamp|hash^"];
     }
     function sort_view_options() {
         return ["format"];
@@ -1860,6 +1910,8 @@ class Document_PaperOption extends PaperOption {
         } else if ($format === "time") {
             $ts = $d->timeReferenced ?? $d->timestamp;
             $t = $ts > 1 ? $d->conf->unparse_time($ts) : "";
+        } else if ($format === "hash") {
+            $t = HashAnalysis::hash_as_text($d->sha1);
         } else if ($is_attachment) {
             $t = $d->member_filename();
         } else if ($fr->want(FieldRender::CFFORM)) {

@@ -48,30 +48,42 @@ class Preference_AssignmentParser extends AssignmentParser {
     }
     function expand_any_user(PaperInfo $prow, $req, AssignmentState $state) {
         if ($state->user->can_manage_reviews($prow)) {
-            return $state->pc_users();
+            return $state->pc_members();
         }
         return [$state->user];
     }
     function expand_missing_user(PaperInfo $prow, $req, AssignmentState $state) {
         return $state->reviewer->isPC ? [$state->reviewer] : null;
     }
-    static function cannot_edit_preference_message(Contact $viewer, PaperInfo $prow, Contact $user) {
+    /** @param bool $skip_poison
+     * @return string */
+    static function cannot_edit_preference_message(Contact $viewer, PaperInfo $prow, Contact $user, $skip_poison = false) {
         if ($viewer->contactId === $user->contactId) {
             return $prow->conf->_("<0>You can’t enter a preference for {submission} #{}", $prow->paperId);
-        } else if (!$user->isPC) {
-            return "<0>Only PC members can enter preferences";
         } else if (!$viewer->can_manage_reviews($prow)) {
             return $prow->conf->_("<0>You can’t administer {submission} #{}", $prow->paperId);
+        } else if ($user->contactId === 0 && $skip_poison) {
+            return "";
+        } else if (!$user->isPC) {
+            return "<0>Only PC members can enter preferences";
         }
         return $prow->conf->_("<0>User {$user->email} can’t enter a preference for {submission} #{}", $prow->paperId);
     }
     function allow_user(PaperInfo $prow, Contact $user, $req, AssignmentState $state) {
-        if (!$user->contactId) {
-            return false;
-        } else if ($state->user->can_edit_preference_for($prow, $user)) {
-            return true;
+        if ($state->user->can_edit_preference_for($prow, $user)) {
+            return $user->contactId > 0;
         }
-        return new AssignmentError(self::cannot_edit_preference_message($state->user, $prow, $user));
+        // Cannot edit this preference. If the acting user cannot even view the
+        // submission, report its non-viewability with the same masked reason as
+        // a missing paper, so a hidden-track submission is indistinguishable
+        // from a nonexistent one (mirroring Preference_API); otherwise explain
+        // why the preference cannot be entered.
+        if (($whynot = $state->user->perm_view_paper($prow))) {
+            $state->paper_error($whynot);
+        } else if (($m = self::cannot_edit_preference_message($state->user, $prow, $user, true))) {
+            $state->paper_error($m);
+        }
+        return false;
     }
     static private function make_exp($exp) {
         return $exp === null ? "N" : +$exp;
@@ -88,7 +100,7 @@ class Preference_AssignmentParser extends AssignmentParser {
         if (strpos($str, "\xE2") !== false) {
             $str = preg_replace('/\xE2(?:\x88\x92|\x80\x93|\x80\x94)/', "-", $str);
         }
-        if (preg_match('/\A(?:[\"\'`]\s*+|)(-\s*+(?:-\s*+|)(?=[\d.])|\+\s*+(?:\+\s*+|)(?=[\d.])|)(\d++(?:\.\d*+|)|\.\d++|(?=[cnx-z]))\s*([x-z]?|c|conflict|none|n\/a|)(?:\s*+[\"\'`]|)\z/i', $str, $m)) {
+        if (preg_match('/\A(?:[\"\'`]\s*+|)(-\s*+(?:-\s*+|)(?=[\d.])|\+\s*+(?:\+\s*+|)(?=[\d.])|)(\d++(?:\.\d*+|)|\.\d++|(?=[cnx-z]))\s*+([x-z]?|c|conflict|none|n\/a|)(?:\s*+[\"\'`]|)\z/i', $str, $m)) {
             // $m[1] sign; $m[2] preference; $m[3] expertise
             $exp = null;
             if ($m[3] !== "") {
@@ -111,7 +123,7 @@ class Preference_AssignmentParser extends AssignmentParser {
             }
             return [$pref, $exp];
         }
-        $str = preg_replace('/\s++(?=[-+])/', "", $str);
+        $str = preg_replace('/(?<!\s)\s++(?=[-+])/', "", $str);
         if (strspn($str, "-") === strlen($str)) {
             return [(float) -strlen($str), null];
         } else if (strspn($str, "+") === strlen($str)) {
@@ -124,7 +136,7 @@ class Preference_AssignmentParser extends AssignmentParser {
     static function parse_check($str, Conf $conf) {
         $ppref = self::parsef($str);
         if ($ppref === null) {
-            if (preg_match('/([-+]?)\s*(\d+)\s*([xyz]?)/i', $str, $m)) {
+            if (preg_match('/(?:([-+])\s*+|)(\d++)\s*+([xyz]?)/i', $str, $m)) {
                 return $conf->_("<0>Invalid preference ‘{}’. Did you mean ‘{}’?", $str, $m[1] . $m[2] . strtoupper($m[3]));
             } else {
                 return $conf->_("<0>Invalid preference ‘{}’", $str);

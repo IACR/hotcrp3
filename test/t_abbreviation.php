@@ -64,6 +64,24 @@ class Abbreviation_Tester {
         xassert_eqq($am->find_all("?"), [8]);
     }
 
+    function test_empty_pattern() {
+        $am = new AbbreviationMatcher;
+        $am->add_phrase("Solitude", 1);
+        // an empty pattern matches nothing, even against a lone entry
+        xassert_eqq($am->find_all(""), []);
+        xassert_eqq($am->find1(""), null);
+        xassert_eqq($am->find_entries(""), []);
+
+        // ...and its cached no-match must not suppress later analysis
+        $am->add_phrase("Solidarity", 2);
+        xassert_eqq($am->find_all("solid"), [2]);
+        xassert_eqq($am->find_all("sol"), [1, 2]);
+        xassert_eqq($am->find_all(""), []);
+        $am->add_keyword("solo", 3);
+        xassert_eqq($am->find_all("solo"), [3]);
+        xassert_eqq($am->find_all(""), []);
+    }
+
     function test_suffixes() {
         $am = new AbbreviationMatcher;
         $am->add_phrase("Overall merit", 0);
@@ -210,6 +228,24 @@ class Abbreviation_Tester {
         xassert_eqq($am->find_entry_keyword($e, AbbreviationMatcher::KW_CAMEL), "ACMCamCas");
     }
 
+    function test_keyword_number_periods() {
+        $am = new AbbreviationMatcher;
+        $e1 = $am->add_phrase("D1. PDF paper", 1);
+        $e2 = $am->add_phrase("Appendix 2.", 2);
+        $e3 = $am->add_phrase("3. Supplement", 3);
+        $e4 = $am->add_phrase("Paper v1.5 slides", 4);
+        xassert_eqq($am->find_entry_keyword($e1, AbbreviationMatcher::KW_UNDERSCORE | AbbreviationMatcher::KW_FULLPHRASE), "d_1_pdf_paper");
+        xassert_eqq($am->find_entry_keyword($e1, AbbreviationMatcher::KW_DASH | AbbreviationMatcher::KW_FULLPHRASE), "d-1-pdf-paper");
+        xassert_eqq($am->find_entry_keyword($e1, AbbreviationMatcher::KW_CAMEL), "D1PDF");
+        xassert_eqq($am->find_entry_keyword($e2, AbbreviationMatcher::KW_UNDERSCORE | AbbreviationMatcher::KW_FULLPHRASE), "appendix_2");
+        xassert_eqq($am->find_entry_keyword($e3, AbbreviationMatcher::KW_UNDERSCORE | AbbreviationMatcher::KW_FULLPHRASE), "3_supplement");
+        xassert_eqq($am->find_entry_keyword($e4, AbbreviationMatcher::KW_UNDERSCORE | AbbreviationMatcher::KW_FULLPHRASE), "paper_v_1.5_slides");
+        xassert_eqq($am->find_all("d_1_pdf_paper"), [1]);
+        xassert_eqq($am->find_all("D1PDF"), [1]);
+        xassert_eqq($am->find_all("appendix_2"), [2]);
+        xassert_eqq($am->find_all("3_supplement"), [3]);
+    }
+
     function test_duplicates() {
         $am = new AbbreviationMatcher;
         $e1 = $am->add_phrase("Comments", 1);
@@ -252,6 +288,59 @@ class Abbreviation_Tester {
         xassert_eqq($am->find_all("opt2"), [2]);
         xassert_eqq($am->find_all("opt-1"), [-1]);
         xassert_eqq($am->find_all("opt-2"), [-2]);
+    }
+
+    function test_option_list_find() {
+        $conf = $this->conf;
+        $saved_options = $conf->setting_data("options");
+        $conf->save_refresh_setting("options", 1, json_encode([
+            ["id" => 1, "name" => "Calories", "type" => "numeric", "order" => 1],
+            ["id" => 2, "name" => "Attachments", "type" => "attachments", "order" => 2],
+            ["id" => 3, "name" => "Logo", "type" => "document", "order" => 3, "nonpaper" => true],
+            ["id" => 4, "name" => "Optics", "type" => "document", "order" => 4, "nonpaper" => true]
+        ]));
+
+        try {
+            $ol = $conf->options();
+
+            // paper namespace: by name, by ID, and by intrinsic name
+            xassert_eqq($ol->find("Calories")->id, 1);
+            xassert_eqq($ol->find("opt2")->id, 2);
+            xassert_eqq($ol->find("paper")->id, DTYPE_SUBMISSION);
+            xassert_eqq($ol->find("opt0")->id, DTYPE_SUBMISSION);
+            xassert_eqq($ol->find("final")->id, DTYPE_FINAL);
+            xassert_eqq(array_keys($ol->find_all("any")), [1, 2]);
+
+            // nonpaper options are invisible to the paper namespace, and vice versa
+            xassert_eqq($ol->find("Logo"), null);
+            xassert_eqq($ol->find("opt3"), null);
+            xassert_eqq($ol->find_nonpaper("Calories"), null);
+            xassert_eqq($ol->find_nonpaper("opt2"), null);
+            xassert_eqq($ol->find_nonpaper("paper"), null);
+
+            // nonpaper namespace: by name, by ID, and names starting with `opt`
+            xassert_eqq($ol->find_nonpaper("Logo")->id, 3);
+            xassert_eqq($ol->find_nonpaper("opt3")->id, 3);
+            xassert_eqq($ol->find_nonpaper("Optics")->id, 4);
+            xassert_eqq($ol->find_nonpaper("opt4")->id, 4);
+            xassert_eqq(array_keys($ol->find_all_nonpaper("any")), [3, 4]);
+
+            // empty and `none` match nothing; `any` is not a unique match
+            foreach (["", "none", "any"] as $name) {
+                xassert_eqq($ol->find($name), null);
+                xassert_eqq($ol->find_nonpaper($name), null);
+            }
+            xassert_eqq($ol->find_all(""), []);
+            xassert_eqq($ol->find_all("none"), []);
+            xassert_eqq($ol->find_all_nonpaper(""), []);
+            xassert_eqq($ol->find_all_nonpaper("none"), []);
+        } finally {
+            if ($saved_options === null) {
+                $conf->save_refresh_setting("options", null);
+            } else {
+                $conf->save_refresh_setting("options", 1, $saved_options);
+            }
+        }
     }
 
     function test_initial_underscore() {

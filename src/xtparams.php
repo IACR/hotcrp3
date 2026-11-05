@@ -20,7 +20,7 @@ class XtParams {
     /** @var ?list<callable(string,object,XtParams):(?bool)> */
     public $primitive_checkers;
     /** @var ?object */
-    public $last_match;
+    private $priority_barrier;
     /** @var ?Qrequest */
     public $qreq;
     /** @var ?ComponentSet */
@@ -368,6 +368,14 @@ class XtParams {
         return [];
     }
 
+    /** @param ?object $context
+     * @return ?object */
+    function swap_search_context($context = null) {
+        $old_context = $this->priority_barrier;
+        $this->priority_barrier = $context;
+        return $old_context;
+    }
+
     /** @param array<string,list<object>> $map
      * @param string $name
      * @return ?object */
@@ -426,7 +434,9 @@ class XtParams {
                 $name = $xt->name ?? "<unknown>";
                 error_log("{$this->conf->dbname}: deprecated use of `{$name}` in " . caller_landmark(1, '/\AXt/'));
             }
-            $this->last_match = $xt;
+            if ($this->priority_barrier === null) {
+                $this->priority_barrier = $xt;
+            }
             if ($this->checkf($xt)) {
                 return $xt;
             }
@@ -451,7 +461,7 @@ class XtParams {
     function search_factories($factories, $name, $found) {
         $xts = [$found];
         foreach ($factories as $fxt) {
-            if (Conf::xt_priority_compare($fxt, $found ?? $this->last_match) > 0) {
+            if (Conf::xt_priority_compare($fxt, $found ?? $this->priority_barrier) > 0) {
                 break;
             }
             if (!isset($fxt->match)) {
@@ -469,11 +479,9 @@ class XtParams {
             $this->user = $this->user ?? $this->conf->root_user();
             if (isset($fxt->expand_function)) {
                 $r = call_user_func($fxt->expand_function, $name, $this, $fxt, $m);
+                $r = is_object($r) ? [$r] : $r;
             } else {
-                $r = (object) ["name" => $name, "match_data" => $m];
-            }
-            if (is_object($r)) {
-                $r = [$r];
+                $r = [(object) ["name" => $name, "match_data" => $m]];
             }
             foreach ($r ? : [] as $xt) {
                 self::xt_combine($xt, $fxt);
@@ -489,6 +497,14 @@ class XtParams {
             }
         }
         return $xts;
+    }
+
+    /** @param object $xt */
+    function mark_priority_barrier($xt) {
+        if (!$this->priority_barrier
+            || Conf::xt_priority_compare($this->priority_barrier, $xt) > 0) {
+            $this->priority_barrier = $xt;
+        }
     }
 
     /** @param object $xt1

@@ -157,7 +157,7 @@ final class CommentStatus extends MessageSet {
             $ts = [];
             foreach (preg_split('/\s++/', $req["tags"]) as $tt) {
                 if ($tt !== ""
-                    && ($tt = $tagger->check($tt))) {
+                    && ($tt = $tagger->check_syntax($tt))) {
                     list($tag, $value) = Tagger::unpack($tt);
                     $ltag = strtolower($tag);
                     if (!str_ends_with($ltag, "response")) {
@@ -194,18 +194,20 @@ final class CommentStatus extends MessageSet {
         if ($crow->timeModified >= Conf::$now) {
             Conf::advance_current_time($crow->timeModified);
         }
-        if ($displayed) {
-            if ($crow->timeNotified + 10800 < Conf::$now
-                || (($ctype & CommentInfo::CT_RESPONSE) !== 0
-                    && ($ctype & CommentInfo::CT_DRAFT) === 0
-                    && ($old_ctype & CommentInfo::CT_DRAFT) !== 0)) {
-                $crow->set_prop("timeNotified", Conf::$now);
-            }
-            // reset timeDisplayed if you change the comment type
-            if ((!$crow->timeDisplayed || $crow->ordinal_missing())
-                && ($text !== "" || $docs)) {
-                $crow->set_prop("timeDisplayed", Conf::$now);
-            }
+        // notify for displayed comments and draft responses at most every
+        // 3 hours, and whenever a response is submitted
+        if (($displayed || $is_response)
+            && ($crow->timeNotified + 10800 < Conf::$now
+                || ($is_response
+                    && $displayed
+                    && ($old_ctype & CommentInfo::CT_DRAFT) !== 0))) {
+            $crow->set_prop("timeNotified", Conf::$now);
+        }
+        // reset timeDisplayed if you change the comment type
+        if ($displayed
+            && (!$crow->timeDisplayed || $crow->ordinal_missing())
+            && ($text !== "" || $docs)) {
+            $crow->set_prop("timeDisplayed", Conf::$now);
         }
 
         // ensure _old_prop entries for new comments
@@ -250,6 +252,24 @@ final class CommentStatus extends MessageSet {
                 break;
             }
         }
+        // Warn on a salutation addressed to the authors (`Dear authors`,
+        // `Hi authors`, `@authors`, `Authors:`). Third-person prose about
+        // `the authors`, and salutations to colleagues, must not match.
+        if ($this->crow->commentId <= 0
+            && $this->crow->commentType < CommentInfo::CTVIS_AUTHOR
+            && ($this->crow->commentType & CommentInfo::CTM_BYAUTHOR) === 0
+            && preg_match('/\A\s*+(?:\#{1,6}[^\n]{0,60}\n|\[[^\]\n]{1,30}\])?[\s#*"\'`\x80-\xff]{0,8}(?:'
+                . '(?:(?:hel+o|hi|hey|greetings)[!,]*+\s*+)?dears?\s*+(?:the\s++)?\**+@?+auth[oe]rs?+\b'
+                . '|dears?\s++(?:[a-z][^\s,]{0,20}\s++){1,3}(?:co-)?auth[oe]rs?+\s*+[,:!\n]'
+                . '|(?:hel+o|hi|hey|greetings)!*+(?:\s++\**+@?+auth[oe]rs?+\b'
+                . '|\s*+,\s*+\**+@?+auth[oe]rs?+[ \t]*+(?:[-,.:;!?]|\n))'
+                . '|(?:thanks?|thank\s++you|congratulations|congrats)\s*+,\s*+@?+auth[oe]rs?+\b'
+                . '|@\s*+auth[oe]rs?+\b'
+                . '|comments?\s++(?:for|to)\s++(?:the\s++)?auth[oe]rs?+\**+[ \t]*+[:.\n]'
+                . '|to\s++(?:the\s++)?auth[oe]rs?+\s*+[,:]'
+                . '|auth[oe]rs?+\s*+(?:[,:;]|-{1,2}(?!\w)|—|–))/i', $this->crow->raw_content())) {
+            $this->warning_at("visibility", "<0>This comment appears to be intended for authors, but it’s not visible to authors");
+        }
     }
 
     /** Commit the staged changes to the database.
@@ -292,12 +312,13 @@ final class CommentStatus extends MessageSet {
     private function _log_save() {
         $crow = $this->crow;
         $ctype = $crow->commentType;
+        $creating = ($this->_status & self::SSF_CREATE) !== 0;
         $log = $crow->logid();
         if (($ctype & CommentInfo::CT_DRAFT) === 0
-            && (!$crow->commentId || ($ctype & CommentInfo::CT_DRAFT) !== 0)) {
+            && ($creating || ($crow->base_prop("commentType") & CommentInfo::CT_DRAFT) !== 0)) {
             $log .= " submitted";
         } else {
-            $log .= $crow->commentId ? " edited" : " started";
+            $log .= $creating ? " started" : " edited";
             if (($ctype & CommentInfo::CT_DRAFT) !== 0) {
                 $log .= " draft";
             }

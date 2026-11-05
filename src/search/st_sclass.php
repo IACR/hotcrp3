@@ -18,7 +18,7 @@ class Sclass_SearchTerm extends SearchTerm {
 
     static function parse($word, SearchWord $sword, PaperSearch $srch) {
         $tagger = new Tagger($srch->user);
-        $tag = $tagger->check($word, Tagger::ALLOWRESERVED | Tagger::NOPRIVATE | Tagger::NOCHAIR);
+        $tag = $tagger->check_syntax($word, Tagger::ALLOWRESERVED | Tagger::NOPRIVATE | Tagger::NOCHAIR);
         if ($tag === false) {
             $srch->lwarning($sword, $tagger->error_ftext(true));
             return new False_SearchTerm;
@@ -35,7 +35,7 @@ class Sclass_SearchTerm extends SearchTerm {
     function sqlexpr(SearchQueryInfo $sqi) {
         if (!$this->sr->unnamed) {
             return Dbl::format_query($sqi->srch->conf->dblink,
-                "exists (select * from PaperTag where paperId=Paper.paperId and tag=?)",
+                "exists (select * from PaperTag where paperId=Paper.paperId and tag=?)=1",
                 $this->sr->tag);
         }
         return "true";

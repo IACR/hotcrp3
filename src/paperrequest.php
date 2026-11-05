@@ -123,7 +123,7 @@ class PaperRequest {
             if (($p = $conf->fetch_ivalue("select paperId from PaperReview where reviewId=?", $rid)) > 0) {
                 return $p;
             } else {
-                throw new FailureReason($conf, ["invalidId" => "review", "reviewId" => $qreq->reviewId]);
+                throw new FailureReason($conf, ["missingId" => "paper"]);
             }
         }
         // give up on POST, empty user
@@ -260,10 +260,10 @@ class PaperRequest {
     function find_review($user, $qreq) {
         // no review set? maybe use capability to find review
         if (!isset($qreq->reviewId)) {
-            $capuid = $user->reviewer_capability($this->prow);
-            return $capuid ? $this->prow->review_by_user($capuid) : null;
+            $capu = $user->reviewer_capability_user($this->prow);
+            return $capu ? $this->prow->review_by_user($capu) : null;
         }
-        // `new` reviewId will definitey not exist
+        // `new` reviewId will definitely not exist
         if (str_ends_with($qreq->reviewId, "new")) {
             return null;
         }
@@ -271,8 +271,8 @@ class PaperRequest {
         $rloc = $this->prow->parse_ordinal_id($qreq->reviewId);
         $rrow = $this->prow->review_by_ordinal_id($rloc);
         if ($rrow) {
-            if (($whynot = $user->perm_view_review($this->prow, $rrow))) {
-                throw $user->perm_view_review($this->prow, null) ?? $whynot;
+            if (($fr = $user->perm_view_review($this->prow, $rrow))) {
+                throw $fr;
             }
             return $rrow;
         }
@@ -285,7 +285,6 @@ class PaperRequest {
             return null;
         }
         // error
-        throw $user->perm_view_review($this->prow, null)
-            ?? $this->prow->failure_reason(["invalidId" => "review"]);
+        throw $user->no_review_whynot($this->prow);
     }
 }

@@ -108,21 +108,22 @@ class Review_AssignmentParser extends AssignmentParser {
     function allow_paper(PaperInfo $prow, AssignmentState $state) {
         if (!$state->user->can_manage_reviews($prow)) {
             return false;
-        } else if ($prow->timeWithdrawn > 0 && $this->rtype !== 0) {
-            return new AssignmentError($prow->failure_reason(["withdrawn" => 1]));
+        } else if ($prow->timeWithdrawn <= 0 || $this->rtype === 0) {
+            return true;
         }
-        return true;
+        $state->paper_error($prow->failure_reason(["withdrawn" => 1]));
+        return false;
     }
     /** @param CsvRow $req */
     function user_universe($req, AssignmentState $state) {
         if ($this->rtype > REVIEW_EXTERNAL) {
-            return "pc";
+            return self::UU_PC;
         } else if ($this->rtype == 0
                    || (($rdata = $this->make_rdata($req, $state))
                        && !$rdata->might_create_review())) {
-            return "reviewers";
+            return self::UU_REVIEWERS;
         }
-        return "any";
+        return self::UU_ANY;
     }
     function paper_filter($contact, $req, AssignmentState $state) {
         $rdata = $this->make_rdata($req, $state);
@@ -160,15 +161,18 @@ class Review_AssignmentParser extends AssignmentParser {
         return null;
     }
     function allow_user(PaperInfo $prow, Contact $contact, $req, AssignmentState $state) {
-        // User “none” is never allowed
+        $rdata = $this->make_rdata($req, $state);
+        // A user not found among the reviewers is a no-op for `clearreview`;
+        // other non-users are never allowed
         if (!$contact->contactId) {
-            return false;
+            return $contact === $state->not_found_user()
+                && !$rdata->might_create_review();
         }
         // PC reviews must be PC members
-        $rdata = $this->make_rdata($req, $state);
         if ($rdata->newtype >= REVIEW_PC && !$contact->is_pc_member()) {
             $uname = $contact->name(NAME_E);
-            return new AssignmentError("<0>‘{$uname}’ is not a PC member and cannot be assigned a PC review");
+            $state->paper_error("<0>‘{$uname}’ is not a PC member and cannot be assigned a PC review");
+            return false;
         }
         // Conflict allowed if we're not going to assign a new review
         if ($this->rtype == 0
@@ -187,11 +191,15 @@ class Review_AssignmentParser extends AssignmentParser {
                 || !isset($req["override"])
                 || !friendly_boolean($req["override"]))) {
             $uname = $contact->name(NAME_E);
-            return new AssignmentError("<0>{$uname} cannot be assigned to review #{$prow->paperId}");
+            $state->paper_error("<0>{$uname} cannot be assigned to review #{$prow->paperId}");
+            return false;
         }
         return true;
     }
     function apply(PaperInfo $prow, Contact $user, $req, AssignmentState $state) {
+        if ($user === $state->not_found_user()) {
+            return false;
+        }
         $rdata = $this->make_rdata($req, $state);
         if ($rdata->error_ftext) {
             return new AssignmentError($rdata->error_ftext);
@@ -313,10 +321,10 @@ class Review_Assigner extends Assigner {
     }
     /** @param bool $before
      * @return string */
-    private function icon_h($before) {
+    private function icon_h(AssignmentSet $aset, $before) {
         $rflags = $this->item->get($before, "_rflags");
         return review_type_icon($this->item->get($before, "_rtype"),
-                                ReviewInfo::rflags_icon_class_suffix($rflags));
+                                ReviewInfo::rflags_icon_class_suffix($rflags, $aset->conf->ghost_review_flags()));
     }
     function unparse_display(AssignmentSet $aset) {
         $t = $aset->user->reviewer_html_for($this->contact);
@@ -326,14 +334,14 @@ class Review_Assigner extends Assigner {
         if ($this->item->differs("_rtype")
             || (($oldrflags ^ $newrflags) & ReviewInfo::RF_SUBMITTED) !== 0) {
             if ($this->item->pre("_rtype")) {
-                $i = $this->icon_h(true);
+                $i = $this->icon_h($aset, true);
                 $t .= $deleted ? " {$i}" : " <del>{$i}</del>";
             }
             if ($this->rtype) {
-                $t .= ' <ins>' . $this->icon_h(false) . '</ins>';
+                $t .= ' <ins>' . $this->icon_h($aset, false) . '</ins>';
             }
         } else if (!$deleted) {
-            $t .= ' ' . $this->icon_h(false);
+            $t .= ' ' . $this->icon_h($aset, false);
         }
         if ($this->item->differs("_round")) {
             if (($round = $this->item->pre("_round"))) {

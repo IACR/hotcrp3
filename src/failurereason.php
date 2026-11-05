@@ -82,19 +82,17 @@ class FailureReason extends Exception
 
     /** Return the HTTP status code appropriate for this failure.
      *
-     * Returns 404 when the failure means a named resource does not exist or
-     * the request did not name a valid resource. Otherwise returns 403, or
-     * 401 when $user is given and not signed in (the client should
-     * authenticate).
+     * Returns 404 when the resource definitely does not exist (e.g. invalid
+     * ID), or the failure deliberately declines to state whether it exists.
+     * Otherwise 403, or 401 when $user is given and not signed in (the client
+     * should authenticate).
      * @param ?Contact $user
      * @return int */
     function response_code(?Contact $user = null) {
         if (isset($this->_a["invalidId"])
             || isset($this->_a["conflictingId"])
             || isset($this->_a["invalidPath"])
-            || ($this->_a["noPaper"] ?? false)
-            || isset($this->_a["documentNotFound"])
-            || ($this->_a["reviewNonexistent"] ?? false)) {
+            || ($this->_a["notFound"] ?? false)) {
             return 404;
         } else if ($user && !$user->is_signed_in()) {
             return 401;
@@ -160,9 +158,20 @@ class FailureReason extends Exception
             return $this->submission_deadline_info();
         }
 
+        if ($dn === "au_seerev") {
+            // not a timed deadline; a dedicated message keys on the name
+            return [null, 1, "au_seerev", -1, []];
+        }
+
         if ($dn === "response") {
             $rrd = $this->conf->response_round_by_id($this->_a["commentRound"]);
             return ["response_open", $rrd->open, "response_done", $rrd->done, []];
+        }
+
+        if ($dn === "final_done") {
+            $sr = $this->conf->submission_round_by_tag($this->_a["sclass"] ?? "")
+                ?? $this->conf->unnamed_submission_round();
+            return ["final_open", $sr->final_open, $dn, $sr->final_done, []];
         }
 
         if (str_starts_with($dn, "rev_")
@@ -175,14 +184,15 @@ class FailureReason extends Exception
             $start = 1;
         }
 
-        if ($dn !== "extrev_chairreq") {
-            $dn = $this->conf->review_deadline_name($this->_a["reviewRound"] ?? null, false, true);
+        // `extrev_chairreq` keeps its name, but ends with the external
+        // review deadline
+        if (str_starts_with($dn, "pcrev_hard")
+            || str_starts_with($dn, "extrev_")) {
+            $end = $this->conf->review_deadline($this->_a["reviewRound"] ?? null, str_starts_with($dn, "pcrev_"), true);
+        } else {
+            $end = $this->conf->setting($dn) ?? -1;
         }
-        $end = $this->conf->setting($dn);
-        if ($end === null && str_starts_with($dn, "extrev_")) {
-            $end = $this->conf->setting("pcrev_" . substr($dn, 7));
-        }
-        return [$odn, $start, $dn, $end ?? -1, []];
+        return [$odn, $start, $dn, $end ?: -1, []];
     }
 
     /** @return array{string,int,string,int,list<FmtArg>} */
@@ -219,6 +229,9 @@ class FailureReason extends Exception
         }
         if ($this->_a["expand"] ?? false) {
             $args[] = new FmtArg("expand", true);
+        }
+        if ($this->_a["notFound"] ?? false) {
+            $args[] = new FmtArg("not_found", $this->_a["notFound"]);
         }
 
         // collect primary messages
@@ -320,6 +333,12 @@ class FailureReason extends Exception
         if ($this->_a["reviewNotComplete"] ?? false) {
             $ms[] = $this->conf->_("<0>Your own review for #{} is not complete, so you can’t view other people’s reviews", $paperId);
         }
+        if ($this->_a["reviewNotAssigned"] ?? false) {
+            $ms[] = $this->conf->_("<0>You aren’t allowed to self-assign a review for {submission} #{}", $paperId);
+        }
+        if ($this->_a["wrongReviewRound"] ?? false) {
+            $ms[] = $this->conf->_("<0>Review round ‘{}’ is not open for assignment", $this->conf->round_name($this->_a["reviewRound"]) ? : "unnamed");
+        }
         if ($this->_a["responseNonexistent"] ?? false) {
             $ms[] = $this->conf->_("<0>Response not allowed on {submission} #{}", $paperId);
         }
@@ -328,9 +347,6 @@ class FailureReason extends Exception
         }
         if ($this->_a["reviewsOutstanding"] ?? false) {
             $ms[] = $this->conf->_("<0>You will get access to the reviews once you complete your assigned reviews. If you can’t complete your reviews, please inform the organizers.");
-        }
-        if ($this->_a["reviewNotAssigned"] ?? false) {
-            $ms[] = $this->conf->_("<0>You aren’t allowed to self-assign a review for {submission} #{}", $paperId);
         }
         if (isset($this->_a["deadline"])) {
             list($odn, $start, $edn, $end, $args) = $this->deadline_info();

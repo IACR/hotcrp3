@@ -66,7 +66,7 @@ class Offline_Page {
         $trp = new TagRankParser($this->user);
         $tagger = new Tagger($this->user);
         if ($this->qreq->tag
-            && ($tag = $tagger->check(trim($this->qreq->tag), Tagger::NOVALUE))) {
+            && ($tag = $tagger->check_syntax(trim($this->qreq->tag), Tagger::NOVALUE))) {
             $trp->set_tag($tag);
         }
         $aset = $trp->parse_assignment_set($text, $filename);
@@ -91,9 +91,8 @@ class Offline_Page {
                    && $this->qreq->valid_post()
                    && $this->user->is_reviewer()) {
             return $this->handle_tag_indexes();
-        } else {
-            return false;
         }
+        return false;
     }
 
     function print() {

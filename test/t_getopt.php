@@ -91,6 +91,31 @@ class Getopt_Tester {
         xassert_eqq(json_encode($arg), '"Unknown option `-d`"');
     }
 
+    function test_getopt_cluster() {
+        $getopt = (new Getopt)->long("a", "b", "c:", "long")->interleave(true);
+        $arg = self::getopt_parse($getopt, ["fart", "-abab", "-abc=x", "y"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"b":false,"c":"x","_":["y"]}');
+        $arg = self::getopt_parse($getopt, ["fart", "-abcab", "-ba-long"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"b":false,"c":"ab","long":false,"_":[]}');
+        $arg = self::getopt_parse($getopt, ["fart", "-abx"]);
+        xassert_eqq($arg, "Unknown option `-x`");
+        $arg = self::getopt_parse((new Getopt)->long("a", "b")->otheropt(true),
+            ["fart", "-abxa"]);
+        xassert_eqq(json_encode($arg), '{"a":false,"b":false,"-":["-xa"],"_":[]}');
+    }
+
+    #[RequirePhp("8.5")]
+    function test_getopt_cluster_complexity() {
+        $getopt = (new Getopt)->long("a", "b", "c:", "long")->interleave(true);
+        // parsing time is linear in cluster length
+        $t0 = microtime(true);
+        self::getopt_parse($getopt, ["fart", "-" . str_repeat("a", 25000)]);
+        $t1 = microtime(true);
+        self::getopt_parse($getopt, ["fart", "-" . str_repeat("a", 400000)]);
+        $t2 = microtime(true);
+        xassert_lt($t2 - $t1, 64 * ($t1 - $t0) + 0.05);
+    }
+
     function test_getopt_count() {
         $arg = (new Getopt)->short("vV#x")->parse(["fart", "-vVVxV"]);
         xassert_eqq(json_encode($arg), '{"v":false,"V":3,"x":false,"_":[]}');
@@ -133,5 +158,18 @@ class Getopt_Tester {
 
         $arg = self::getopt_parse($getopt, ["fart", "b", "-y", "-1"]);
         xassert_eqq(json_encode($arg), '{"_subcommand":"b","y":-1,"_":[]}');
+    }
+
+    function test_format_help_line() {
+        xassert_eqq(Getopt::format_help_line("  -a, --abc", "Help"),
+                    "  -a, --abc               Help\n");
+        xassert_eqq(Getopt::format_help_line("  -c, --customer SITECLA", "Help"),
+                    "  -c, --customer SITECLA  Help\n");
+        xassert_eqq(Getopt::format_help_line("  -c, --customer SITECLAS", "Help"),
+                    "  -c, --customer SITECLAS Help\n");
+        xassert_eqq(Getopt::format_help_line("  -c, --customer SITECLASS", "Help"),
+                    "  -c, --customer SITECLASS\n                          Help\n");
+        xassert_eqq(Getopt::format_help_line("  -c, --customer SITECLASS", ""),
+                    "  -c, --customer SITECLASS\n");
     }
 }

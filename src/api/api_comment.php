@@ -56,6 +56,10 @@ class Comment_API_Status implements JsonSerializable {
 }
 
 class Comment_API extends MessageSet {
+    // bound on attachments one request may list for a comment, and on new
+    // attachments one request may upload among all the comments it saves
+    const MAX_ATTACHMENTS = Attachments_PaperOption::MAX_PARSE_COUNT;
+
     /** @var Conf */
     private $conf;
     /** @var Contact */
@@ -98,6 +102,13 @@ class Comment_API extends MessageSet {
     private $comments = [];
     /** @var int */
     private $ncomments = 0;
+
+    // request-wide attachment import state: the importer for the paper in
+    // hand, and how many more new attachments the request may upload
+    /** @var ?DocumentImporter */
+    private $docimporter;
+    /** @var int */
+    private $cost = 0;    // new attachments uploaded so far; bounded by MAX_ATTACHMENTS
 
     // current-item working state (reset per item)
     /** @var PaperInfo */
@@ -253,7 +264,7 @@ class Comment_API extends MessageSet {
         if (!isset($qreq->word_limit)) {
             $this->pex->set_ignore_soft_word_limits(true);
         }
-        $this->docloc = new DocumentLocator;
+        $this->docloc = new DocumentLocator($this->conf);
 
         // check Content-Type
         if (Mimetype::is_form($qreq->body_content_type() ?? Mimetype::FORM_DATA_TYPE)
@@ -434,6 +445,20 @@ class Comment_API extends MessageSet {
      * @param ?ResponseRound $rrd
      * @return ?CommentInfo the existing comment, or null if none matches */
     private function locate_target($cid, $rrd) {
+        // comment/response name (based on what was used to find it)
+        if ($rrd) {
+            if ($rrd->unnamed) {
+                $this->uccmttype = "Response";
+                $this->lccmttype = "response";
+            } else {
+                $this->uccmttype = $this->lccmttype = "{$rrd->name} response";
+            }
+        } else {
+            $this->uccmttype = "Comment";
+            $this->lccmttype = "comment";
+        }
+
+        // find comment
         $crow = null;
         if ($cid > 0) {
             $crow = self::find_comment($this->prow, "commentId={$cid}");
@@ -452,19 +477,6 @@ class Comment_API extends MessageSet {
                 || ($cid !== null && $cid !== $crow->commentId)) {
                 $this->stale = true;
             }
-        }
-
-        // comment/response name
-        if ($this->rrd) {
-            if ($this->rrd->unnamed) {
-                $this->uccmttype = "Response";
-                $this->lccmttype = "response";
-            } else {
-                $this->uccmttype = $this->lccmttype = "{$this->rrd->name} response";
-            }
-        } else {
-            $this->uccmttype = "Comment";
-            $this->lccmttype = "comment";
         }
         return $crow;
     }
@@ -559,10 +571,17 @@ class Comment_API extends MessageSet {
         if ($this->user->can_manage($this->prow)) {
             $this->status = 403;
             $this->error_at(null, "<0>You aren’t allowed to view that {$this->lccmttype}");
-        } else {
-            $this->status = 404;
-            $this->error_at(null, "<0>{$this->uccmttype} not found");
+            return null;
         }
+        // to a user who couldn't write it anyway, a hidden response
+        // addressed by round looks like no response
+        if ($rrd !== null
+            && !($cid > 0)
+            && !$this->user->can_edit_response($this->prow, $crow)) {
+            return CommentInfo::make_response_template($this->rrd, $this->prow);
+        }
+        $this->status = 404;
+        $this->error_at(null, "<0>{$this->uccmttype} not found");
         return null;
     }
 
@@ -577,13 +596,6 @@ class Comment_API extends MessageSet {
         }
 
         if (!$this->has_error_since($this->item_message_count)) {
-            // optimistic-concurrency precondition (a fresh skeleton has
-            // timeModified 0, so a new comment never trips this)
-            if ($req["if_unmodified_since"] !== null
-                && $req["if_unmodified_since"] < $crow->timeModified) {
-                $this->stale = true;
-            }
-
             // process the request. A stale edit still runs so its attempted
             // `change_list` is computed, but `save_comment` aborts rather than
             // committing (leaving `$crow` at the server's current version).
@@ -669,26 +681,61 @@ class Comment_API extends MessageSet {
             $req["docs"] = [];
             return $req;
         }
-        $req["text"] = isset($jp->text) ? rtrim(cleannl((string) $jp->text)) : "";
+        // absent text is resolved once the target comment is known
+        $req["text"] = isset($jp->text) ? rtrim(cleannl((string) $jp->text)) : null;
+        // text cut at a word limit: the soft cut loses visible text
+        $band = isset($jp->text) ? ((array) ($jp->truncated ?? []))["text"] ?? null : null;
+        if ($band === "soft") {
+            $this->error_at("text", $this->conf->_("<0>Refusing to save truncated comment"));
+            $this->inform_at("text", $this->conf->_("<0>Request the comment with ‘word_limit=hard’ to edit it."));
+            return null;
+        } else if ($band === "hard") {
+            $this->warning_at("text", $this->conf->_("<0>Text was cut at the hard word limit"));
+        }
         if (isset($jp->tags)) {
             $req["tags"] = is_array($jp->tags) ? join(" ", $jp->tags) : $jp->tags;
         }
         return $req;
     }
 
+    /** Return true if attachment descriptor `$dj` just names one of a
+     * comment’s current attachments (with IDs `$docids`), without content,
+     * so that importing it cannot store a new document.
+     * @param mixed $dj
+     * @param list<int> $docids
+     * @return bool */
+    static private function is_attachment_reference($dj, $docids) {
+        if ($dj instanceof DocumentInfo) {
+            return $dj->paperStorageId > 0;
+        }
+        return is_object($dj)
+            && is_int($dj->docid ?? null)
+            && in_array($dj->docid, $docids, true)
+            && !isset($dj->content)
+            && !isset($dj->content_base64)
+            && !isset($dj->content_file);
+    }
+
     /** Import the request's attachments now that the target comment is known.
      * A form request's descriptors come from `parse_qreq_prefix`; a JSON
      * request's from its `docs` value (missing/null retains the existing
-     * attachments, `false` clears them, a list is authoritative).
+     * attachments, `false` clears them, a list is authoritative). A list
+     * longer than MAX_ATTACHMENTS fails, and so does one whose new uploads
+     * would take the request past MAX_ATTACHMENTS of those.
      * @param array<string,mixed> $req
      * @param CommentInfo $xcrow
      * @return ?list<DocumentInfo> */
     private function import_docs($req, $xcrow) {
         $existing = $xcrow->commentId ? $xcrow->attachments()->as_list() : [];
+        // bound the list -- though a comment that somehow has more may keep
+        // that many, and, as with upload size limits, a site administrator’s
+        // JSON is exempt
+        $max = max(self::MAX_ATTACHMENTS, count($existing));
         $src = $req["docs_src"];
+        $exempt = $this->user->privChair && !($src instanceof Qrequest);
         if ($src instanceof Qrequest) {
             $descriptors = Attachments_PaperOption::parse_qreq_prefix(
-                $this->prow, $src, "attachment", DTYPE_COMMENT, $existing, $this
+                $this->prow, $src, "attachment", DTYPE_COMMENT, $existing, $max, $this
             );
         } else if (!isset($src->docs)) {
             return $existing;
@@ -696,14 +743,49 @@ class Comment_API extends MessageSet {
             return [];
         } else {
             $descriptors = is_array($src->docs) ? $src->docs : [$src->docs];
+            if (count($descriptors) > $max && !$exempt) {
+                $descriptors = null;
+            }
+        }
+        if ($descriptors === null) {
+            $this->error_at("docs", $this->conf->_("<0>Too many attachments (at most {max})", new FmtArg("max", $max)));
+            $this->status = 400;
+            return null;
         }
 
-        // a comment may retain only its own attachments by `docid`
-        $di = (new DocumentImporter($this->prow, DTYPE_COMMENT, 0, $this, "docs"))
-            ->set_allowed_docids($xcrow->attachment_ids())
-            ->on_import([$this->docloc, "on_document_import"]);
+        // the request is charged (below, per attempt) for each descriptor
+        // that might store a document -- that does not just name one of this
+        // comment’s attachments, as an edit that keeps them does -- so that
+        // a request saving many comments uploads at most MAX_ATTACHMENTS
+        // between them: first check that this comment’s would fit
+        $docids = $xcrow->attachment_ids();
+        if (!$exempt) {
+            $nupload = 0;
+            foreach ($descriptors as $dj) {
+                if (!self::is_attachment_reference($dj, $docids)) {
+                    ++$nupload;
+                }
+            }
+            if ($this->cost + $nupload > self::MAX_ATTACHMENTS) {
+                $this->error_at("docs", $this->conf->_("<0>Too many attachments (at most {max} new per request)", new FmtArg("max", self::MAX_ATTACHMENTS)));
+                $this->status = 400;
+                return null;
+            }
+        }
+
+        // comments on the paper in hand share an importer, and thus its
+        // index of the paper’s stored documents; a comment may retain only
+        // its own attachments by `docid`
+        if (!$this->docimporter || $this->docimporter->prow !== $this->prow) {
+            $this->docimporter = (new DocumentImporter($this->prow, DTYPE_COMMENT, 0, $this, "docs"))
+                ->on_import([$this->docloc, "on_document_import"]);
+        }
+        $di = $this->docimporter->set_allowed_docids($docids);
         $docs = [];
         foreach ($descriptors as $dj) {
+            if (!$exempt && !self::is_attachment_reference($dj, $docids)) {
+                ++$this->cost;
+            }
             if (($doc = $di->upload_document($dj))) {
                 $docs[] = $doc;
             } else {
@@ -740,6 +822,18 @@ class Comment_API extends MessageSet {
             return null;
         }
 
+        // optimistic-concurrency precondition (a fresh skeleton has
+        // timeModified 0, so a new comment never trips this)
+        if ($req["if_unmodified_since"] !== null
+            && $req["if_unmodified_since"] < $xcrow->timeModified) {
+            $this->stale = true;
+        }
+
+        // absent text: empty for a new comment, unchanged for an existing one
+        if ($req["text"] === null) {
+            $req["text"] = $xcrow->commentId ? $xcrow->raw_content() : "";
+        }
+
         // import attachments
         if ($req["text"] !== false
             && ($req["docs"] = $this->import_docs($req, $xcrow)) === null) {
@@ -762,9 +856,8 @@ class Comment_API extends MessageSet {
 
         // changing comment documents requires document:write scope
         if (self::document_ids($req["docs"] ?? []) !== $xcrow->attachment_ids()
-            && !$this->user->scope_allows(TokenScope::S_DOC_WRITE, $this->prow)) {
-            $this->prow->failure_reason(["scope" => TokenScope::S_DOC_WRITE])
-                ->set("expand", true)->append_to($this, null, 2);
+            && ($fr = $this->user->perm_scope_allows(TokenScope::S_DOC_WRITE, $this->prow))) {
+            $fr->set("expand", true)->append_to($this, null, 2);
             return null;
         }
 

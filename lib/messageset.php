@@ -23,6 +23,8 @@ class MessageItem implements JsonSerializable {
     public $fmessage;
     /** @var ?list<mixed> */
     public $args;
+    /** @var ?string */
+    public $item_class;
 
     /** @param int $status
      * @param ?string $field
@@ -40,6 +42,25 @@ class MessageItem implements JsonSerializable {
         } else {
             $this->message = $m ?? "";
         }
+    }
+
+    /** @return $this */
+    private function _f() {
+        if ($this->fmessage === null) {
+            $this->fmessage = $this->message;
+            if ($this->args === null) {
+                $this->args = [];
+            }
+            $this->message = null;
+        }
+        return $this;
+    }
+
+    /** @param ?string $item_class
+     * @return $this */
+    function set_item_class($item_class) {
+        $this->item_class = $item_class;
+        return $this;
     }
 
     /** @param object $x
@@ -165,6 +186,16 @@ class MessageItem implements JsonSerializable {
         return $mi;
     }
 
+    /** @return MessageItem */
+    function without_context() {
+        if ($this->pos1 === null && $this->pos2 === null && $this->context === null) {
+            return $this;
+        }
+        $mi = clone $this;
+        $mi->pos1 = $mi->pos2 = $mi->context = null;
+        return $mi;
+    }
+
     #[\ReturnTypeWillChange]
     function jsonSerialize() {
         $x = ["status" => $this->status];
@@ -247,10 +278,7 @@ class MessageItem implements JsonSerializable {
     /** @param ?string $msg
      * @return MessageItem */
     static function fplain($msg, ...$args) {
-        if (empty($args)) {
-            $args[] = FmtArg::blank();
-        }
-        return new MessageItem(MessageSet::PLAIN, null, $msg, ...$args);
+        return (new MessageItem(MessageSet::PLAIN, null, $msg, ...$args))->_f();
     }
 
     /** @param ?string $msg
@@ -322,8 +350,6 @@ class MessageSet {
 
     const IGNORE_MSGS = 1;
     const IGNORE_DUPS = 2;
-    const IGNORE_DUPS_FIELD = 6;
-    const IGNORE_DUPS_FIELD_FLAG = 4;
     const NEED_FMT = 8;
 
     // These numbers are stored in databases (e.g., PaperStorage.infoJson.cfmsg)
@@ -392,11 +418,10 @@ class MessageSet {
         return $oim;
     }
 
-    /** @param bool|0|2|6 $x
+    /** @param bool $x
      * @return $this */
     function set_ignore_duplicates($x) {
-        $f = is_bool($x) ? ($x ? self::IGNORE_DUPS : 0) : $x;
-        $this->change_ms_flags(self::IGNORE_DUPS | self::IGNORE_DUPS_FIELD_FLAG, $f);
+        $this->change_ms_flags(self::IGNORE_DUPS, $x ? self::IGNORE_DUPS : 0);
         return $this;
     }
 
@@ -419,8 +444,14 @@ class MessageSet {
     }
 
     /** @param MessageItem $mi
-     * @return int|false */
-    function message_index($mi) {
+     * @param bool $ignore_field
+     * @return int|false
+     *
+     * Return the index of an already-registered message compatible with `$mi`,
+     * if one exists and is easy to find. Used to suppress duplicates. Not
+     * precise: if there are more than 100 messages, this function can return
+     * `false` rather than the index of a duplicate. */
+    function message_index($mi, $ignore_field = false) {
         if ($mi->need_fmt()) {
             error_log("cannot call message_index on unformatted message " . debug_string_backtrace());
             return false;
@@ -428,18 +459,21 @@ class MessageSet {
         if ($this->problem_status < $mi->status) {
             return false;
         }
-        $ignore_field = ($this->_ms_flags & self::IGNORE_DUPS_FIELD_FLAG) !== 0;
         if ($mi->field !== null
             && !$ignore_field
             && ($this->errf[$mi->field] ?? -5) < $mi->status) {
             return false;
         }
         $this->apply_fmt();
-        foreach ($this->msgs as $i => $m) {
+        $nmsgs = count($this->msgs);
+        // do not scan long message lists: first 10 + last 90
+        for ($i = 0; $i !== $nmsgs; $i = ($i === 9 ? max($nmsgs - 90, 10) : $i + 1)) {
+            $m = $this->msgs[$i];
             if ($m->status === $mi->status
                 && ($ignore_field || $m->field === $mi->field)
-                && $m->message === $mi->message)
+                && $m->message === $mi->message) {
                 return $i;
+            }
         }
         return false;
     }
@@ -620,6 +654,14 @@ class MessageSet {
     /** @return bool */
     function has_error() {
         return $this->problem_status >= self::ERROR;
+    }
+    /** @return bool */
+    function has_warning() {
+        foreach ($this->msgs as $mi) {
+            if ($mi->status === self::WARNING)
+                return true;
+        }
+        return false;
     }
     /** @return bool */
     function has_success() {
@@ -874,12 +916,13 @@ class MessageSet {
     /** @param string $field
      * @return \Generator<MessageItem> */
     function message_list_at($field) {
-        if (isset($this->errf[$field])) {
-            $this->apply_fmt();
-            foreach ($this->msgs as $mi) {
-                if ($mi->field === $field) {
-                    yield $mi;
-                }
+        if (!isset($this->errf[$field])) {
+            return;
+        }
+        $this->apply_fmt();
+        foreach ($this->msgs as $mi) {
+            if ($mi->field === $field) {
+                yield $mi;
             }
         }
     }
@@ -898,6 +941,78 @@ class MessageSet {
         $this->apply_fmt();
         foreach ($this->msgs as $mi) {
             if (self::field_is_under($mi->field, $prefix, $separator))
+                yield $mi;
+        }
+    }
+
+    /** @param ?string $field
+     * @param string $filter
+     * @return bool */
+    static private function filter_pattern_match($field, $filter) {
+        if (!str_ends_with($filter, "*")) {
+            return $field === $filter;
+        }
+        $filterlen = strlen($filter);
+        if ($filterlen === 1) {
+            return $field !== null;
+        } else if ($field === null) {
+            return false;
+        }
+        if (strpos("/:", $filter[$filterlen - 2]) !== false) {
+            $wantlen = max(min(strlen($field), $filterlen - 1), $filterlen - 2);
+        } else {
+            $wantlen = $filterlen - 1;
+        }
+        return strlen($field) >= $wantlen
+            && substr_compare($field, $filter, 0, $wantlen) === 0;
+    }
+
+    /** @param MessageItem $mi
+     * @param string|list<string>|Closure(MessageItem):bool $filter
+     * @return bool */
+    static private function test_filter($mi, $filter) {
+        if (is_string($filter)) {
+            return $mi->field !== null
+                && self::filter_pattern_match($mi->field, $filter);
+        } else if (is_array($filter)) {
+            if ($mi->field === null) {
+                return false;
+            }
+            foreach ($filter as $f) {
+                if (self::filter_pattern_match($mi->field, $f))
+                    return true;
+            }
+            return false;
+        }
+        return $filter($mi);
+    }
+
+    /** @param string|list<string>|Closure(MessageItem):bool $filter
+     * @return bool */
+    private function filter_may_match($filter) {
+        if (is_string($filter)) {
+            $fs = [$filter];
+        } else if (is_array($filter) && count($filter) === 1) {
+            $fs = $filter;
+        } else {
+            return true;
+        }
+        foreach ($fs as $f) {
+            if (str_ends_with($f, "*") || isset($this->errf[$f]))
+                return true;
+        }
+        return false;
+    }
+
+    /** @param string|list<string>|Closure(MessageItem):bool $filter
+     * @return \Generator<MessageItem> */
+    function message_list_for($filter) {
+        if (!$this->filter_may_match($filter)) {
+            return;
+        }
+        $this->apply_fmt();
+        foreach ($this->msgs as $mi) {
+            if (self::test_filter($mi, $filter))
                 yield $mi;
         }
     }
@@ -1026,11 +1141,27 @@ class MessageSet {
     }
 
 
+    /** @param string $t
+     * @param string $tcontext
+     * @param bool $li
+     * @param string $liclass
+     * @return string */
+    static private function render_feedback_item($t, $tcontext, $li, $liclass) {
+        if ($li && $liclass !== "") {
+            return "<li class=\"{$liclass}\">{$t}{$tcontext}</li>";
+        } else if ($li) {
+            return "<li>{$t}{$tcontext}</li>";
+        }
+        return $t . $tcontext;
+    }
+
     /** @param iterable<MessageItem> $message_list
+     * @bool $li
      * @return list<string> */
-    static function feedback_html_items($message_list) {
+    static function feedback_html_items($message_list, $li = false) {
         $ts = [];
         $t = $tcontext = "";
+        $liclass = "";
         $last_mi = $last_landmark = null;
         foreach ($message_list as $mi) {
             if ($mi->message === null) {
@@ -1071,8 +1202,8 @@ class MessageSet {
                 $s = "";
             } else if ($mi->status !== self::INFORM
                        && ($t !== "" || $tcontext !== "")) {
-                $ts[] = $t . $tcontext;
-                $t = $tcontext = "";
+                $ts[] = self::render_feedback_item($t, $tcontext, $li, $liclass);
+                $t = $tcontext = $liclass = "";
             } else if ($mi->context !== null
                        && $mi->pos1 !== null
                        && $tcontext !== "") {
@@ -1085,7 +1216,7 @@ class MessageSet {
                 && $mi->landmark !== ""
                 && ($mi->status !== self::INFORM || $mi->landmark !== $last_landmark)) {
                 if (($mk = self::landmark_context_marker($mi))) {
-                    $lm = htmlspecialchars($mk[0]) . " <em>" . htmlspecialchars($mk[1]) . "</em>";
+                    $lm = htmlspecialchars($mk[0]) . " <em>" . htmlspecialchars($mk[1]) . "</em> ";
                 } else {
                     $lm = "<span class=\"lineno\">" . htmlspecialchars($mi->landmark) . ":</span> ";
                 }
@@ -1104,6 +1235,9 @@ class MessageSet {
                     $k = self::status_class($mi->status, "is-diagnostic", "is-");
                 }
                 $t .= "<div class=\"{$k}\">{$pstart}{$lm}{$s}</div>";
+                if ($mi->item_class !== null) {
+                    $liclass = $mi->item_class;
+                }
             } else {
                 $t .= "<div class=\"msg-inform\">{$pstart}{$lm}{$s}</div>";
             }
@@ -1123,7 +1257,7 @@ class MessageSet {
             }
         }
         if ($t !== "" || $tcontext !== "") {
-            $ts[] = $t . $tcontext;
+            $ts[] = self::render_feedback_item($t, $tcontext, $li, $liclass);
         }
         return $ts;
     }
@@ -1132,7 +1266,7 @@ class MessageSet {
      * @param ?array<string,mixed> $js
      * @return string */
     static function feedback_html($message_list, $js = null) {
-        $items = self::feedback_html_items($message_list);
+        $items = self::feedback_html_items($message_list, true);
         if (empty($items)) {
             return "";
         }
@@ -1142,7 +1276,7 @@ class MessageSet {
             $js["class"] = Ht::add_tokens("feedback-list", $js["class"] ?? null);
             $k = Ht::extra($js);
         }
-        return "<ul{$k}><li>" . join("</li><li>", $items) . "</li></ul>";
+        return "<ul{$k}>" . join("", $items) . "</ul>";
     }
 
     /** @param string $field

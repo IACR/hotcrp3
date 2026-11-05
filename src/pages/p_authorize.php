@@ -6,7 +6,8 @@ namespace HotCRP;
 use Conf, Contact, Navigation, Ht, JsonResult, Qrequest, Redirection,
     MessageItem, MessageSet, FmtArg, UnicodeHelper, ComponentSet, XtParams,
     PageCompletion, TokenInfo, TokenScope, Authorization_Token, SettingParser,
-    BotContact, Signin_Page;
+    BotContact, Signin_Page, UserSecurityEvent, AuthenticationChecker,
+    UpdateSession;
 
 class Authorize_Page {
     /** @var Conf */
@@ -29,10 +30,20 @@ class Authorize_Page {
     private $authconfirmed = false;
     /** @var ?list<Contact> */
     private $_bot_choices;
+    /** @var ?AuthenticationChecker */
+    private $_reauth_checker;
 
     /** Maximum length of a `state` or `nonce`; RFC 6749 sets no limit,
      * but avoid DoS */
     const MAXOPAQUE = 4096;
+
+    /** Minimum acceptable `max_age` parameter */
+    const MAX_AGE_MIN_BOUND = 300;
+    /** Sign-ins at least this recent satisfy any `max_age`, including the
+     * zero of `prompt=login`: a sign-in made to answer this very request
+     * must count. */
+    const SIGNIN_MAX_AGE_MIN_BOUND = 120;
+
 
     function __construct(Contact $viewer, Qrequest $qreq, ?ComponentSet $cs = null) {
         $this->conf = $viewer->conf;
@@ -133,37 +144,10 @@ class Authorize_Page {
     }
 
     private function handle_request() {
-        $scope = trim($this->qreq->scope ?? "");
-        if (!self::check_scope_syntax($scope)) {
-            $this->redirect_error("invalid_scope");
-        }
-        if ($scope === "") {
-            // RFC 6749 §3.3: a request that omits `scope` gets this server’s
-            // default
-            $scope = "openid email profile";
-            if (!$this->client->only_openid) {
-                [, $rest] = TokenScope::scope_str_split_openid($this->client->scope);
-                $scope .= " " . $rest;
-            }
-        }
-        if ($this->client->only_openid
-            && !TokenScope::scope_str_contains($scope, "openid")) {
-            $this->redirect_error("invalid_scope", "Scope `openid` required");
-        }
-        if ($this->client->is_cdb
-            && ($ts = TokenScope::parse($scope, null))
-            && $ts->has_selector()) {
-            // A token for a cdb client works at every conference on the contact
-            // database, but a selector means whatever it means at the site
-            // presenting it: `#12` names a different submission at each.
-            $this->redirect_error("invalid_scope", "Submission selectors not allowed for this client");
-        }
-
+        // check response_type, refuse unsupported
         if ($this->qreq->response_type !== "code") {
             $this->redirect_error("unsupported_response_type", "Response type `code` required");
-        }
-
-        if (($this->qreq->request ?? "") !== "") {
+        } else if (($this->qreq->request ?? "") !== "") {
             $this->redirect_error("request_not_supported");
         } else if (($this->qreq->request_uri ?? "") !== "") {
             $this->redirect_error("request_uri_not_supported");
@@ -171,17 +155,7 @@ class Authorize_Page {
             $this->redirect_error("registration_not_supported");
         }
 
-        if (($this->qreq->prompt ?? "") !== "") {
-            $prompts = [];
-            foreach (explode(" ", trim($this->qreq->prompt)) as $p) {
-                if ($p !== "")
-                    $prompts[] = $p;
-            }
-            if (in_array("none", $prompts, true)) {
-                $this->redirect_error("interaction_required");
-            }
-        }
-
+        // check code_challenge and code_challenge_method
         $code_challenge = $code_challenge_method = null;
         if (($this->qreq->code_challenge ?? "") !== "") {
             $code_challenge = $this->qreq->code_challenge;
@@ -202,20 +176,238 @@ class Authorize_Page {
             $this->redirect_error("invalid_request", "Code challenge with method `S256` required");
         }
 
-        // XXX max_age
-        // XXX prompt login vs. select_account vs. consent
-        // XXX record consent for future use?
+        // check scope
+        $scope = trim($this->qreq->scope ?? "");
+        if (!self::check_scope_syntax($scope)) {
+            $this->redirect_error("invalid_scope");
+        }
+        if ($scope === "") {
+            // RFC 6749 §3.3: a request that omits `scope` gets this server’s
+            // default
+            $scope = "openid email profile";
+            if (!$this->client->only_openid) {
+                [, $rest] = TokenScope::scope_str_split_openid($this->client->scope);
+                $scope .= " " . $rest;
+            }
+        }
+        $ts = TokenScope::parse($scope, null);
+        $scope = TokenScope::unparse($ts);
+        if ($this->client->only_openid
+            && (!$ts || !$ts->allows_oidc(TokenScope::OIDC_OPENID))) {
+            $this->redirect_error("invalid_scope", "Scope `openid` required");
+        }
+        if ($this->client->is_cdb
+            && $ts
+            && $ts->has_selector()) {
+            // A token for a cdb client works at every conference on the contact
+            // database, but a selector means whatever it means at the site
+            // presenting it: `#12` names a different submission at each.
+            $this->redirect_error("invalid_scope", "Submission selectors not allowed for this client");
+        }
 
-        $this->print_form([
+        // enumerate prompts
+        $prompts = [];
+        if (($this->qreq->prompt ?? "") !== "") {
+            foreach (explode(" ", trim($this->qreq->prompt)) as $p) {
+                if ($p !== "")
+                    $prompts[] = $p;
+            }
+            if (in_array("none", $prompts, true) && count($prompts) > 1) {
+                // `none` asks for no interaction at all, so it cannot be
+                // combined with a request for some (OpenID Connect Core §3.1.2.1)
+                $this->redirect_error("invalid_request", "Invalid `prompt`");
+            }
+        }
+
+        // `max_age` asks that the person have authenticated within that many
+        // seconds; `prompt=login` asks that they authenticate now, which is the
+        // same request with no window at all. `AuthenticationChecker` clamps
+        // whatever arrives here to a window this site is willing to honor.
+        $max_age = null;
+        if (($this->qreq->max_age ?? "") !== "") {
+            if (!ctype_digit($this->qreq->max_age)) {
+                $this->redirect_error("invalid_request", "Invalid `max_age`");
+            }
+            $max_age = intval($this->qreq->max_age);
+        }
+        if (in_array("login", $prompts, true)) {
+            $max_age = 0;
+        }
+
+        // maybe redirect to the requested user
+        if (($chosen = $this->chosen_email())
+            && strcasecmp($chosen, $this->viewer->email ?? "") !== 0
+            && ($uindex = Contact::session_index_by_email($this->qreq, $chosen)) >= 0
+            && $uindex !== $this->viewer->session_index()) {
+            // (307 keeps a POSTed request's parameters)
+            $nav = $this->qreq->navigation();
+            throw new Redirection("{$nav->base_path}u/{$uindex}/authorize{$nav->php_suffix}{$nav->query}", 307);
+        }
+
+        // XXX prompt select_account vs. consent
+
+        $token_params = [
             "scope" => $scope,
             "code_challenge" => $code_challenge,
-            "code_challenge_method" => $code_challenge_method
-        ]);
+            "code_challenge_method" => $code_challenge_method,
+            "max_age" => $max_age,
+            "login_hint" => $this->login_hint()
+        ];
+        if (in_array("none", $prompts, true)) {
+            $this->handle_prompt_none($token_params);
+        } else {
+            $this->print_form($token_params);
+        }
     }
 
+    /** The account this request asks to authenticate, or null.
+     *
+     * Read from the code once one exists: the consent post carries only the
+     * code, and a hint that could be edited between the two would not be one.
+     * @return ?string */
+    private function login_hint() {
+        $h = $this->token ? $this->token->data("login_hint") : $this->qreq->login_hint;
+        return is_string($h) && validate_email($h) ? $h : null;
+    }
+
+    /** The freshness window the request parameters ask for, or null if they
+     * ask for none: `prompt=login` asks for 0.
+     * @return ?int */
+    private function request_max_age() {
+        if (preg_match('/(?:\A|\s)login(?:\s|\z)/', $this->qreq->prompt ?? "")) {
+            return 0;
+        } else if (ctype_digit($this->qreq->max_age ?? "")) {
+            return intval($this->qreq->max_age);
+        }
+        return null;
+    }
+
+    /** The freshness window this request asks for, or null if it asks for none.
+     * @return ?int */
+    private function required_max_age() {
+        $ma = $this->token ? $this->token->data("max_age") : null;
+        return is_int($ma) ? $ma : null;
+    }
+
+    /** The confirmation a `$max_age` of `$max_age` owes for `$user`, or null
+     * if none is owed.
+     * @param Contact $user
+     * @param ?int $max_age
+     * @return ?AuthenticationChecker */
+    private function make_authentication_checker($user, $max_age) {
+        if ($max_age === null) {
+            return null;
+        }
+        return $user->authentication_checker($this->qreq, "authorize")
+            ->set_max_age(max($max_age, self::MAX_AGE_MIN_BOUND))
+            ->set_max_signin_age(max($max_age, self::SIGNIN_MAX_AGE_MIN_BOUND))
+            ->set_require_attested(true)
+            ->set_quiet(true);
+    }
+
+    /** The confirmation this request owes for `$user`, or null if it owes none.
+     * @param Contact $user
+     * @return ?AuthenticationChecker */
+    private function authentication_checker($user) {
+        return $this->make_authentication_checker($user, $this->required_max_age());
+    }
+
+    /** @return never */
+    private function handle_prompt_none($token_params) {
+        $emails = $this->authorized_emails();
+        if (empty($emails)
+            || $this->viewer->is_bearer_authorized()) {
+            // no one to authorize as (no session/no matching user)
+            $this->redirect_error("login_required");
+        } else if (count($emails) > 1
+                   || $this->viewer->is_actas_user()) {
+            // they must pick
+            $this->redirect_error("account_selection_required");
+        }
+        if ($this->sole_authorized_user() !== $this->viewer) {
+            // the session's one account is at another slot (this one is empty);
+            // 307 keeps a POSTed request's parameters (unlike the redirect to
+            // the client, this one stays on this site)
+            $nav = $this->qreq->navigation();
+            $uindex = array_key_first($emails);
+            throw new Redirection("{$nav->base_path}u/{$uindex}/authorize{$nav->php_suffix}{$nav->query}", 307);
+        }
+
+        if (($ac = $this->make_authentication_checker($this->viewer, $token_params["max_age"]))
+            && !$ac->test()) {
+            // user needs to sign in
+            $this->redirect_error("login_required");
+        }
+
+        // `handle_request` canonicalized this request’s scope, and recorded
+        // consent scopes are canonical too, so they compare directly.
+        if (!UserSecurityEvent::session_oauth_confirmation($this->qreq->qsession(),
+                $this->viewer->email,
+                $this->client->client_id,
+                $this->qreq->redirect_uri,
+                $token_params["scope"],
+                $this->client->is_cdb ? null : $this->conf->dbname)) {
+            // no current authorization for exactly this client & scope
+            $this->redirect_error("consent_required");
+        }
+
+        $token_params["consented_email"] = $this->viewer->email;
+        $this->create_token($token_params);
+        $this->qreq->code = $this->token->salt;
+        $this->qreq->authemail = $this->viewer->email;
+        $this->handle_authconfirm($this->viewer);
+        throw new PageCompletion; // unreachable; `handle_authconfirm` redirects
+    }
+
+    /** The account this page has settled on, or null while the choice is open.
+     *
+     * A `login_hint` settles it, and so does pressing an account's button:
+     * `authemail` names the account that button was for. It only narrows what
+     * this page offers; `handle_authconfirm` checks the account it acts on.
+     * @return ?string */
+    private function chosen_email() {
+        if (($hint = $this->login_hint()) !== null) {
+            return $hint;
+        }
+        if ($this->token && ($ce = $this->token->data("consented_email")) !== null) {
+            return $ce;
+        }
+        $ae = $this->qreq->authemail;
+        return is_string($ae) && $ae !== "" ? $ae : null;
+    }
+
+    /** Session accounts this request may be authorized with, by session slot.
+     * Narrowed to one once the request has settled on one.
+     * @return array<int,string> */
     private function authorized_emails() {
-        return array_filter(Contact::session_emails($this->qreq),
-            function ($e) { return $e !== ""; });
+        $chosen = $this->chosen_email();
+        $emails = [];
+        foreach (Contact::session_emails($this->qreq) as $uindex => $email) {
+            if ($email !== ""
+                && ($chosen === null || strcasecmp($email, $chosen) === 0))
+                $emails[$uindex] = $email;
+        }
+        return $emails;
+    }
+
+    /** The one account this page can act for, if there is only one.
+     *
+     * A confirmation challenges a particular account, so it can only be posed
+     * once the account is settled — by a `login_hint`, or by the session
+     * holding just one. Otherwise the choice comes first.
+     * @return ?Contact */
+    private function sole_authorized_user() {
+        $emails = $this->authorized_emails();
+        if (count($emails) !== 1) {
+            return null;
+        }
+        $email = current($emails);
+        if ($this->viewer->has_email()
+            && strcasecmp($this->viewer->email, $email) === 0) {
+            return $this->viewer;
+        }
+        return $this->conf->user_by_email($email)
+            ?? $this->conf->cdb_user_by_email($email);
     }
 
     private function signin_url() {
@@ -225,13 +417,60 @@ class Authorize_Page {
         } else {
             $param = $this->qreq->subset_as_array("client_id", "redirect_uri",
                 "response_type", "state", "scope", "nonce", "code_challenge",
-                "code_challenge_method", "prompt");
+                "code_challenge_method", "prompt", "max_age", "login_hint");
         }
-        return $this->conf->hoturl("signin", [
+        $sparam = [
             "redirect" => "authorize{$nav->php_suffix}?" . http_build_query($param)
-        ]);
+        ];
+        if (($hint = $this->login_hint()) !== null) {
+            $sparam["email"] = $hint;
+        }
+        // a requested freshness window passes to the sign-in, which passes it
+        // to any external provider
+        $max_age = $this->token ? $this->required_max_age() : $this->request_max_age();
+        if ($max_age !== null) {
+            $sparam["max_age"] = $max_age;
+        }
+        return $this->conf->hoturl("signin", $sparam);
     }
 
+    /** @param ?array{scope:?string,code_challenge:?string,code_challenge_method:?string,max_age:?int,login_hint:?string,consented_email?:string} $token_params */
+    private function create_token($token_params) {
+        $token = (new TokenInfo($this->conf, TokenInfo::OAUTHCODE))
+            ->set_token_pattern("hcoc[36]")
+            ->set_invalid_in(3600)
+            ->set_expires_in(86400)
+            ->change_data("state", $this->qreq->state)
+            ->change_data("nonce", $this->qreq->nonce)
+            ->change_data("scope", $token_params["scope"])
+            ->change_data("client_id", $this->client->client_id)
+            // the name the consent page is about to show, so that the name
+            // the user later revokes is the name they agreed to
+            ->change_data("client_name", $this->client->title_text())
+            ->change_data("redirect_uri", $this->qreq->redirect_uri)
+            // bind the code to this browser session
+            ->change_data("ssecret", UpdateSession::session_secret($this->qreq->qsession()));
+        if ($token_params["max_age"] !== null) {
+            $token->change_data("max_age", $token_params["max_age"]);
+        }
+        if ($token_params["login_hint"] !== null) {
+            $token->change_data("login_hint", $token_params["login_hint"]);
+        }
+        if ($token_params["code_challenge"] !== null) {
+            $token->change_data("code_challenge", $token_params["code_challenge"])
+                ->change_data("code_challenge_method", $token_params["code_challenge_method"]);
+        }
+        if ($this->client->client_document) {
+            // remember relevant subset of the client’s metadata document
+            $token->change_data("client_document", $this->client->token_document());
+        }
+        if (isset($token_params["consented_email"])) {
+            $token->change_data("consented_email", $token_params["consented_email"]);
+        }
+        $this->token = $token->insert();
+    }
+
+    /** @param ?array{scope:?string,code_challenge:?string,code_challenge_method:?string,max_age:?int,login_hint:?string,consented_email?:string} $token_params */
     function print_form($token_params = null) {
         // redirect to signin if we have no available accounts
         if (!$this->authorized_emails()) {
@@ -240,31 +479,23 @@ class Authorize_Page {
 
         // create token if desired
         if ($token_params) {
-            $token = (new TokenInfo($this->conf, TokenInfo::OAUTHCODE))
-                ->set_token_pattern("hcoc[36]")
-                ->set_invalid_in(3600)
-                ->set_expires_in(86400)
-                ->change_data("state", $this->qreq->state)
-                ->change_data("nonce", $this->qreq->nonce)
-                ->change_data("scope", $token_params["scope"])
-                ->change_data("client_id", $this->client->client_id)
-                // the name the consent page is about to show, so that the name
-                // the user later revokes is the name they agreed to
-                ->change_data("client_name", $this->client->title_text())
-                ->change_data("redirect_uri", $this->qreq->redirect_uri);
-            if ($token_params["code_challenge"] !== null) {
-                $token->change_data("code_challenge", $token_params["code_challenge"])
-                    ->change_data("code_challenge_method", $token_params["code_challenge_method"]);
-            }
-            if ($this->client->client_document) {
-                // remember relevant subset of the client’s metadata document
-                $token->change_data("client_document", $this->client->token_document());
-            }
-            $this->token = $token->insert();
+            $this->create_token($token_params);
         }
 
         if (!$this->cs) {
             JsonResult::make_minimal(200, ["code" => $this->token->salt])->complete();
+        }
+
+        // A confirmation is asked for only once a consent has been given: the
+        // code records it, `print_reauth_exit` returns here, and once the
+        // confirmation lands `resume_consent` finishes without asking again.
+        // A request that has consented to nothing yet gets the form first.
+        if ($this->_reauth_checker === null
+            && $this->token
+            && $this->token->data("consented_email") !== null
+            && ($ac = $this->authentication_checker($this->viewer))
+            && !$ac->test()) {
+            $this->_reauth_checker = $ac;
         }
 
         $this->qreq->print_header("Sign in", "authorize", [
@@ -274,7 +505,31 @@ class Authorize_Page {
         Signin_Page::print_form_start_for($this->qreq, "=signin");
         $this->cs->print_members("authorize/form");
         echo '</form>';
+        if (($ac = $this->_reauth_checker)) {
+            // the confirmation posts on its own form, which cannot nest inside
+            // the consent form; the account being confirmed need not be the
+            // session slot this page was reached through
+            $uindex = Contact::session_index_by_email($this->qreq, $ac->user->email);
+            echo '<form id="f-reauth" class="ui-submit js-reauth"',
+                $uindex >= 0 ? " data-session-index=\"{$uindex}\"" : "",
+                ' data-no-confirm></form>';
+        }
         $this->qreq->print_footer();
+    }
+
+    function print_form_reauth() {
+        if (!($ac = $this->_reauth_checker)) {
+            return;
+        }
+        // Only print a confirmation notice if one is offered
+        ob_start();
+        $reauth_allowed = $ac->print();
+        $body = ob_get_clean();
+        if ($reauth_allowed) {
+            echo '<p class="feedback is-warning">', htmlspecialchars($this->client->title_text()),
+                ' asks you to confirm your account before continuing.</p>';
+        }
+        echo $body;
     }
 
     function print_form_title() {
@@ -312,6 +567,9 @@ class Authorize_Page {
     }
 
     function print_form_annotation() {
+        if ($this->_reauth_checker) {
+            return;
+        }
         if ($this->client->self_registered) {
             $this->print_self_registered_identity();
         }
@@ -396,6 +654,9 @@ class Authorize_Page {
     }
 
     function print_form_main() {
+        if ($this->_reauth_checker) {
+            return;
+        }
         $bots = $this->bot_choices();
         if (!empty($bots) && friendly_boolean($this->qreq->bots)) {
             $this->print_form_bots($bots);
@@ -450,6 +711,7 @@ class Authorize_Page {
             && ($tok = TokenInfo::find($this->qreq->code, $this->conf))
             && $tok->is_active(TokenInfo::OAUTHCODE)
             && $tok->useCount === 0
+            && $tok->data("ssecret") === UpdateSession::session_secret($this->qreq->qsession())
             && ($client = $this->find_client($tok->data("client_id")))
             && $this->apply_token_document($tok, $client)) {
             $this->token = $tok;
@@ -459,8 +721,17 @@ class Authorize_Page {
         return false;
     }
 
+    /** @return bool */
+    private function allow_different_grantee(Contact $grantee) {
+        return $this->viewer->privChair
+            && $grantee->is_bot()
+            && !$grantee->is_disabled()
+            && !$this->client->is_cdb
+            && !$this->client->only_openid;
+    }
+
     /** @return never */
-    private function handle_authconfirm() {
+    private function handle_authconfirm(?Contact $grantee) {
         $this->authconfirmed = true;
         if (!$this->lookup_code()) {
             $this->print_error_exit("<0>Invalid or expired authentication request");
@@ -472,24 +743,17 @@ class Authorize_Page {
             || $this->viewer->is_actas_user()
             || $this->viewer->is_bearer_authorized()
             || (isset($this->qreq->authemail)
-                && strcasecmp($this->qreq->authemail, $this->viewer->email) !== 0)) {
+                && strcasecmp($this->qreq->authemail, $this->viewer->email) !== 0)
+            || (($hint = $this->login_hint()) !== null
+                && strcasecmp($hint, $this->viewer->email) !== 0)) {
             $this->print_error_exit("<0>Authentication request failed");
         }
 
         // A grant may speak as a bot account. The bot has no session, so the
         // viewer stays the chair who is authorizing on its behalf.
-        $grantee = $this->viewer;
-        if (isset($this->qreq->authbot)) {
-            $bot = $this->conf->user_by_email($this->qreq->authbot);
-            if (!$this->viewer->privChair
-                || !$bot
-                || !$bot->is_bot()
-                || $bot->is_disabled()
-                || $this->client->is_cdb
-                || $this->client->only_openid) {
-                $this->print_error_exit("<0>Authentication request failed");
-            }
-            $grantee = $bot;
+        if ($grantee !== $this->viewer
+            && (!$grantee || !$this->allow_different_grantee($grantee))) {
+            $this->print_error_exit("<0>Authentication request failed");
         }
 
         if (isset($this->client->allow_if)
@@ -516,9 +780,37 @@ class Authorize_Page {
             $this->redirect_error("access_denied");
         }
 
+        // A client that asked for a fresh sign-in gets one before the code is
+        // bound to an account.
+        $viewer_ac = $this->authentication_checker($this->viewer);
+        if (!$this->token->data("email")
+            && $viewer_ac
+            && !$viewer_ac->test()) {
+            // The user has already agreed to this; only the confirmation is
+            // missing. Keep what they agreed to, so that finishing the
+            // confirmation finishes the authorization rather than asking again.
+            $this->token->change_data("consented_email", $this->viewer->email);
+            if (isset($this->qreq->scope)) {
+                $this->token->change_data("consented_scope", trim($this->qreq->scope));
+            }
+            if ($grantee !== $this->viewer) {
+                $this->token->change_data("consented_grantee", $grantee->email);
+            }
+            $this->token->update();
+            $this->print_reauth_exit($viewer_ac);
+        }
+
         if (!$this->token->data("email")) {
             $this->token->change_data("email", $grantee->email)
                 ->change_data("iat", Conf::$now);
+            // When the ID token will name the person who is here, record when
+            // they last authenticated, so a client asking for a fresh sign-in
+            // can tell. A bot never signs in, so a bot grant records nothing.
+            if ($grantee === $this->viewer
+                && $viewer_ac
+                && ($at = $viewer_ac->latest()) > 0) {
+                $this->token->change_data("auth_time", $at);
+            }
             if ($grantee !== $this->viewer) {
                 // the grant speaks as the bot, but a person made it: record who
                 $this->token->change_data("authorized_by", $this->viewer->email);
@@ -536,19 +828,26 @@ class Authorize_Page {
                 if (!self::check_scope_syntax($reqscope)) {
                     $this->redirect_error("invalid_scope");
                 }
-                $granted = TokenScope::unparse(TokenScope::intersect(
-                    TokenScope::parse($tokscope, null),
-                    $reqscope
-                ));
-                // carry over OpenID scopes from the request
-                [$result, ] = TokenScope::scope_str_split_openid($tokscope);
-                if ($granted !== "none" || $result === "") {
-                    $result .= $result === "" ? $granted : " " . $granted;
-                }
-                $this->token->change_data("scope", $result);
+                // store requested OIDC scopes ($tokscope) plus the intersection
+                // of requested & consented scopes
+                $this->token->change_data("scope", TokenScope::unparse(TokenScope::intersect(
+                    TokenScope::parse($tokscope, null), $reqscope
+                )));
             }
             $this->token->set_invalid_in(10 * 60)
                 ->update();
+            // Remember what this account authorized, so a later request for
+            // exactly this can be answered without asking again. A bot grant
+            // is not recorded: the person who made it is not the account it
+            // speaks as, so their agreement is not the bot's.
+            if ($grantee === $this->viewer) {
+                UserSecurityEvent::make($this->viewer->email)
+                    ->set_oauth_confirmation($this->client->client_id,
+                        $this->token->data("redirect_uri"),
+                        $this->token->data("scope"),
+                        $this->client->is_cdb ? null : $this->conf->dbname
+                    )->store($this->qreq);
+            }
         }
 
         throw new Redirection($this->extend_redirect_uri([
@@ -579,12 +878,17 @@ class Authorize_Page {
         // A client that registered itself chose its own `redirect_uri`, so an
         // automatic bounce there makes this endpoint an open redirector for
         // anyone willing to register (RFC 9700 §4.11.2). Redirect only when
-        // this site vouched for the destination, or when the user did by
-        // posting the consent form; otherwise offer the destination as a link,
-        // which shows where it goes and takes a click. Every error reachable
-        // before that post is a malformed request, so no working client loses
-        // an automatic error response.
-        if ($this->client->self_registered && !$this->authconfirmed) {
+        // this site vouched for the destination, or when the user did, by
+        // posting the consent form now or by consenting to this client at this
+        // `redirect_uri` earlier in this session; otherwise offer the
+        // destination as a link, which shows where it goes and takes a click.
+        // A `prompt=none` request from a session that never consented gets the
+        // link rather than its error.
+        if ($this->client->self_registered
+            && !$this->authconfirmed
+            && !UserSecurityEvent::session_has_oauth_redirect($this->qreq->qsession(),
+                    $this->client->client_id, $this->qreq->redirect_uri,
+                    $this->client->is_cdb ? null : $this->conf->dbname)) {
             $t = $error_description ?? "Authorization request failed";
             $host = parse_url($this->qreq->redirect_uri, PHP_URL_HOST)
                 ? : $this->qreq->redirect_uri;
@@ -593,6 +897,68 @@ class Authorize_Page {
             $this->print_error_exit("<0>{$t} ({$error})", "<5>{$link}");
         }
         throw new Redirection($uri, 303 /* RFC 9700 §4.12: MUST NOT use 307 */);
+    }
+
+    /** Finish an authorization that a confirmation interrupted.
+     *
+     * The consent was given by a post that carried a token, and is replayed
+     * from the code rather than asked for again; the confirmation that
+     * interrupted it has now been made. The grantee is replayed from the code
+     * too, for the same reason the silent path passes one.
+     * @return void */
+    private function resume_consent() {
+        if (($ce = $this->token->data("consented_email")) === null
+            || !$this->viewer->has_email()
+            || strcasecmp($ce, $this->viewer->email) !== 0
+            || $this->token->data("email") !== null
+            || !($ac = $this->authentication_checker($this->viewer))
+            || !$ac->test()) {
+            return;
+        }
+        $this->qreq->authemail = $ce;
+        if (($cs = $this->token->data("consented_scope")) !== null) {
+            $this->qreq->scope = $cs;
+        }
+        $grantee = $this->viewer;
+        if (($gemail = $this->token->data("consented_grantee")) !== null
+            && strcasecmp($gemail, $this->viewer->email) !== 0) {
+            $grantee = $this->conf->user_by_email($gemail);
+        }
+        $this->handle_authconfirm($grantee);  // does not return
+    }
+
+    /** Ask for the confirmation this request owes, and stop.
+     *
+     * The challenge is posed on a plain view of this page, naming the account
+     * the user chose, because that is where the confirmation returns: coming
+     * back to the post that provoked it would arrive as a GET carrying no
+     * token, and be refused as a stale form.
+     * @param AuthenticationChecker $ac
+     * @return never */
+    private function print_reauth_exit($ac) {
+        if (!$this->cs) {
+            JsonResult::make_minimal(401, [
+                "error" => "login_required",
+                "error_description" => "Reauthentication required"
+            ])->complete();
+        }
+        // a provider that just vouched for the account without saying when
+        // it authenticated them won't say on a second try, and an account
+        // without a password has no other way to confirm
+        if ($ac->recently_unattested(self::SIGNIN_MAX_AGE_MIN_BOUND)
+            && !$this->viewer->can_use_password()) {
+            $this->redirect_error("login_required", "The sign-in provider could not confirm a recent sign-in");
+        }
+        $nav = $this->qreq->navigation();
+        $back = $nav->site_path . "authorize{$nav->php_suffix}"
+            . "?code=" . urlencode($this->token->salt)
+            . "&authemail=" . urlencode($this->viewer->email);
+        // A confirmation that asks the user nothing here is a redirect, not a
+        // page holding a button; it returns to `$back` either way.
+        if (($url = $ac->authenticator_url($back))) {
+            throw new Redirection($url);
+        }
+        throw new Redirection($back);
     }
 
     /** @param string $m
@@ -619,12 +985,17 @@ class Authorize_Page {
         if (friendly_boolean($this->qreq->authconfirm)) {
             // need CSRF protection
             if ($this->qreq->valid_post()) {
-                $this->handle_authconfirm();  // does not return
+                $grantee = $this->viewer;
+                if (isset($this->qreq->authbot)) {
+                    $grantee = $this->conf->user_by_email($this->qreq->authbot);
+                }
+                $this->handle_authconfirm($grantee);  // does not return
             }
             $this->conf->warning_msg($this->conf->_i($this->qreq->post_retry ? "session_failed_error" : "badpost"));
         }
         if (isset($this->qreq->code)) {
             if ($this->lookup_code()) {
+                $this->resume_consent();
                 $this->print_form();
                 return;
             } else if (!isset($this->qreq->client_id)) {
@@ -976,6 +1347,9 @@ class Authorize_Page {
             "exp" => Conf::$now + 86400,
             "iat" => Conf::$now
         ];
+        if (($auth_time = $tok->data("auth_time")) !== null) {
+            $payload["auth_time"] = $auth_time;
+        }
         if (($nonce = $tok->data("nonce")) !== null) {
             $payload["nonce"] = $nonce;
         }
@@ -1040,7 +1414,7 @@ class Authorize_Page {
                 ?? $this->client->identity_host($tok))
             ->change_data("client_id", $tok->data("client_id"))
             ->change_data("client_name", $tok->data("client_name"))
-            ->change_data("scope", TokenScope::unparse($ts));
+            ->change_data("scope", TokenScope::unparse($ts ? $ts->without_oidc() : null));
         if (isset($this->client->allow_if)) {
             $atok->change_data("allow_if", $this->client->allow_if);
         }
@@ -1105,7 +1479,10 @@ class Authorize_Page {
             || $user->is_disabled()
             // `allow_if` limits who may hold this client's tokens; rotation
             // would otherwise renew a grant forever past the role that
-            // justified it. A cdb client cannot have one (`OAuthClient::list`).
+            // justified it. A cdb client's `$user` is a contact-database
+            // account, which has no conference roles: `allow_if` terms about
+            // conference settings work, but user-specific terms such as
+            // `admin` fail.
             || !(new XtParams($this->conf, $user))->checkf($this->client)
             // and a client narrowed to OpenID Connect since has no API grant
             // left to refresh
@@ -1224,7 +1601,7 @@ class Authorize_Page {
         // validate content
         if ($this->qreq->body_content_type() !== "application/json"
             || ($reqstr = $this->qreq->body()) === null
-            || !is_object(($reqj = json_decode($reqstr)))
+            || !is_object(($reqj = \Json::decode_user($reqstr, 16384)))
             || !is_array($reqj->redirect_uris ?? null)
             || empty($reqj->redirect_uris)) {
             return $this->oauthregister_error("invalid_request");

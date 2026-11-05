@@ -25,7 +25,7 @@ class Autoassign_API {
 
         $ls = [];
         if (preg_match('/\A\s*\[/', $qreq->$name)) {
-            $list = json_decode($qreq->$name);
+            $list = Json::decode_user($qreq->$name);
             if (!is_array($list)) {
                 return null;
             }
@@ -38,7 +38,7 @@ class Autoassign_API {
                 $ls[] = (string) $elt;
             }
         } else if ($is_param && preg_match('/\A\s*\{/', $qreq->$name)) {
-            $map = json_decode($qreq->$name, true);
+            $map = (new JsonParser($qreq->$name))->set_assoc(true)->set_user()->decode();
             if (!is_array($map)) {
                 return null;
             }
@@ -92,7 +92,8 @@ class Autoassign_API {
         if ($params === null) {
             return JsonResult::make_parameter_error("param");
         }
-        array_push($argv, ...$params);
+        // `--` ensures parameters are not parsed as options
+        array_push($argv, "--", ...$params);
 
         if (isset($qreq->count)) {
             if (($n = stoi($qreq->count)) === null) {
@@ -139,6 +140,10 @@ class Autoassign_API {
         // The job ran but failed; report `status: failed`, matching `/job`.
         $jr = JsonResult::make_message_list($tok->data("message_list") ?? [])
             ->set("status", "failed");
+        if (is_string(($scope = $tok->data("insufficient_scope")))) {
+            $jr->set_response_code(403)
+                ->set_header($user->conf->www_authenticate_header("insufficient_scope", $qreq, $scope));
+        }
         $tok->delete();
         return $jr;
     }

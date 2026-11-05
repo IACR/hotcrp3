@@ -57,6 +57,8 @@ final class PaperStatus extends MessageSet {
     private $_submitted_problem_fields;
     /** @var ?list<string> */
     private $_unknown_fields;
+    /** @var array<int,string> */
+    private $_truncated_fields = [];
     /** @var list<PaperOption> */
     private $_fdiffs;
     /** @var list<PaperOption> */
@@ -80,9 +82,13 @@ final class PaperStatus extends MessageSet {
     /** @var bool */
     private $_documents_changed;
     /** @var bool */
-    private $_noncontacts_changed;
+    private $_deadline_field_changed;
+    /** @var bool */
+    private $_exempt_field_changed;
     /** @var list<DocumentInfo> */
     private $_docs;
+    /** @var ?DocumentImporter */
+    private $_importer;
     /** @var list<array{string,float|false}> */
     private $_tags_changed;
     /** @var int */
@@ -106,7 +112,6 @@ final class PaperStatus extends MessageSet {
         if ($user->privChair) {
             $this->doc_savef |= DocumentInfo::SAVEF_ALLOW_HASH_WITHOUT_CONTENT;
         }
-        $this->set_ignore_duplicates(true);
         $this->set_message_formatter($this->conf);
     }
 
@@ -161,6 +166,13 @@ final class PaperStatus extends MessageSet {
         return $this;
     }
 
+    /** @param ?bool $x
+     * @return $this */
+    function set_json_fields($x) {
+        $this->override_json_fields = $x;
+        return $this;
+    }
+
     /** @param int $f
      * @param bool $x
      * @return $this */
@@ -177,27 +189,8 @@ final class PaperStatus extends MessageSet {
 
     /** @param bool $x
      * @return $this */
-    function set_ignore_content_file($x) {
-        return $this->set_doc_savef(DocumentInfo::SAVEF_IGNORE_CONTENT_FILE, $x);
-    }
-
-    /** @param ?bool $x
-     * @return $this */
-    function set_json_fields($x) {
-        $this->override_json_fields = $x;
-        return $this;
-    }
-
-    /** @param bool $x
-     * @return $this */
-    function set_skip_document_verify($x) {
-        return $this->set_doc_savef(DocumentInfo::SAVEF_SKIP_VERIFY, $x);
-    }
-
-    /** @param bool $x
-     * @return $this */
-    function set_skip_document_content($x) {
-        return $this->set_doc_savef(DocumentInfo::SAVEF_SKIP_CONTENT, $x);
+    function set_trust_document_metadata($x) {
+        return $this->set_doc_savef(DocumentInfo::SAVEF_TRUST_METADATA, $x);
     }
 
     /** @param callable(object,PaperOption,PaperStatus):(?bool) $cb
@@ -252,6 +245,10 @@ final class PaperStatus extends MessageSet {
     /** @param PaperValue $ov */
     function append_messages_from($ov) {
         foreach ($ov->message_list() as $mi) {
+            if ($mi->status === MessageSet::SUCCESS && !$mi->message) {
+                // sentinel standing for "allow store"
+                continue;
+            }
             if ($this->json_fields && $mi->field) {
                 $fk = $ov->option->field_key();
                 if (str_starts_with($mi->field, $fk)
@@ -298,9 +295,15 @@ final class PaperStatus extends MessageSet {
         if ($dt instanceof PaperOption) {
             $dt = $dt->id;
         }
-        $di = new DocumentImporter($this->prow, $dt, $this->doc_savef, $this, $this->option_key($dt));
-        $di->set_on_import($this->_on_document_import);
-        if (($doc = $di->upload_document($docj))) {
+        // one importer per field (whose documents are uploaded together),
+        // so that a field’s stored documents are indexed once per save
+        // rather than once per uploaded document, one field at a time
+        // (`doc_savef` and the import callbacks are fixed before a save)
+        if (!$this->_importer || $this->_importer->dt !== $dt) {
+            $this->_importer = new DocumentImporter($this->prow, $dt, $this->doc_savef, $this, $this->option_key($dt));
+            $this->_importer->set_on_import($this->_on_document_import);
+        }
+        if (($doc = $this->_importer->upload_document($docj))) {
             $this->_docs[] = $doc;
         }
         return $doc;
@@ -383,7 +386,7 @@ final class PaperStatus extends MessageSet {
         }
         list($sk, $v) = $this->_normalize_status_extract($istatusj, $ipj, "withdraw_reason");
         if (is_string($v)) {
-            $xstatus->withdraw_reason = $v;
+            $xstatus->withdraw_reason = convert_to_utf8($v);
         } else if ($v !== null) {
             $this->syntax_error_at($sk);
         }
@@ -453,6 +456,17 @@ final class PaperStatus extends MessageSet {
             }
         }
 
+        // `truncated` names fields an export cut at a word limit
+        $itruncated = [];
+        if (isset($ipj->truncated)) {
+            if (is_object($ipj->truncated)
+                || (is_array($ipj->truncated) && !array_is_list($ipj->truncated))) {
+                $itruncated = (array) $ipj->truncated;
+            } else {
+                $this->syntax_error_at("truncated");
+            }
+        }
+
         $ikeys = [];
         foreach ($this->prow->form_fields() as $o) {
             if (!$this->user->allow_view_option($this->prow, $o)) {
@@ -471,6 +485,10 @@ final class PaperStatus extends MessageSet {
             if ($j !== null) {
                 $xpj->$k = $j;
                 $ikeys[$xk] = true;
+                $band = $itruncated[$xk] ?? $itruncated[$k] ?? null;
+                if ($band === "soft" || $band === "hard") {
+                    $this->_truncated_fields[$o->id] = $band;
+                }
             }
         }
 
@@ -493,7 +511,7 @@ final class PaperStatus extends MessageSet {
             if (isset($xpj->$k)
                 || isset($ikeys[$k])
                 || property_exists($xstatus, $k)
-                || in_array($k, ["object", "pid", "id", "options", "status", "decision", "reviews", "comments", "tags", "submission_class"], true)
+                || in_array($k, ["object", "pid", "id", "options", "status", "decision", "reviews", "comments", "tags", "submission_class", "overlong", "truncated"], true)
                 || $k[0] === "_"
                 || $k[0] === "\$") {
                 continue;
@@ -527,8 +545,10 @@ final class PaperStatus extends MessageSet {
         if (!$this->_documents_changed && $field->has_document()) {
             $this->_documents_changed = true;
         }
-        if ($field->id !== PaperOption::CONTACTSID) {
-            $this->_noncontacts_changed = true;
+        if (!$field->deadline_exempt()) {
+            $this->_deadline_field_changed = true;
+        } else if ($field->id !== PaperOption::CONTACTSID) {
+            $this->_exempt_field_changed = true;
         }
     }
 
@@ -602,6 +622,21 @@ final class PaperStatus extends MessageSet {
             && ($oj === null || $this->ignore_unwritable_fields)) {
             return;
         }
+        // text cut at a word limit: the soft cut loses visible text, so it
+        // can't replace a stored value (but a new submission has none)
+        $band = $oj !== null ? $this->_truncated_fields[$opt->id] ?? null : null;
+        if (($band === "soft" && !$this->prow->is_new())
+            || ($band !== null && !$editable)) {
+            if ($editable) {
+                $this->error_at($this->option_key($opt), $this->_("<0>Refusing to save truncated field"));
+                $this->inform_at($this->option_key($opt), $this->_("<0>Request the paper with ‘word_limit=hard’ to edit it."));
+            }
+            return;
+        } else if ($band === "hard") {
+            $this->warning_at($this->option_key($opt), $this->_("<0>Text was cut at the hard word limit"));
+        } else if ($band === "soft") {
+            $this->warning_at($this->option_key($opt), $this->_("<0>Text was cut at the soft word limit"));
+        }
         if ($oj === null) {
             $ov = null;
         } else if ($oj instanceof PaperValue) {
@@ -625,6 +660,9 @@ final class PaperStatus extends MessageSet {
             if ($ov->allow_store()) {
                 $opt->value_store($ov, $this);
                 $this->prow->override_option($ov);
+            } else if ($ov->has_error()) {
+                // errors have been reported for this option
+                $this->prow->force_option($opt)->error(null);
             }
         } else {
             $ov = $this->prow->force_option($opt);
@@ -697,11 +735,11 @@ final class PaperStatus extends MessageSet {
                 continue;
             }
             $ov = $this->prow->force_option($opt);
-            $had_error = $ov->has_error();
+            $error_reported = $ov->has_error();
             if ($opt->value_check_required($ov)) {
                 continue;
             }
-            if (!$had_error) {
+            if (!$error_reported) {
                 $this->append_messages_from($ov);
             }
             if ($this->prow->base_prop("timeSubmitted") <= 0) {
@@ -715,8 +753,14 @@ final class PaperStatus extends MessageSet {
 
     private function _prepare_status($pj) {
         // check edit permission if there have been changes
-        if ($this->_noncontacts_changed
-            && ($whynot = $this->user->perm_edit_paper($this->prow))) {
+        if ($this->_deadline_field_changed) {
+            $whynot = $this->user->perm_edit_paper($this->prow);
+        } else if ($this->_exempt_field_changed) {
+            $whynot = $this->user->perm_edit_paper_state($this->prow);
+        } else {
+            $whynot = null;
+        }
+        if ($whynot) {
             $field = $pj->status->withdrawn ? "status:withdrawn" : "status:submitted";
             $whynot->append_to($this, $field, MessageSet::ESTOP);
         }
@@ -738,7 +782,7 @@ final class PaperStatus extends MessageSet {
         }
 
         // check and change submitted status
-        $old_submitted = $this->prow->base_prop("timeSubmitted") > 0;
+        $old_submitted = $this->prow->timeSubmitted > 0;
         $pj_submitted = $pj->status->submitted
             && (!$this->has_error() || $old_submitted);
 
@@ -1001,13 +1045,18 @@ final class PaperStatus extends MessageSet {
         $this->checkpoint_conflict_values();
     }
 
-    /** @return bool */
-    private function _check_conflict_diff() {
+    /** @return int */
+    private function _conflict_changed_bits() {
         $changes = 0;
         foreach ($this->_conflict_values ?? [] as $cv) {
-            $ncv = self::new_conflict_value($cv);
-            $changes |= $cv[0] ^ $ncv;
+            $changes |= $cv[0] ^ self::new_conflict_value($cv);
         }
+        return $changes;
+    }
+
+    /** @return bool */
+    private function _check_conflict_diff() {
+        $changes = $this->_conflict_changed_bits();
         if (($changes & (CONFLICT_AUTHOR | CONFLICT_CONTACTAUTHOR)) !== 0) {
             $this->change_at($this->conf->option_by_id(PaperOption::CONTACTSID));
         }
@@ -1026,23 +1075,30 @@ final class PaperStatus extends MessageSet {
         return $dids;
     }
 
-    private function _invalidate_uploaded_documents() {
+    /** @param bool $delete_docs */
+    private function _invalidate_uploaded_documents($delete_docs) {
         if (empty($this->_docs)) {
             return;
         }
-        if ($this->prow->is_new()) {
-            $this->conf->qe("update PaperStorage set paperId=-1, inactive=1 where paperStorageId?a", $this->_dids());
-            return;
-        }
-        $inactive_dids = [];
+        // We delete newly-uploaded documents only in case of dry runs.
+        // If the save fails for another reason, tombstone rows for the
+        // uploaded documents remain in the database forever.
+        $inactive_dids = $delete_dids = [];
         foreach ($this->_docs as $doc) {
-            if ($doc->was_inserted()) {
+            if ($doc->was_inserted() && $delete_docs) {
+                $delete_dids[] = $doc->paperStorageId;
+            } else if ($doc->was_inserted()) {
                 $inactive_dids[] = $doc->paperStorageId;
             }
             $doc->abort_prop();
         }
+        $pidch = $this->prow->is_new() ? "paperId=-1, " : "";
+        $pidmatch = $this->prow->is_new() ? "" : "paperId={$this->prow->paperId} and ";
+        if (!empty($delete_dids)) {
+            $this->conf->qe("delete from PaperStorage where {$pidmatch}paperStorageId?a", $delete_dids);
+        }
         if (!empty($inactive_dids)) {
-            $this->conf->qe("update PaperStorage set inactive=1 where paperId=? and paperStorageId?a", $this->prow->paperId, $inactive_dids);
+            $this->conf->qe("update PaperStorage set {$pidch}inactive=1 where {$pidmatch}paperStorageId?a", $inactive_dids);
         }
     }
 
@@ -1102,20 +1158,23 @@ final class PaperStatus extends MessageSet {
             $this->_prepare_submitted_problem_fields();
         }
         $this->_unknown_fields = $this->_resave_fields = null;
+        $this->_truncated_fields = [];
         $this->_conflict_changemask = 0;
         $this->_conflict_values = [];
         $this->_conflict_ins = $this->_created_contacts = null;
         $this->_author_change_cids = null;
         $this->_paper_submitted = false;
         $this->_documents_changed = false;
-        $this->_noncontacts_changed = $prow->is_new();
+        $this->_deadline_field_changed = $prow->is_new();
+        $this->_exempt_field_changed = false;
         $this->_docs = $this->_tags_changed = [];
+        $this->_importer = null;
         $this->_save_status = 0;
         if ($this->user->can_manage($this->prow)) {
             $this->_save_status |= self::SSF_ADMIN_UPDATE;
         }
         if (!$prow->is_new()) {
-            if ($this->user->edit_paper_state($prow) === 2) {
+            if ($prow->viewable_phase($this->user) === PaperInfo::PHASE_FINAL) {
                 $this->_save_status |= self::SSF_FINAL_PHASE;
             }
             return true;
@@ -1173,10 +1232,14 @@ final class PaperStatus extends MessageSet {
         }
 
         // Fields
+        $want_final = ($phase === "final"
+                       || ($phase === "contacts"
+                           && $this->prow->phase() === PaperInfo::PHASE_FINAL))
+            && $this->user->can_view_decision($this->prow);
         foreach ($this->prow->form_fields() as $o) {
             if (($qreq["has_{$o->formid}"] || isset($qreq[$o->formid]))
-                && (!$o->is_final() || $phase === "final")
-                && ($o->id === PaperOption::CONTACTSID || $phase !== "contacts")) {
+                && (!$o->is_final() || $want_final)
+                && ($phase !== "contacts" || $o->deadline_exempt())) {
                 // Do not test_editable yet; we test_editable in check_field.
                 // This is an arguable semantics decision -- one could say that
                 // a field should be editable only if the *previous version*
@@ -1239,11 +1302,17 @@ final class PaperStatus extends MessageSet {
     /** @param object $pj
      * @return bool */
     private function _finish_prepare($pj) {
-        if ($this->_normalize_and_check($pj)) {
-            return true;
+        $old_viewer = $this->conf->swap_viewer($this->user);
+        try {
+            if ($this->_normalize_and_check($pj)) {
+                return true;
+            }
+            $this->abort_save();
+            return false;
+        } finally {
+            $this->prow->clear_updating();
+            $this->conf->swap_viewer($old_viewer);
         }
-        $this->abort_save();
-        return false;
     }
 
     /** @return bool */
@@ -1281,8 +1350,8 @@ final class PaperStatus extends MessageSet {
         $pid = $this->prow->is_new() ? "new" : $this->prow->paperId;
         $perm = $this->user->perm_view_paper($this->prow, false, $pid);
         if (!$perm && !$this->user->allow_edit_paper($this->prow)) {
-            $perm = $this->user->perm_edit_paper($this->prow);
-            assert(!!$perm);
+            $perm = $this->user->perm_edit_paper($this->prow)
+                ?? $this->user->perm_allow_edit_paper($this->prow);
         }
         if ($perm) {
             $perm->append_to($this, null, MessageSet::ESTOP);
@@ -1310,7 +1379,6 @@ final class PaperStatus extends MessageSet {
             $this->warning_at("options", $this->_("<0>Ignoring unknown fields {:list}", $this->_unknown_fields));
         }
         if ($this->problem_status() >= MessageSet::ESTOP) {
-            $this->prow->clear_updating();
             return false;
         }
 
@@ -1342,13 +1410,20 @@ final class PaperStatus extends MessageSet {
                 }
             }
         }
+        // PC conflict changes are subject to the deadline (contact changes are not)
+        if (($this->_conflict_changed_bits() & Conflict::FM_PC) !== 0) {
+            if ($this->conf->option_by_id(PaperOption::PCCONFID)->deadline_exempt()) {
+                $this->_exempt_field_changed = true;
+            } else {
+                $this->_deadline_field_changed = true;
+            }
+        }
 
         // prepare non-fields for saving
         $this->_prepare_status($pj);
         $this->_prepare_status_change();
         $this->_prepare_decision($pj);
         $this->_prepare_final_status($pj);
-        $this->prow->clear_updating();
 
         // correct blindness setting
         if ($this->conf->submission_blindness() !== Conf::BLIND_OPTIONAL) {
@@ -1386,7 +1461,8 @@ final class PaperStatus extends MessageSet {
     }
 
 
-    function abort_save() {
+    /** @param bool $delete_docs */
+    function abort_save($delete_docs = false) {
         if (($this->_save_status & (self::SSF_SAVED | self::SSF_ABORTED)) === 0) {
             $this->_save_status |= self::SSF_ABORTED;
             // preparation may fail before `$this->prow` is set
@@ -1394,7 +1470,7 @@ final class PaperStatus extends MessageSet {
                 $this->prow->abort_prop();
                 $this->prow->remove_option_overrides();
             }
-            $this->_invalidate_uploaded_documents();
+            $this->_invalidate_uploaded_documents($delete_docs);
         }
     }
 
@@ -1767,7 +1843,7 @@ final class PaperStatus extends MessageSet {
         // save new title and clear out memory
         $this->title = $this->prow->title();
         $this->prow = null;
-        $this->_docs = null;
+        $this->_docs = $this->_importer = null;
         return true;
     }
 

@@ -96,11 +96,11 @@ class Paper_Page {
             return;
         }
 
-        $reason = (string) $this->qreq->reason;
+        $reason = $this->qreq->reason ?? "";
         if ($reason === ""
             && $this->user->can_manage($this->prow)
             && $this->qreq["status:notify"] > 0) {
-            $reason = (string) $this->qreq["status:notify_reason"];
+            $reason = $this->qreq["status:notify_reason"] ?? "";
         }
 
         $aset = new AssignmentSet($this->user);
@@ -141,7 +141,7 @@ class Paper_Page {
             // mail first, before contact info goes away
             if ($this->qreq["status:notify"]) {
                 HotCRPMailer::send_contacts("@deletepaper", $this->prow, [
-                    "reason" => (string) $this->qreq["status:notify_reason"],
+                    "reason" => $this->qreq["status:notify_reason"],
                     "confirm_message_for" => $this->user
                 ]);
             }
@@ -260,6 +260,16 @@ class Paper_Page {
         }
     }
 
+    /** @return list<int> */
+    private function deadline_exempt_oids() {
+        $oids = [];
+        foreach ($this->prow->form_fields() as $o) {
+            if ($o->deadline_exempt())
+                $oids[] = $o->id;
+        }
+        return $oids;
+    }
+
     function handle_updatecontacts() {
         $conf = $this->conf;
         $this->useRequest = true;
@@ -273,20 +283,29 @@ class Paper_Page {
         $this->ps = new PaperStatus($this->user);
         $this->qreq["status:phase"] = "contacts";
         if (!$this->ps->prepare_save_paper_web($this->qreq, $this->prow)) {
-            $conf->feedback_msg($this->ps->decorated_message_list([PaperOption::CONTACTSID]));
+            $conf->feedback_msg($this->ps->decorated_message_list($this->deadline_exempt_oids()));
             return;
         }
 
         if (!$this->ps->has_change()) {
             $ml = [MessageItem::warning_note("<0>No changes"), MessageItem::warning("")];
-        } else  if ($this->ps->execute_save()) {
-            $ml = [MessageItem::success($conf->_("<0>Updated contacts"))];
+        } else if ($this->ps->execute_save()) {
+            $chf = [];
+            $notify = false;
+            foreach ($this->ps->changed_fields() as $f) {
+                $chf[] = $f->edit_title();
+                $notify = $notify || $f->id !== PaperOption::CONTACTSID;
+            }
+            $ml = [MessageItem::success($conf->_("<0>Updated {submission} (changed {:list})", $chf, new FmtArg("phase", "review")))];
             $this->ps->log_save_activity();
+            if ($notify) {
+                $this->ps->notify_followers();
+            }
         } else {
             $ml = [];
         }
         if (!empty($ml)) {
-            $conf->feedback_msg($ml, $this->ps->decorated_message_list([PaperOption::CONTACTSID]));
+            $conf->feedback_msg($ml, $this->ps->decorated_message_list($this->deadline_exempt_oids()));
         }
 
         if (!$this->ps->has_error()) {
@@ -314,12 +333,15 @@ class Paper_Page {
     }
 
     /** @param int $capuid */
-    private function print_capability_user_message($capuid) {
-        if (($u = $this->conf->user_by_id($capuid, USER_SLICE))) {
+    private function print_capability_user_message() {
+        if (($u = $this->user->reviewer_capability_user($this->prow))) {
             $m = $this->conf->_("<0>You’re accessing this {submission} using a special link for reviewer {reviewer}",
                 new FmtArg("reviewer", $u->email, 0),
                 new FmtArg("self", $this->user->email, 0),
                 new FmtArg("signinurl", $this->conf->hoturl("signin", ["email" => $u->email, "cap" => null])));
+            $this->pt()->add_pre_status_feedback(MessageItem::warning_note($m));
+        } else {
+            $m = $this->conf->_("<0>Your reviewer link is no longer active");
             $this->pt()->add_pre_status_feedback(MessageItem::warning_note($m));
         }
     }
@@ -373,13 +395,14 @@ class Paper_Page {
             $preferred_resp_round = $this->user->preferred_response_round($this->prow);
         }
         $j = null;
+        $pex = (new PaperExport($this->user))->set_ignore_soft_word_limits(true);
         foreach ($this->prow->viewable_comments($this->user) as $crow) {
             if ($crow->commentId == $cid
                 || ($cid === null
                     && ($crow->commentType & CommentInfo::CT_RESPONSE) != 0
                     && $preferred_resp_round
                     && $crow->commentRound === $preferred_resp_round->id)) {
-                $j = $crow->unparse_json($this->user, 0);
+                $j = $pex->comment_json($this->prow, $crow);
             }
         }
         if (!$j) {
@@ -425,9 +448,13 @@ class Paper_Page {
         $pp->useRequest = isset($qreq->title) && $qreq->has_annex("after_login");
         if ($qreq["status:notify_reason"] === "Optional explanation") {
             unset($qreq["status:notify_reason"]);
+        } else if ($qreq["status:notify_reason"]) {
+            $qreq["status:notify_reason"] = convert_to_utf8($qreq["status:notify_reason"]);
         }
         if ($qreq->reason === "Optional explanation") {
             unset($qreq->reason);
+        } else if ($qreq->reason) {
+            $qreq->reason = convert_to_utf8($qreq->reason);
         }
         if ($qreq->post && $qreq->post_empty()) {
             $pp->conf->post_missing_msg();
@@ -456,7 +483,7 @@ class Paper_Page {
         // capability messages: decline, accept to different user
         if (($capuid = $user->reviewer_capability($pp->prow))
             && $capuid !== $user->contactXid) {
-            $pp->print_capability_user_message($capuid);
+            $pp->print_capability_user_message();
         }
 
         // render

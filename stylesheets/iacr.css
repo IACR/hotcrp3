@@ -201,3 +201,7 @@ button.js-settings-submission-round-new {
 div#optionDiv_-1 {
     display: none;
 }
+/* hide orcid option since it does not work anyway. */
+div.form-section h3#authors, div#sf_author_orcid {
+    display: none;
+}

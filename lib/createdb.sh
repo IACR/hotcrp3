@@ -418,15 +418,18 @@ fi
 
 defaulthosts=""
 if $default_granthosts; then
-    defaulthosts="localhost 127.0.0.1 ::1"
+    # KSM only uses localhost for IACR
+    # defaulthosts="localhost 127.0.0.1 ::1"
+    defaulthosts="localhost"
 
     # Also include `localhost.localdomain` (for backward compatibility), but
     # only if `skip_name_resolve` is off
-    skip_name_resolve=`echo 'select @@global.skip_name_resolve;' | \
-        eval $MYSQL $mycreatedb_args $myargs $FLAGS -N 2>/dev/null`
-    if [ "x$skip_name_resolve" != x1 ]; then
-        defaulthosts="$defaulthosts localhost.localdomain"
-    fi
+    # KSM not in IACR
+    #skip_name_resolve=`echo 'select @@global.skip_name_resolve;' | \
+    #    eval $MYSQL $mycreatedb_args $myargs $FLAGS -N 2>/dev/null`
+    #if [ "x$skip_name_resolve" != x1 ]; then
+    #    defaulthosts="$defaulthosts localhost.localdomain"
+    #fi
 fi
 allhosts="$granthosts$defaulthosts"
 

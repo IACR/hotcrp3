@@ -1681,6 +1681,10 @@ class SettingValues extends MessageSet {
                 $this->_changed_si[] = $si;
         }
         $this->_saveable_si = $this->_store_value_si = [];
+        if ($this->conf->opt('openWebhookSecret')) {
+          // IACR uses this for aicheck.
+          $this->conf->call_hooks("settings_saved", $this);
+        }
 
         return !$this->has_error();
     }

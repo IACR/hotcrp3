@@ -5,8 +5,8 @@
 // conf/options.php:
 //   require_once(__DIR__ . "/../iacr/open_webhook.php");
 //   $Opt["hooks"]["settings_saved"][] = "iacr_webhook_settings_saved";
-//   $Opt["iacrWebhookUrl"]    = "https://aicheck.iacr.org/api/1.0/";   // POSTs to webhook/submissions under this
-//   $Opt["iacrWebhookSecret"] = "...";   // HMAC-SHA256 key shared with the receiver
+//   $Opt["aicheckUrl"]    = "https://aicheck.iacr.org/api/1.0/";   // POSTs to webhook/submissions under this
+//   $Opt["aicheckSecret"] = "...";   // HMAC-SHA256 key shared with the receiver
 //
 // Requires the core patch that calls the "settings_saved" hook at the end of
 // SettingValues::execute() (web settings page, /api/settings, batch/settings.php).
@@ -43,8 +43,8 @@ function iacr_webhook_settings_saved(SettingValues $sv) {
         return;
     }
 
-    $url = $conf->opt("iacrWebhookUrl");
-    $secret = $conf->opt("iacrWebhookSecret");
+    $url = $conf->opt("aicheckUrl");
+    $secret = $conf->opt("aicheckSecret");
     if (!$url || !$secret) {
         return;
     }

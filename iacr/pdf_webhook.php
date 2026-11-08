@@ -7,8 +7,8 @@
 // The following are required in conf/options.php:
 //   require_once(__DIR__ . "/../iacr/pdf_webhook.php");
 //   $Opt["hooks"]["paper_saved"][] = "pdf_webhook_paper_saved";
-//   $Opt["iacrWebhookUrl"]    = "https://aicheck.iacr.org/api/1.0/";   // POSTs to webhook/paper under this
-//   $Opt["iacrWebhookSecret"] = "...";     // HMAC-SHA256 key shared with the receiver
+//   $Opt["aicheckUrl"]    = "https://aicheck.iacr.org/api/1.0/";   // POSTs to webhook/paper under this
+//   $Opt["aicheckSecret"] = "...";     // HMAC-SHA256 key shared with the receiver
 //
 // Requires the one-line core patch that calls the "paper_saved" hook from
 // PaperStatus::log_save_activity().
@@ -16,7 +16,7 @@
 function pdf_webhook_paper_saved(PaperStatus $ps) {
     $pid = $ps->paperId;
     $conf = $ps->conf;
-    if (!$pid || !($url = $conf->opt("iacrWebhookUrl")) || !($secret = $conf->opt("iacrWebhookSecret"))) {
+    if (!$pid || !($url = $conf->opt("aicheckUrl")) || !($secret = $conf->opt("aicheckSecret"))) {
         return;
     }
     $url = rtrim($url, "/") . "/webhook/paper";

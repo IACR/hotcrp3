@@ -278,6 +278,14 @@ function get_iacr_url($optionId, $paperId) {
           } else {
             $pubtype = 1; // default for RESEARCH.
           }
+          if ($pubtype == 3 || $pubtype == 4) {
+            $stmt->bindParam(':optionId', PaperOption::IACR_FORMER_DOI_ID, PDO::PARAM_INT);
+            $res = $stmt->execute();
+            $row = $stmt->fetch(PDF::FETCH_ASSOC);
+            $former_doi = $row['value'];
+          } else {
+            $former_doi = null;
+          }
           // These match what create_conf.py will create in the PaperOption table and the enum values
           // publish.iacr.org expects.
           $pubtype_values = array(1 => 'RESEARCH',
@@ -321,6 +329,9 @@ function get_iacr_url($optionId, $paperId) {
                              'hotcrp_id' => $paperId,
                              'journal' => $iacrType,
                              'pubtype' => $pubtype);
+          if ($former_doi) {
+            $querydata['errata_doi'] = $former_doi;
+          }
           if (str_starts_with($Opt['shortName'], 'fake')) {
             return 'https://publishtest.iacr.org/submit?' . http_build_query($querydata);
           }

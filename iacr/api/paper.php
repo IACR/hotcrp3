@@ -48,6 +48,6 @@ try {
   echo json_encode($paper, JSON_PRETTY_PRINT);
   $db = null;
 } catch (PDOException $e) {
-  showError('Database error: ' . $e->message());
+  showError('Database error: ' . $e->getMessage());
 }
 ?>

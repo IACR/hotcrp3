@@ -58,7 +58,7 @@ EOF;
     echo " %\\end{longtable}\n";
     $db = null;
   } catch (PDOException $e) {
-    echo $e->message();
+    echo $e->getMessage();
   }
   // Output table of contents. We take it from www.iacr.org
   // instead of HotCRP because final versions are uploaded there.

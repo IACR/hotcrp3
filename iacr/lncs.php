@@ -72,7 +72,7 @@ EOI;
   }
   $db = null;
 } catch (PDOException $e) {
-  echo $e->message();
+  echo $e->getMessage();
 }
 ?>
 </div>

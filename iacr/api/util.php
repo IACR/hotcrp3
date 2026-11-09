@@ -98,7 +98,7 @@ function get_submission_from_previous_hotcrp($venue, $paperid) {
           error_log("unable to execute for timeSubmitted in $venue:$paperid");
         }
       } catch (Exception $e) {
-        error_log("Exception accessing $venue:" . $e->message());
+        error_log("Exception accessing $venue:" . $e->getMessage());
       }
     } else {
       error_log("unable to find password for $venue");
@@ -337,7 +337,7 @@ function get_iacr_url($optionId, $paperId) {
         } catch (PDOException $e) {
           $submitted = 'error';
           $accepted = 'error';
-          error_log('unable to fetch accepted and submitted: ' . $e->message());
+          error_log('unable to fetch accepted and submitted: ' . $e->getMessage());
           return NULL;
         }
       }

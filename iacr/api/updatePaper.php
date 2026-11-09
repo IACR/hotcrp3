@@ -52,6 +52,6 @@ try {
     $stmt->execute([$_POST['paperId'], 3333]);
     echo json_encode(array("response" => "ok"));
 } catch (PDOException $e) {
-  showError('Database error: ' . $e->message());
+  showError('Database error: ' . $e->getMessage());
 }
 ?>

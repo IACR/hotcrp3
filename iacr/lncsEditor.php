@@ -180,7 +180,7 @@ try {
   }
   $db = null;
 } catch (PDOException $e) {
-  echo $e->message();
+  echo $e->getMessage();
 }
 ?>
 <!-- This is a handlebars "partial" template that is used to render a talk. -->

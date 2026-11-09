@@ -41,7 +41,7 @@ function getFinalPaperData() {
     }
     $db = null;
   } catch (PDOException $e) {
-    return $e->message();
+    return $e->getMessage();
   }
 
   $url = 'https://www.iacr.org/submit/api/?action=view&venue=' . $Opt['iacrType'] . '&year=' . $Opt['year'] . '&shortName=' . $Opt['dbName'];

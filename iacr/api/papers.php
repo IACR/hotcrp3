@@ -61,6 +61,6 @@ try {
   echo json_encode($data, JSON_PRETTY_PRINT);
   $db = null;
 } catch (PDOException $e) {
-  echo $e->message();
+  echo $e->getMessage();
 }
 ?>

@@ -54,7 +54,7 @@ try {
   $db = null;
 } catch (PDOException $e) {
   http_response_code(500);
-  echo $e->message();
+  echo $e->getMessage();
   exit();
 }
 $lncsData = file_get_contents(getLNCSFilename());

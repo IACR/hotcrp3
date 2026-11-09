@@ -1,7 +1,5 @@
 <?php
 
-require __DIR__ ."/../../conf/options.php";
-
 // The iacr_paperid should be globally unique across all hotcrp instances. It should be short,
 // because it is hashed to create the DOI for the paper. It should not be parsed to extract
 // other elements like the volume number. Note that publish.iacr.org depends upon the fact

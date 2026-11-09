@@ -19,6 +19,10 @@ $Opt["postfixEOL"] = "\n";
 $Opt["contactdbDsn"] = "mysql://hotcrp_testdb:m5LuaN23j26g@localhost/hotcrp_testdb_cdb";
 $Opt["obsoletePasswordInterval"] = 1;
 $Opt["updatesSite"] = false;
+// IACR: etc/iacrintrinsicoptions.json hides HotCRP's own "Final version" field
+// (IACR collects final versions elsewhere). Upstream's tests exercise it, so
+// restore its upstream behavior here, for tests only.
+$Opt["intrinsicOptions"] = '[{"id": -1, "merge": true, "exists_if": "phase:final"}]';
 $Opt["include"][] = "?test/localoptions.php";
 $Opt["hooks"]["send_mail"] = "MailChecker::send_hook";
 $Opt["workLockfilePrefix"] = "test/var/work";

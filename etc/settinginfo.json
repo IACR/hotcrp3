@@ -366,6 +366,12 @@
         "type": "radio", "values": ["right", "rest", "top", "left", "title", "none"]
     },
     {
+        "name_pattern": "sf/$/page_group",
+        "title": "/Page group",
+        "type": "simplestring", "required": false,
+        "parser_class": "Options_SettingParser"
+    },
+    {
         "name_pattern": "sf/$/visibility",
         "title": "/Visibility",
         "type": "radio", "values": ["all", "nonblind", "conflict", "review", "admin"]
@@ -1418,6 +1424,13 @@
         "parse_order": -1000000
     },
 
+    {
+        "name": "list_default_view", "storage": "dat.pldisplay_default",
+        "title": "Default list view",
+        "type": "simplestring", "required": false,
+        "parser_class": "ListDefaultView_SettingParser",
+        "tags": "search"
+    },
     {   "name": "named_searches", "internal": true, "type": "string"   },
     {
         "name": "named_search", "type": "oblist",

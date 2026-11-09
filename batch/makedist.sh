@@ -176,6 +176,7 @@ etc/msgs.json
 etc/optiontypes.json
 etc/pages.json
 etc/papercolumns.json
+etc/paperuseroptions.json
 etc/profilegroups.json
 etc/reviewfieldlibrary.json
 etc/reviewfieldtypes.json
@@ -528,6 +529,8 @@ src/papersearch.php
 src/paperstatus.php
 src/papertable.php
 src/paperrank.php
+src/paperuseroption.php
+src/paperuservalue.php
 src/papervalue.php
 src/quicklinksrenderer.php
 src/rendercapture.php
@@ -604,6 +607,7 @@ src/settings/s_decisionvisibility.php
 src/settings/s_fieldconversions.php
 src/settings/s_finalversions.php
 src/settings/s_json.php
+src/settings/s_listdefaultview.php
 src/settings/s_messages.php
 src/settings/s_namedsearch.php
 src/settings/s_options.php

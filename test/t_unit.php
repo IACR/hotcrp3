@@ -149,6 +149,49 @@ class Unit_Tester {
         xassert(strlen(Dbl::describe_args(array_fill(0, 100000, 12345))) < 1100);
     }
 
+    function test_paper_user_values() {
+        $conf = $this->conf;
+        $saved = $conf->opt("paperUserOptions");
+        $conf->set_opt("paperUserOptions", [
+            (object) ["id" => 7, "name" => "mood", "title" => "Mood", "visibility" => "admin",
+                      "values" => [(object) ["value" => 1, "name" => "happy"]]]
+        ]);
+        $conf->invalidate_caches();
+        try {
+            $puo = $conf->paper_user_option("mood");
+            xassert(!!$puo);
+            xassert_eqq($conf->paper_user_option(7), $puo);
+            xassert_eqq($conf->paper_user_option("nonexistent"), null);
+            xassert_eqq($puo->parse_value("happy"), 1);
+            xassert_eqq($puo->parse_value("-3"), -3);
+            xassert_eqq($puo->parse_value("clear"), 0);
+            xassert_eqq($puo->parse_value("sad"), null);
+
+            $chair = $conf->checked_user_by_email("chair@_.com");
+            $pc = $conf->checked_user_by_email("estrin@usc.edu");
+            $pc2 = $conf->checked_user_by_email("marina@poema.ru");
+            $conf->qe("insert into PaperUserValue (paperId, puoId, contactId, value, timestamp) values (1, 7, ?, 1, 100), (1, 7, ?, -1, 200), (2, 7, ?, 1, 300)",
+                $pc->contactId, $pc2->contactId, $pc->contactId);
+
+            // values load for all papers in a set at once
+            $prows = $conf->paper_set(["paperId" => [1, 2]]);
+            $p1 = $prows->get(1);
+            xassert_eqq(count($p1->all_user_values(7)), 2);
+            xassert_eqq($p1->user_value(7, $pc2)->value, -1);
+            xassert_eqq($p1->user_value($puo, $pc)->timestamp, 100);
+            xassert_eqq($prows->get(2)->user_value(7, $pc)->value, 1);
+            xassert_eqq($prows->get(2)->user_value(7, $pc2), null);
+
+            // admin-only options: PC members see only their own values
+            xassert_eqq(array_keys($p1->viewable_user_values($pc, $puo)), [$pc->contactId]);
+            xassert_eqq(count($p1->viewable_user_values($chair, $puo)), 2);
+        } finally {
+            $conf->qe("delete from PaperUserValue where puoId=7");
+            $conf->set_opt("paperUserOptions", $saved);
+            $conf->invalidate_caches();
+        }
+    }
+
     function test_dbl_store_blob() {
         $db = $this->conf->dblink;
         $psid = $this->conf->fetch_ivalue("select paperStorageId from PaperStorage where paperStorageId>1 order by paperStorageId limit 1");
@@ -192,6 +235,40 @@ class Unit_Tester {
         xassert_eqq($this->conf->fetch_ivalue("select 1"), 1);
 
         $this->conf->qe("update PaperStorage set paper=? where paperStorageId=?", $old, $psid);
+    }
+
+    function test_document_split_extension() {
+        xassert_eqq(DocumentInfo::split_extension("paper1.pdf"), ["paper1", ".pdf"]);
+        xassert_eqq(DocumentInfo::split_extension("a.b.pdf"), ["a.b", ".pdf"]);
+        xassert_eqq(DocumentInfo::split_extension("code.tar.gz"), ["code", ".tar.gz"]);
+        xassert_eqq(DocumentInfo::split_extension("code.TAR.XZ"), ["code", ".TAR.XZ"]);
+        xassert_eqq(DocumentInfo::split_extension("data.csv.gz"), ["data", ".csv.gz"]);
+        xassert_eqq(DocumentInfo::split_extension("log.JSONL.zst"), ["log", ".JSONL.zst"]);
+        xassert_eqq(DocumentInfo::split_extension("paper.ps.bz2"), ["paper", ".ps.bz2"]);
+        xassert_eqq(DocumentInfo::split_extension("paper.pdf.gz"), ["paper.pdf", ".gz"]);
+        xassert_eqq(DocumentInfo::split_extension("data.csv.zip"), ["data.csv", ".zip"]);
+        xassert_eqq(DocumentInfo::split_extension("data.gz"), ["data", ".gz"]);
+        xassert_eqq(DocumentInfo::split_extension("README"), ["README", ""]);
+        xassert_eqq(DocumentInfo::split_extension("dir/.pdf"), ["dir/.pdf", ""]);
+        xassert_eqq(DocumentInfo::split_extension("v1.2/notes"), ["v1.2/notes", ""]);
+        xassert_eqq(DocumentInfo::split_extension("x.toolongext"), ["x.toolongext", ""]);
+    }
+
+    function test_document_set_rejects_unsafe_paths() {
+        $doc = DocumentInfo::make_content($this->conf, "Hello", "text/plain");
+        $docset = new DocumentInfoSet("test.zip");
+        xassert(!!$docset->add_as($doc, "a/b.txt"));
+        xassert(!!$docset->add_as($doc, "a/.hidden.txt"));
+        xassert(!!$docset->add_as($doc, "a..b/c..txt"));
+        // (each refusal is logged; keep the expected failures out of stderr)
+        $old_error_log = ini_set("error_log", "/dev/null");
+        try {
+            foreach (["/abs.txt", "../up.txt", "a/../up.txt", "./here.txt", "a/./b.txt", "a/..", "a//b.txt", "a/"] as $fn) {
+                xassert_eqq($docset->add_as($doc, $fn), null);
+            }
+        } finally {
+            ini_set("error_log", $old_error_log);
+        }
     }
 
     function test_dbl_format_query() {
@@ -457,6 +534,69 @@ class Unit_Tester {
         xassert_eqq(DocumentInfo::sanitize_filename(str_repeat("i", 1024) . ".txt"), str_repeat("i", 248) . "....txt");
         xassert_eqq(strlen(DocumentInfo::sanitize_filename(str_repeat("i", 1024) . ".txt")), 255);
         xassert_eqq(DocumentInfo::sanitize_filename(str_repeat("i", 1024)), str_repeat("i", 252) . "...");
+    }
+
+    function test_make_readable_formid() {
+        xassert_eqq(PaperOption::make_readable_formid("Program Committee"), "program-committee");
+        xassert_eqq(PaperOption::make_readable_formid("Résumé (PDF)"), "resume-pdf");
+        // reserved IDs and intrinsic field names
+        xassert_eqq(PaperOption::make_readable_formid("Abstract"), "sf-abstract");
+        xassert_eqq(PaperOption::make_readable_formid("PC 1"), "sf-pc-1");
+        xassert_eqq(PaperOption::make_readable_formid("R1A"), "sf-r1a");
+        xassert_eqq(PaperOption::make_readable_formid("Fold me"), "sf-fold-me");
+        // comment anchors: `#cnew`
+        xassert_eqq(PaperOption::make_readable_formid("New"), "sf-new");
+        xassert_eqq(PaperOption::make_readable_formid("Cnew"), "sf-cnew");
+        xassert_eqq(PaperOption::make_readable_formid("News"), "news");
+        // response anchors: `#response`, `#<ROUND>response`
+        xassert_eqq(PaperOption::make_readable_formid("Response"), "sf-response");
+        xassert_eqq(PaperOption::make_readable_formid("FinalResponse"), "sf-finalresponse");
+        xassert_eqq(PaperOption::make_readable_formid("Final response"), "final-response");
+        xassert_eqq(PaperOption::make_readable_formid("(Response)"), "sf-response");
+        xassert_eqq(PaperOption::make_readable_formid("Responses"), "responses");
+    }
+
+    function test_readable_formid_implies_similar_name() {
+        // Settings reject too-similar field names. For ASCII names, that must
+        // include every pair whose readable form IDs collide.
+        $collator = (new SettingValues($this->u_root))->icollator();
+        $similar = function ($a, $b) use ($collator) {
+            return $collator->compare(Options_SettingParser::name_similarity_key($a),
+                                      Options_SettingParser::name_similarity_key($b)) === 0;
+        };
+        foreach ([["Final response", "Final-Response"], ["(Response)", "Response"],
+                  ["Cnew", "CNEW!"], ["a_b", "a-b"], ["PC 1", "pc-1"],
+                  ["Sf-x", "sf x"], ["Fold 'em", "fold-EM"]] as $p) {
+            xassert_eqq(PaperOption::make_readable_formid($p[0]), PaperOption::make_readable_formid($p[1]));
+            xassert($similar($p[0], $p[1]));
+        }
+
+        // generated names, including characters that reach reserved patterns
+        $alphabet = "aAbB0 -_.'(sfcnewrpo";
+        $x = 1;
+        $byid = [];
+        for ($i = 0; $i !== 5000; ++$i) {
+            $n = "";
+            $x = ($x * 1103515245 + 12345) & 0x7FFFFFFF;
+            for ($len = 1 + $x % 7; $len !== 0; --$len) {
+                $x = ($x * 1103515245 + 12345) & 0x7FFFFFFF;
+                $n .= $alphabet[$x % strlen($alphabet)];
+            }
+            $byid[PaperOption::make_readable_formid($n)][$n] = true;
+        }
+        $npairs = 0;
+        $bad = [];
+        foreach ($byid as $names) {
+            $names = array_keys($names);
+            for ($i = 1; $i < count($names); ++$i) {
+                ++$npairs;
+                if (!$similar($names[0], $names[$i])) {
+                    $bad[] = [$names[0], $names[$i]];
+                }
+            }
+        }
+        xassert_gt($npairs, 100);
+        xassert_array_eqq($bad, []);
     }
 
     function test_csv_split_lines() {

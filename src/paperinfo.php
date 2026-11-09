@@ -914,6 +914,8 @@ class PaperInfo {
     private $_collaborator_array;
     /** @var ?PaperInfoPotentialConflictList */
     private $_potconf;
+    /** @var ?array<int,array<int,PaperUserValue>> */
+    private $_user_values;
     /** @var ?array<int,PaperReviewPreference> */
     private $_prefs_array;
     /** @var ?int */
@@ -2418,6 +2420,61 @@ class PaperInfo {
         Dbl::free($result);
     }
 
+    /** Load per-user values (see `PaperUserValue`) for this paper and, if
+     * they are not loaded, for the other papers in its set. */
+    function load_user_values() {
+        $row_set = $this->_row_set->filter(function ($prow) {
+            return $prow === $this || $prow->_user_values === null;
+        });
+        foreach ($row_set as $prow) {
+            $prow->_user_values = [];
+        }
+        $result = $this->conf->qe("select paperId, puoId, contactId, value, timestamp from PaperUserValue where paperId?a", $row_set->paper_ids());
+        while (($row = $result->fetch_row())) {
+            $puv = new PaperUserValue((int) $row[0], (int) $row[1], (int) $row[2], (int) $row[3], (int) $row[4]);
+            $row_set->get($puv->paperId)->_user_values[$puv->puoId][$puv->contactId] = $puv;
+        }
+        Dbl::free($result);
+    }
+
+    /** Return all users’ values of option `$puoid` for this paper, by user
+     * ID, without checking visibility.
+     * @param int|PaperUserOption $puoid
+     * @return array<int,PaperUserValue> */
+    function all_user_values($puoid) {
+        if ($this->_user_values === null) {
+            $this->load_user_values();
+        }
+        $puoid = is_int($puoid) ? $puoid : $puoid->id;
+        return $this->_user_values[$puoid] ?? [];
+    }
+
+    /** Return the values of option `$puo` for this paper that `$user` can
+     * see, by user ID.
+     * @return array<int,PaperUserValue> */
+    function viewable_user_values(Contact $user, PaperUserOption $puo) {
+        $vs = [];
+        foreach ($this->all_user_values($puo) as $cid => $puv) {
+            if ($puo->can_view($user, $this, $cid))
+                $vs[$cid] = $puv;
+        }
+        return $vs;
+    }
+
+    /** Return user `$contact`’s value of option `$puoid` for this paper,
+     * if any, without checking visibility.
+     * @param int|PaperUserOption $puoid
+     * @param int|Contact $contact
+     * @return ?PaperUserValue */
+    function user_value($puoid, $contact) {
+        $cid = is_int($contact) ? $contact : $contact->contactId;
+        return $this->all_user_values($puoid)[$cid] ?? null;
+    }
+
+    function invalidate_user_values() {
+        $this->_user_values = null;
+    }
+
     /** @return array<int,PaperReviewPreference> */
     function preferences() {
         if ($this->allReviewerPreference === null) {
@@ -2755,6 +2812,35 @@ class PaperInfo {
                  && $doc->documentType === DTYPE_SUBMISSION)
                 || ($doc->paperStorageId === $this->finalPaperStorageId
                     && $doc->documentType === DTYPE_FINAL));
+    }
+
+    /** Update primary document information, in the database and in memory,
+     * after `$doc`, a placeholder submission or final version, has been
+     * completed. The database is updated only if `$doc` is still the
+     * submission’s main document and the submission still records it as a
+     * placeholder. The in-memory values are already saved, so they are not
+     * recorded as property changes. */
+    function update_primary_document(DocumentInfo $doc) {
+        assert(!$doc->is_placeholder() && $doc->paperId === $this->paperId);
+        $this->conf->qe("update Paper set sha1=?, size=?, mimetype=? where paperId=? and size=? and (case when finalPaperStorageId>1 then finalPaperStorageId else paperStorageId end)=?",
+            $doc->binary_hash(), $doc->size(), $doc->mimetype ?? "",
+            $this->paperId, DocumentInfo::SIZE_PLACEHOLDER, $doc->paperStorageId);
+        if ($this->is_primary_document($doc)
+            && $this->size === DocumentInfo::SIZE_PLACEHOLDER) {
+            $this->sha1 = $doc->binary_hash();
+            $this->size = $doc->size();
+            $this->mimetype = $doc->mimetype;
+        }
+        if ($this->_primary_document
+            && $this->_primary_document !== $doc
+            && $this->_primary_document->paperStorageId === $doc->paperStorageId) {
+            $this->_primary_document = null;
+        }
+        if ($this->_final_document
+            && $this->_final_document !== $doc
+            && $this->_final_document->paperStorageId === $doc->paperStorageId) {
+            $this->_final_document = null;
+        }
     }
 
     /** @param int $dtype
@@ -3893,7 +3979,7 @@ class PaperInfo {
         }
 
         $qs = [];
-        foreach (["PaperWatch", "PaperReviewPreference", "PaperReviewRefused", "ReviewRequest", "PaperTag", "PaperComment", "PaperReview", "PaperTopic", "PaperOption", "PaperConflict", "Paper", "PaperStorage", "DocumentLink", "Capability"] as $table) {
+        foreach (["PaperWatch", "PaperReviewPreference", "PaperUserValue", "PaperReviewRefused", "ReviewRequest", "PaperTag", "PaperComment", "PaperReview", "PaperTopic", "PaperOption", "PaperConflict", "Paper", "PaperStorage", "DocumentLink", "Capability"] as $table) {
             $qs[] = "delete from {$table} where paperId={$this->paperId}";
         }
         $mresult = Dbl::multi_qe($this->conf->dblink, join(";", $qs));

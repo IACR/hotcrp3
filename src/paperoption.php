@@ -77,9 +77,8 @@ class PaperOption implements JsonSerializable {
     /** @var bool
      * @readonly */
     public $page_expand;
-    /** @var ?string
-     * @readonly */
-    public $page_group;
+    /** @var ?string */
+    private $_page_group;
     private $form_order;
     private $page_order;
     /** @var int */
@@ -238,9 +237,9 @@ class PaperOption implements JsonSerializable {
         $this->page_order = $args->page_order ?? $cfo;
 
         $this->page_expand = !!($args->page_expand ?? false);
-        $this->page_group = $args->page_group ?? null;
-        if ($this->page_group === null && $this->_display === self::DISP_REST) {
-            $this->page_group = "topics";
+        $pg = $args->page_group ?? null;
+        if (is_string($pg) && $pg !== "") {
+            $this->_page_group = $pg;
         }
 
         $this->set_exists_condition($args->exists_if ?? (($args->final ?? false) ? "phase:final" : null));
@@ -280,6 +279,18 @@ class PaperOption implements JsonSerializable {
         if ($this->_exists_state < 0) {
             $this->render_contexts &= ~(FieldRender::CFFORM | FieldRender::CFPAGE);
         }
+    }
+
+    /** Return true iff `$pg` is a valid page group name: a single lowercase
+     * word (letters and digits, starting with a letter). Page group names
+     * are inserted into element IDs as-is, so they must not contain `-`,
+     * which separates ID parts, or `_`, which HotCRP treats as a spelling
+     * of `-`. Settings enforce this; groups configured directly are not
+     * checked.
+     * @param string $pg
+     * @return bool */
+    static function valid_page_group($pg) {
+        return preg_match('/\A[a-z][a-z0-9]*\z/', $pg) === 1;
     }
 
     /** @param stdClass|Sf_Setting $args
@@ -330,11 +341,12 @@ class PaperOption implements JsonSerializable {
     /** @param string $s
      * @return string */
     static function make_readable_formid($s) {
+        // See also `Options_SettingParser::name_similarity_key`
         $s = strtolower(preg_replace('/[^A-Za-z0-9]+/', "-", UnicodeHelper::deaccent($s)));
-        if (str_ends_with($s, "-")) {
-            $s = substr($s, 0, -1);
-        }
-        if (!preg_match('/\A(?:title|paper|submission|final|authors?+|blind|nonblind|contacts?+|abstract|topics?+|pc_conflicts?+|pcconf|collaborators?+|comments?+|reviews?+|sclass|status.*+|submit.*+|fold.*+|[a-z]?+[a-z]?+[-_0-9].*+|has[-_].*+|new|delete|[a-z]id|)\z/', $s)) {
+        $s = trim($s, "-");
+        if (!preg_match('/\A(?:title|paper|submission|final|authors?+|blind|nonblind|contacts?+|abstract|topics?+|pc_conflicts?+|pcconf|collaborators?+|comments?+|reviews?+|sclass|status.*+|submit.*+|fold.*+|[a-z]?+[a-z]?+[-_0-9].*+|has[-_].*+|c?+new|delete|[a-z]id|)\z/', $s)
+            && (!str_ends_with($s, "response")
+                || (strlen($s) > 8 && $s[-9] === "-"))) {
             return $s;
         }
         return "sf-" . $s;
@@ -820,6 +832,16 @@ class PaperOption implements JsonSerializable {
     function display() {
         return $this->_display;
     }
+    /** Return the field’s page group. Fields in the same group are shown
+     * together on the paper page. Fields in the `rest` position without an
+     * explicit group are in group `topics`.
+     * @return ?string */
+    function page_group() {
+        if ($this->_page_group === null && $this->_display === self::DISP_REST) {
+            return "topics";
+        }
+        return $this->_page_group;
+    }
     /** @return string */
     function display_name() {
         if ($this->page_order === false) {
@@ -852,6 +874,9 @@ class PaperOption implements JsonSerializable {
             $j->final = true;
         }
         $j->display = $this->display_name();
+        if ($this->_page_group !== null) {
+            $j->page_group = $this->_page_group;
+        }
         if ($this->_visibility !== self::VIS_SUB) {
             $j->visibility = self::$visibility_map[$this->_visibility];
         }
@@ -895,6 +920,7 @@ class PaperOption implements JsonSerializable {
         }
 
         $sfs->display = $this->display_name();
+        $sfs->page_group = $this->_page_group;
         $sfs->order = $this->order;
         $sfs->visibility = $this->unparse_visibility();
         $sfs->required = $this->required;
@@ -1001,7 +1027,7 @@ class PaperOption implements JsonSerializable {
     function web_edit_html(PaperInfo $prow, Contact $user) {
         ob_start();
         $nqreq = (new Qrequest("POST"))->set_user($user);
-        $pt = new PaperTable($user, $nqreq, $prow);
+        $pt = new PaperTable($nqreq, $prow);
         $ov = $prow->force_option($this);
         $this->value_check($ov, $user);
         foreach ($ov->message_list() as $mi) {
@@ -1013,6 +1039,53 @@ class PaperOption implements JsonSerializable {
 
     function validate_document(DocumentInfo $doc) {
         return true;
+    }
+
+    /** Return the filename for `$doc`, a document in this field, in
+     * downloads, or null to use the default (such as
+     * “testconf-paper1-attachments/file.pdf”). A non-null filename is used
+     * as is, without the site’s download prefix or a MIME-type suffix;
+     * filters, if any, are noted before its extension. Filenames should
+     * be unique within the submission, and should not reveal information
+     * that downloaders cannot see. `$flags` are as for
+     * `DocumentInfo::export_filename` (for instance, pass them to
+     * `DocumentInfo::member_filename`). Fields that choose filenames
+     * should also parse them (see `parse_export_filename`), so that
+     * export filenames can be requested from the `doc` page and API.
+     * @param int $flags
+     * @return ?string */
+    function export_filename_for(DocumentInfo $doc, $flags) {
+        return null;
+    }
+
+    /** Parse `$fn`, a filename that `export_filename_for` might have
+     * returned for a document in this field. Return null if `$fn` is not
+     * such a filename, and otherwise an array with keys `pid`, the
+     * submission ID, and optionally `attachment`, a key that selects one of
+     * the field’s documents (it is passed to this field’s `attachment`
+     * method; omit it to select the field’s main document). Other keys are
+     * reserved for future use. `DocumentRequest` calls this only for
+     * names it cannot otherwise parse, and removes any `--` filters first
+     * (except from attachment names, which contain `/`); since filters can
+     * change the extension, any extension should be accepted. Permissions
+     * are checked later.
+     * @param string $fn
+     * @return ?array{pid:int,attachment?:?string} */
+    function parse_export_filename($fn) {
+        return null;
+    }
+
+    /** Fetch the content of `$doc`, a placeholder document for this field.
+     *
+     * On success, set `$doc`’s content (with `$doc->set_simple_content()` or
+     * `$doc->set_simple_content_file()`) and return true; HotCRP will then
+     * analyze and validate the content, assign the document a hash and size,
+     * and store it. On failure, return false, perhaps after reporting an error with
+     * `$doc->error()`. `$doc->prow` is set. Fields that create placeholder
+     * documents must override this function.
+     * @return bool */
+    function fetch_document(DocumentInfo $doc) {
+        return false;
     }
 
     /** @param FieldChangeSet $fcs */

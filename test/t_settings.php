@@ -1429,6 +1429,26 @@ class Settings_Tester {
         xassert(!$sv->execute());
         xassert_str_contains($sv->full_feedback_text(), "is not unique");
 
+        // names that would share an element ID are too similar
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/name" => "Program!",
+            "sf/1/id" => "new",
+            "sf/1/order" => 102,
+            "sf/1/type" => "text"
+        ]);
+        xassert(!$sv->execute());
+        xassert_str_contains($sv->full_feedback_text(), "are too similar");
+        xassert($sv->has_error_at("sf/1/name"));
+        xassert(!$sv->conf->find_all_fields("Program!"));
+
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "sf": [{"id": "new", "name": "Final response", "type": "text", "order": 103},
+                   {"id": "new", "name": "Final-Response", "type": "text", "order": 104}]
+        }');
+        xassert(!$sv->execute());
+        xassert_str_contains($sv->full_feedback_text(), "‘Final response’ and ‘Final-Response’ are too similar");
+
         // test option values and renumbering
         $sv->conf->qe("delete from PaperOption where optionId=2");
         $sv->conf->qe("insert into PaperOption (paperId, optionId, value, data) values (1, 2, 1, null)");
@@ -2670,6 +2690,159 @@ class Settings_Tester {
         xassert(!$this->conf->options()->find("Status"));
     }
 
+    function test_sf_page_group() {
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "sf": [
+                {"id": "new", "name": "Street", "type": "text", "order": 300, "display": "left", "page_group": "contact"},
+                {"id": "new", "name": "Phone Number", "type": "text", "order": 301, "display": "left", "page_group": "contact"},
+                {"id": "new", "name": "Elsewhere", "type": "text", "order": 302, "display": "rest"}
+            ]
+        }');
+        xassert($sv->execute());
+        $ostreet = $this->conf->options()->find("Street");
+        $ophone = $this->conf->options()->find("Phone Number");
+        $oelse = $this->conf->options()->find("Elsewhere");
+        xassert($ostreet && $ophone && $oelse);
+        xassert_eqq($ostreet->page_group(), "contact");
+        xassert_eqq($ophone->page_group(), "contact");
+        // the implicit topics group is not a setting
+        xassert_eqq($oelse->page_group(), "topics");
+        xassert_eqq($oelse->jsonSerialize()->page_group ?? null, null);
+        xassert_eqq($oelse->export_setting()->page_group, null);
+
+        // invalid groups are rejected by settings (but are not checked when
+        // configured directly)
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "sf": [{"id": "new", "name": "Badgroup", "type": "text", "order": 303, "display": "right", "page_group": "no spaces"}]
+        }');
+        xassert(!$sv->execute());
+        xassert($sv->has_error_at("sf/1/page_group"));
+        xassert(!$this->conf->options()->find("Badgroup"));
+        xassert(!PaperOption::valid_page_group("no spaces"));
+        xassert(!PaperOption::valid_page_group("no-dashes"));
+        xassert(!PaperOption::valid_page_group("no_underscores"));
+        xassert(!PaperOption::valid_page_group("Uppercase"));
+        xassert(!PaperOption::valid_page_group("1st"));
+        xassert(PaperOption::valid_page_group("group2"));
+        xassert_eqq(PaperOption::make($this->conf, (object) ["id" => 1000, "name" => "Bad", "type" => "text", "display" => "right", "page_group" => "no spaces"])->page_group(), "no spaces");
+
+        // groups survive export and reimport
+        $j = (new SettingValues($this->u_chair))->all_jsonv();
+        $groups = [];
+        foreach ($j->sf as $sfj) {
+            $groups[$sfj->name] = $sfj->page_group ?? null;
+        }
+        xassert_eqq($groups["Street"], "contact");
+        xassert_eqq($groups["Elsewhere"], null);
+
+        // moving a field out of the rest position leaves the topics group
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1, "sf/1/id" => $oelse->id, "sf/1/display" => "right"
+        ]);
+        xassert($sv->execute());
+        xassert_eqq($this->conf->options()->find("Elsewhere")->page_group(), null);
+
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1,
+            "sf/1/id" => $ostreet->id, "sf/1/delete" => 1,
+            "sf/2/id" => $ophone->id, "sf/2/delete" => 1,
+            "sf/3/id" => $oelse->id, "sf/3/delete" => 1
+        ]);
+        xassert($sv->execute());
+        xassert(!$this->conf->options()->find("Street"));
+    }
+
+    function test_sf_similar_names() {
+        $saved_value = $this->conf->setting("options");
+        $saved_data = $this->conf->setting_data("options");
+        $names = function () {
+            return array_map(function ($oj) { return $oj->name; }, json_decode($this->conf->setting_data("options") ?? "[]"));
+        };
+        try {
+            // non-Latin names are compared as written
+            $sv = (new SettingValues($this->u_chair))->add_json_string('{"sf": [
+                {"id": "new", "name": "姓名", "type": "text", "order": 400},
+                {"id": "new", "name": "地址", "type": "text", "order": 401},
+                {"id": "new", "name": "Name：", "type": "text", "order": 402}
+            ]}');
+            xassert($sv->execute());
+            xassert_in_eqq("姓名", $names());
+            xassert_in_eqq("地址", $names());
+            xassert_in_eqq("Name：", $names());
+
+            // case is ignored in any script, and numbers compare numerically
+            $sv = (new SettingValues($this->u_chair))->add_json_string('{"sf": [
+                {"id": "new", "name": "Имя", "type": "text", "order": 403},
+                {"id": "new", "name": "имя", "type": "text", "order": 404}
+            ]}');
+            xassert(!$sv->execute());
+            xassert_str_contains($sv->full_feedback_text(), "‘Имя’ and ‘имя’ are too similar");
+            $sv = (new SettingValues($this->u_chair))->add_json_string('{"sf": [
+                {"id": "new", "name": "Item 01", "type": "text", "order": 403},
+                {"id": "new", "name": "Item 1", "type": "text", "order": 404}
+            ]}');
+            xassert(!$sv->execute());
+            xassert_str_contains($sv->full_feedback_text(), "are too similar");
+
+            // similar names already in the database are allowed...
+            $oj = json_decode($this->conf->setting_data("options"));
+            $oj[] = (object) ["id" => 900, "name" => "Final response", "type" => "text", "order" => 405];
+            $oj[] = (object) ["id" => 901, "name" => "Final-Response", "type" => "text", "order" => 406];
+            $this->conf->save_refresh_setting("options", (int) $this->conf->setting("options") + 1, json_encode_db($oj));
+            $sv = (new SettingValues($this->u_chair))->add_json_string('{"sf": [
+                {"id": 900, "name": "Final response"},
+                {"id": 901, "name": "Final-Response"},
+                {"id": "new", "name": "Unrelated", "type": "text", "order": 407}
+            ]}');
+            xassert($sv->execute());
+            xassert_in_eqq("Unrelated", $names());
+
+            // ...but renaming one to another similar name is an error
+            $sv = (new SettingValues($this->u_chair))->add_json_string('{"sf": [
+                {"id": 901, "name": "FINAL response"}
+            ]}');
+            xassert(!$sv->execute());
+            xassert_str_contains($sv->full_feedback_text(), "are too similar");
+            xassert_str_contains($sv->full_feedback_text(), "‘FINAL response’");
+        } finally {
+            $this->conf->save_refresh_setting("options", $saved_value, $saved_data);
+        }
+    }
+
+    function test_list_default_view() {
+        xassert_eqq($this->conf->setting_data("pldisplay_default"), null);
+
+        // the view can name fields created by the same request
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{
+            "sf": [{"id": "new", "name": "Listed", "type": "text", "order": 300}],
+            "list_default_view": "show:listed  show:authors hide:revstat"
+        }');
+        xassert($sv->execute());
+        xassert_eqq($sv->full_feedback_text(), "");
+        xassert_eqq($this->conf->setting_data("pldisplay_default"), "show:listed show:authors hide:revstat");
+        $pl = new PaperList("pl", new PaperSearch($this->u_chair, ["q" => "1", "t" => "s"]));
+        $pl->apply_view_report_default();
+        $cells = paper_list_html_cells($pl);
+        xassert(array_key_exists("authors", $cells[1]));
+        xassert(!array_key_exists("revstat", $cells[1]));
+        xassert_eqq((new SettingValues($this->u_chair))->all_jsonv()->list_default_view,
+                    "show:listed show:authors hide:revstat");
+
+        // unknown columns are reported
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{"list_default_view": "show:nonexistent"}');
+        $sv->execute();
+        xassert_str_contains($sv->full_feedback_text(), "nonexistent");
+
+        // empty means the baseline view
+        $sv = (new SettingValues($this->u_chair))->add_json_string('{"list_default_view": ""}');
+        xassert($sv->execute());
+        xassert_eqq($this->conf->setting_data("pldisplay_default"), null);
+        $sv = SettingValues::make_request($this->u_chair, [
+            "has_sf" => 1, "sf/1/id" => $this->conf->options()->find("Listed")->id, "sf/1/delete" => 1
+        ]);
+        xassert($sv->execute());
+    }
+
     function test_sf_name_json_reserved_grandfathered() {
         // install fields with reserved-looking names behind the settings UI’s back
         $old_sv = $this->conf->setting("options");
@@ -3585,7 +3758,7 @@ class Settings_Tester {
         $render = function () use ($conf) {
             $prow = $conf->checked_paper_by_id(1);
             $qreq = TestQreq::get(["p" => 1])->set_user($this->u_chair);
-            $pt = new PaperTable($this->u_chair, $qreq, $prow);
+            $pt = new PaperTable($qreq, $prow);
             $pt->resolve_comments();
             $pt->resolve_review(false);
             ob_start();

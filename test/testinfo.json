@@ -37,7 +37,8 @@
         "name": "test05",
         "members": [
             "PaperStatus_Tester", "AuthorCertification_Tester",
-            "Login_Tester", "UserStatus_Tester", "ManageEmail_Tester",
+            "Login_Tester", "UserStatus_Tester", "IACR_UserStatus_Tester",
+            "ManageEmail_Tester",
             "PlaceholderDocuments_Tester",
             "(", "no_cdb", "Login_Tester", "UserStatus_Tester", ")"
         ]

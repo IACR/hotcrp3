@@ -140,6 +140,10 @@ class UserActions extends MessageSet {
             $this->conf->log_for($this->viewer, $u, "Account edited: roles [{$d}]");
             $this->unames[$key][] = $u->name(NAME_E);
             $u->update_cdb_roles();
+            if ($this->conf->opt("aicheckSecret")) {
+                // IACR tells AICheck about PC and chair changes.
+                $this->conf->call_hooks("user_roles_changed", $u, $old_roles, $u->roles, $this->viewer, false);
+            }
             if (($old_roles & Contact::ROLE_PCLIKE) !== 0
                 && ($u->roles & Contact::ROLE_PCLIKE) === 0) {
                 $pc_removals[] = $u->email;

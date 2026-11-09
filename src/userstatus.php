@@ -1315,6 +1315,11 @@ class UserStatus extends MessageSet {
             $aset->execute();
         }
 
+        if ($roles !== $old_roles && $this->conf->opt("aicheckSecret")) {
+            // IACR tells AICheck about PC and chair changes.
+            $this->conf->call_hooks("user_roles_changed", $user, $old_roles, $roles, $this->viewer, $this->created);
+        }
+
         // Notify of new accounts or new PC-ness
         if ($this->notify && $user->disabled_flags() === 0) {
             $eff_old_roles = $old_disablement !== 0 ? 0 : $old_roles;

@@ -1,10 +1,13 @@
 <?php
 // iacr_register_venue.php -- register this HotCRP instance with IACR's AICheck server
 //
-// Creates a read-only API token for an administrator of this instance, then
-// sends it with the venue details to AICheck's HMAC-signed POST /api/1.0/venue
+// Creates an unrestricted API token for an administrator of this instance
+// (AICheck writes tags and other data back through the API), then sends it with the venue details to AICheck's HMAC-signed POST /api/1.0/venue
 // (see webapp/api.py in the aicheck repository). AICheck creates the venue,
 // or updates it if it exists, and then fetches this instance's settings.
+//
+// The venue's url is $Opt["paperSite"] if set, else
+// https://submit.iacr.org/<hotcrp_key>; AICheck sends the token there.
 //
 // The API base URL is $Opt["aicheckUrl"], e.g.
 // "https://aicheck.iacr.org/api/1.0/", and the shared secret is
@@ -21,7 +24,6 @@ if (realpath($_SERVER["PHP_SELF"]) === __FILE__) {
 
 class IACRRegisterVenue_Batch {
     const DEFAULT_USER = "hotcrpadmin@iacr.org";
-    const DEFAULT_SCOPE = "submission:read other:read settings:read";
 
     /** @var Conf */
     public $conf;
@@ -35,6 +37,8 @@ class IACRRegisterVenue_Batch {
     private $secret_file;
     /** @var string */
     private $hotcrp_key;
+    /** @var string */
+    private $site_url;
     /** @var string */
     private $venue_name;
     /** @var int|string|null */
@@ -70,6 +74,13 @@ class IACRRegisterVenue_Batch {
         if (!preg_match('/\A[A-Za-z0-9_]{3,32}\z/', $this->hotcrp_key)) {
             throw new CommandLineException("Venue key `{$this->hotcrp_key}` must be 3-32 characters from A-Za-z0-9_; check \$Opt[\"shortName\"] or use `--hotcrp-key`");
         }
+        $this->site_url = rtrim(trim($arg["site-url"] ?? (string) ($conf->opt("paperSite") ?? "")), "/");
+        if ($this->site_url === "") {
+            $this->site_url = "https://submit.iacr.org/{$this->hotcrp_key}";
+        } else if (!preg_match('/\Ahttps?:\/\/[^\/?#@]+(?:\/[^?#]*)?\z/', $this->site_url)
+                   || strlen($this->site_url) > 255) {
+            throw new CommandLineException("Site URL `{$this->site_url}` must be an http(s) URL with no user name, query, or fragment; check \$Opt[\"paperSite\"] or use `--site-url`");
+        }
         $this->venue_name = $arg["venue-name"] ?? ($conf->long_name ?: $conf->short_name);
         if (isset($arg["deadline"])) {
             $d = $arg["deadline"];
@@ -79,7 +90,7 @@ class IACRRegisterVenue_Batch {
             $this->deadline = $sub > 0 ? $sub : null;
         }
         $this->status = $arg["status"] ?? null;
-        $this->scope = $arg["scope"] ?? self::DEFAULT_SCOPE;
+        $this->scope = simplify_whitespace($arg["scope"] ?? "");
         $s = $arg["expiry"] ?? "365d";
         if (strcasecmp($s, "never") === 0) {
             $this->expiry = -1;
@@ -105,6 +116,7 @@ class IACRRegisterVenue_Batch {
         $venue = [
             "hotcrp_key" => $this->hotcrp_key,
             "name" => $this->venue_name,
+            "url" => $this->site_url,
             "submission_deadline" => $this->deadline,
             "pcchair_email" => $this->pcchair_email,
             "creator_email" => $user->email,
@@ -124,8 +136,10 @@ class IACRRegisterVenue_Batch {
 
         $secret = $this->secret();
         $token = Authorization_Token::prepare_bearer($user, $this->expiry);
-        $token->change_data("note", "IACR AICheck")
-            ->change_data("scope", $this->scope);
+        $token->change_data("note", "IACR AICheck");
+        if ($this->scope !== "") {
+            $token->change_data("scope", $this->scope);
+        }
         $token->insert();
         if (!$token->stored()) {
             throw new CommandLineException("Could not create token");
@@ -213,13 +227,14 @@ class IACRRegisterVenue_Batch {
             "help,h !",
             "user:,u: =EMAIL Administrator who gets the token; becomes the venue's creator [" . self::DEFAULT_USER . "]",
             "pcchair-email: =EMAIL Alias that reaches all PC chairs [\$Opt[\"contactEmail\"]]",
-            "api-url: =URL AICheck API base URL [\$Opt[\"iacrWebhookUrl\"]]",
+            "api-url: =URL AICheck API base URL [\$Opt[\"aicheckUrl\"]]",
             "secret-file: =FILE Read the shared secret from FILE [\$Opt[\"aicheckSecret\"]]",
             "hotcrp-key: =KEY Venue key; the last part of this instance's URL [\$Opt[\"shortName\"]]",
+            "site-url: =URL This instance's URL, where AICheck sends API requests [\$Opt[\"paperSite\"], else https://submit.iacr.org/KEY]",
             "venue-name: =NAME Venue name [\$Opt[\"longName\"]]",
             "deadline: =TIME Submission deadline, Unix time or ISO 8601 [submission deadline setting, if set]",
             "status: =STATUS draft, active, or archived [draft for a new venue]",
-            "scope: =SCOPE Token scope [" . self::DEFAULT_SCOPE . "]",
+            "scope: =SCOPE Restrict the token to SCOPE [unrestricted]",
             "expiry:,e: =DURATION Token expiration [365d]",
             "dry-run Show what would be sent; create no token"
         )->description("Register this HotCRP instance as a venue on IACR's AICheck server.

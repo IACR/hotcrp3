@@ -2076,7 +2076,7 @@ final class PaperStatus extends MessageSet {
             $logtext .= ": " . join(", ", $this->change_list());
         }
         $this->user->log_activity($logtext, $this->paperId);
-        if ($this->conf->opt('openWebhookSecret')) {
+        if ($this->conf->opt('aicheckSecret')) {
           // IACR has an external call when this event happens.
           $this->conf->call_hooks("paper_saved", $this);
         }

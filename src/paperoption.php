@@ -293,12 +293,31 @@ class PaperOption implements JsonSerializable {
         return preg_match('/\A[a-z][a-z0-9]*\z/', $pg) === 1;
     }
 
+    // IACR start
+    /** Return true iff `$id` is an IACR field that chairs may not delete.
+     * @param int $id
+     * @return bool */
+    static function is_iacr_undeletable_id($id) {
+        return $id === self::IACR_FINAL_ID
+            || $id === self::IACR_COPYRIGHT_ID
+            || $id === self::IACR_PUBTYPE_ID
+            || $id === self::IACR_FORMER_DOI_ID;
+    }
+    // IACR end
+
     /** @param stdClass|Sf_Setting $args
      * @return PaperOption */
     static function make(Conf $conf, $args) {
         assert(is_object($args));
         Conf::xt_resolve_require($args);
         $fn = $args->function ?? null;
+        // IACR start
+        if (!$fn
+            && (int) ($args->id ?? 0) === self::IACR_FORMER_DOI_ID
+            && ($args->type ?? null) === "text") {
+            $fn = "+IACRFormerDOI_PaperOption";
+        }
+        // IACR end
         if (!$fn) {
             if (isset($args->type)) {
                 $fn = self::$callback_map[$args->type] ?? null;
@@ -2213,6 +2232,60 @@ class Text_PaperOption extends PaperOption {
         return $sfs;
     }
 }
+
+// IACR start
+/* The IACR "Former DOI" text field (IACR_FORMER_DOI_ID). PaperOption::make()
+   uses this class for that field. A Corrigendum or Addendum must give the DOI
+   of the paper it corrects; other publication types ignore the field. */
+class IACRFormerDOI_PaperOption extends Text_PaperOption {
+    /** @return bool */
+    static function pubtype_needs_doi(PaperInfo $prow) {
+        // IACR_PUBTYPE_ID choices 3 = Corrigendum, 4 = Addendum; see
+        // get_iacr_url() in iacr/api/util.php
+        $v = $prow->option(PaperOption::IACR_PUBTYPE_ID)->value ?? null;
+        return $v === 3 || $v === 4;
+    }
+
+    function parse_qreq(PaperInfo $prow, Qrequest $qreq) {
+        return $this->parse_json_string($prow, $qreq[$this->formid] ?? "", PaperOption::PARSE_STRING_CONVERT | PaperOption::PARSE_STRING_SIMPLIFY);
+    }
+    function parse_json_user(PaperInfo $prow, $j, Contact $user) {
+        return $this->parse_json_string($prow, $j, PaperOption::PARSE_STRING_SIMPLIFY);
+    }
+
+    function value_check_required(PaperValue $ov) {
+        if (!self::pubtype_needs_doi($ov->prow)
+            || $this->value_present($ov)
+            || $ov->prow->allow_absent()) {
+            return parent::value_check_required($ov);
+        }
+        $status = $ov->prow->want_submitted() ? MessageSet::ERROR : MessageSet::WARNING;
+        $ov->append_item(new MessageItem($status, $this->field_key(), "<0>Enter the DOI of the original paper for a Corrigendum or Addendum"));
+        return false;
+    }
+
+    function value_check(PaperValue $ov, Contact $user) {
+        parent::value_check($ov, $user);
+        if ($this->value_present($ov)
+            && !str_starts_with($ov->data(), "10.")) {
+            $ov->error("<0>DOI must start with ‘10.’");
+        }
+    }
+
+    function value_reconcile(PaperValue $ov, PaperStatus $ps) {
+        // Runs once all fields are parsed, so the publication type is current.
+        // Skip hidden fields: the author can't clear a value they can't see.
+        $key = $ps->option_key($this);
+        if ($this->value_present($ov)
+            && !self::pubtype_needs_doi($ov->prow)
+            && $this->test_exists($ov->prow)
+            && !$ps->has_message_at($key)) {
+            $ps->warning_at($key, "<0>This field is only used for a Corrigendum or Addendum");
+        }
+        return null;
+    }
+}
+// IACR end
 
 class Unknown_PaperOption extends PaperOption {
     function __construct(Conf $conf, $args) {

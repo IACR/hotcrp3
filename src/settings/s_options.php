@@ -272,9 +272,7 @@ class Options_SettingParser extends SettingParser {
         if ($this->sfs->option_id <= 0) {
             $ij = $this->basic_intrinsic_json($this->sfs->option_id);
             $content = "Intrinsic field (" . htmlspecialchars($ij->name) . ")";
-         } elseif ($this->sfs->option_id == PaperOption::IACR_FINAL_ID ||
-                   $this->sfs->option_id == PaperOption::IACR_PUBTYPE_ID ||
-                   $this->sfs->option_id == PaperOption::IACR_COPYRIGHT_ID) {
+         } elseif (PaperOption::is_iacr_undeletable_id($this->sfs->option_id)) {
             $content = "IACR field";
         } else {
             $conversions = [];
@@ -388,9 +386,7 @@ class Options_SettingParser extends SettingParser {
                 Ht::button(Ht::make_licon("movearrow0"), ["class" => "btn-licon ui js-settings-sf-move move-up need-tooltip", "aria-label" => "Move up in display order"]),
                 Ht::button(Ht::make_licon("movearrow2"), ["class" => "btn-licon ui js-settings-sf-move move-down need-tooltip", "aria-label" => "Move down in display order"]),
                 '</span>';
-            if ($this->sfs->option_id === PaperOption::IACR_FINAL_ID ||
-                $this->sfs->option_id === PaperOption::IACR_COPYRIGHT_ID ||
-                $this->sfs->option_id === PaperOption::IACR_PUBTYPE_ID) {
+            if (PaperOption::is_iacr_undeletable_id($this->sfs->option_id)) {
                 echo Ht::button(Icons::ui_use("trash"), ["class" => "btn-licon disabled need-tooltip", "aria-label" => "This IACR field cannot be deleted.", "tabindex" => -1]);
             } elseif ($this->sfs->option_id > 0) {
                 echo Ht::button(Ht::make_licon("trash"), ["class" => "btn-licon ui js-settings-sf-move delete need-tooltip", "aria-label" => "Delete", "data-exists-count" => $this->option_use_count($this->sfs->option_id)]);
@@ -480,7 +476,8 @@ class Options_SettingParser extends SettingParser {
             $this->sfs->option_id == PaperOption::IACR_COPYRIGHT_ID ||
             $this->sfs->option_id == PaperOption::IACR_SLIDES_ID ||
             $this->sfs->option_id == PaperOption::IACR_VIDEO_ID ||
-            $this->sfs->option_id == PaperOption::IACR_PUBTYPE_ID) {
+            $this->sfs->option_id == PaperOption::IACR_PUBTYPE_ID ||
+            $this->sfs->option_id == PaperOption::IACR_FORMER_DOI_ID) {
           $classes .= ' iacroption';
         }
         echo '<div id="sf/', $ctr, '/edit" class="', $classes, '">';
@@ -1007,6 +1004,8 @@ class Options_SettingParser extends SettingParser {
             if ($sfs->deleted) {
                 if ($sfs->option_id <= 0) {
                     $sv->error_at("sf/{$ctr}", "<0>Intrinsic fields cannot be deleted");
+                } else if (PaperOption::is_iacr_undeletable_id($sfs->option_id)) {
+                    $sv->error_at("sf/{$ctr}", "<0>This IACR field cannot be deleted");
                 } else if ($sfs->existed) {
                     $this->_delete_optionids[] = $sfs->id;
                 }

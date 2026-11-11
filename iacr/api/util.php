@@ -264,7 +264,7 @@ function get_iacr_url($optionId, $paperId) {
           $db = new PDO("mysql:host=localhost;dbname=$dbName;charset=utf8",
                         $Opt['dbUser'],
                         $Opt['dbPassword']);
-          $sql = "SELECT value FROM PaperOption where paperId=:paperId and optionId=:optionId";
+          $sql = "SELECT value, data FROM PaperOption where paperId=:paperId and optionId=:optionId";
           $stmt = $db->prepare($sql);
           $res = $stmt->bindParam(':paperId', $paperId, PDO::PARAM_INT);
           $pubtype_id = PaperOption::IACR_PUBTYPE_ID;
@@ -277,10 +277,11 @@ function get_iacr_url($optionId, $paperId) {
             $pubtype = 1; // default for RESEARCH.
           }
           if ($pubtype == 3 || $pubtype == 4) {
-            $stmt->bindParam(':optionId', PaperOption::IACR_FORMER_DOI_ID, PDO::PARAM_INT);
+            $former_doi_id = PaperOption::IACR_FORMER_DOI_ID;
+            $stmt->bindParam(':optionId', $former_doi_id, PDO::PARAM_INT);
             $res = $stmt->execute();
-            $row = $stmt->fetch(PDF::FETCH_ASSOC);
-            $former_doi = $row['value'];
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $former_doi = $row['data'];
           } else {
             $former_doi = null;
           }

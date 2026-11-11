@@ -25,18 +25,38 @@ function iacrSubmitAndUploadCheckboxes() {
   }
 }
 
-addEventListener("load", (ev) => {
-  let urlfield = document.querySelector('textarea#resubmission');
-  if (urlfield) {
-    urlfield.addEventListener('input', () => {
-      reg = new RegExp('^https://submit.iacr.org/[a-zA-Z0-9_]+/paper/[0-9]{1,4}$');
-      console.log(urlfield.value);
-      if (reg.test(urlfield.value)) {
-        urlfield.setCustomValidity('');
-      } else {
-        urlfield.setCustomValidity('The URL should have the form https://submit.iacr.org/<venue>/paper/<number>')
-      }
+/*
+ *  Check the resubmission URL field (PaperOption::IACR_SUBMISSIONURL_ID) on
+ *  the paper submission form.
+ */
+addEventListener("load", () => {
+  // Find the field by ID; fall back to the element ID made from its name.
+  const urlfield = document.querySelector('textarea[name="opt3888"]')
+    || document.querySelector('textarea#resubmission');
+  if (!urlfield) {
+    return;
+  }
+  const re = /^https:\/\/submit\.iacr\.org\/[a-zA-Z0-9_]+\/paper\/[0-9]{1,4}$/;
+  function check() {
+    // An empty field is fine: HotCRP checks required fields itself. A hidden
+    // field is skipped, since the browser would still enforce the error and
+    // block Save with no visible message.
+    const ok = urlfield.value === ""
+      || urlfield.offsetParent === null
+      || re.test(urlfield.value);
+    urlfield.setCustomValidity(ok ? "" : "The URL should have the form https://submit.iacr.org/<venue>/paper/<number>");
+    return ok;
+  }
+  // Update silently while typing; show the message once the edit is done.
+  urlfield.addEventListener("input", check);
+  urlfield.addEventListener("change", () => {
+    if (!check()) {
       urlfield.reportValidity();
-    });
+    }
+  });
+  // A condition can hide the field after the URL was entered; recheck on
+  // any click in the form, which runs before the browser validates on Save.
+  if (urlfield.form) {
+    urlfield.form.addEventListener("click", check, true);
   }
 });

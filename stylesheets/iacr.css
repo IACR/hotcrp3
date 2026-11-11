@@ -205,3 +205,6 @@ div#optionDiv_-1 {
 div.form-section h3#authors, div#sf_author_orcid {
     display: none;
 }
+div#h-site a {
+    color: var(--link-fg);
+}

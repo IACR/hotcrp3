@@ -64,8 +64,6 @@ if ($nav->page === "images"
 } else if ($nav->page === "cacheable") {
     include("src/pages/p_cacheable.php");
     Cacheable_Page::go_nav($nav);
-} else if ($nav->page === "iacrcopyright") {
-    include("iacrcopyright/index.php");
 } else if ($nav->page === "scorechart") {
     include("src/pages/p_scorechart.php");
     Scorechart_Page::go_param($_GET);

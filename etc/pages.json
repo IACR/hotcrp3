@@ -261,5 +261,6 @@
     {   "name": "scorechart", "print_function": "Scorechart_Page::go"   },
     {   "name": "search", "print_function": "Search_Page::go"   },
     {   "name": "settings", "print_function": "Settings_Page::go"   },
-    {   "name": "users", "print_function": "Users_Page::go", "allow_disabled": true   }
+    {   "name": "users", "print_function": "Users_Page::go", "allow_disabled": true   },
+    {   "name": "iacrcopyright", "print_function": "IacrCopyright_Page::go"   }
 ]

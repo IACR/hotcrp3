@@ -11,8 +11,8 @@ class IACR_HelpTopic {
 
     static function print(HelpRenderer $hth) {
       echo $hth->subhead("Available only to program chairs");
-      if ($hth->user->is_admin()) {
-        echo "<p><a href=\"../iacr/\">Located here</a></p>";
+      if ($hth->user->privChair) {
+        echo "<p><a href=\"", htmlspecialchars($hth->conf->hoturl("iacr_home")), "\">Located here</a></p>";
       }
     }
 }

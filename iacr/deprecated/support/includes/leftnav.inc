@@ -1,5 +1,5 @@
 <div class="leftnav d-flex flex-column p-3">
-  <div><a id="menuhome" class="navitem" href=".">IACR Home</a></div>
+  <div><a id="menuhome" class="navitem" href="../iacr_home">IACR Home</a></div>
 <!--  I didn't have time to fix these after the 2022 update to hotcrp.
       Their functionality appears elsewhere anyway.
   <div class="navheader font-weight-bold">Import</div>
@@ -7,24 +7,24 @@
   <div><a id="menucoll" class="navitem" href="coll.php">PC Collaborators</a></div>
 -->
   <div class="navheader font-weight-bold">Final versions</div>
-  <div><a id="menuaccepted" class="navitem" href="accepted.php">Accepted papers</a></div>
-  <div><a id="menufinal" class="navitem" href="final.php">Final papers</a></div>
+  <div><a id="menuaccepted" class="navitem" href="../iacr_accepted">Accepted papers</a></div>
+  <div><a id="menufinal" class="navitem" href="../iacr_final">Final papers</a></div>
 <?php
   global $Opt;
   $withLNCS = array('pkc', 'tcc', 'crypto', 'eurocrypt', 'asiacrypt');
   if (in_array($Opt['iacrType'], $withLNCS)) {
-    echo '<div><a id="menucopyright" class="navitem" href="copyright.php">Copyright forms</a></div>';
+    echo '<div><a id="menucopyright" class="navitem" href="../iacr_copyrights">Copyright forms</a></div>';
   } elseif ($Opt['iacrType'] === 'tches' || $Opt['iacrType'] === 'tosc' || $Opt['iacrType'] === 'cic') {
-    echo '<div><a id="menucopyright" class="navitem" href="copyright.php">Copyright forms</a></div>';
+    echo '<div><a id="menucopyright" class="navitem" href="../iacr_copyrights">Copyright forms</a></div>';
   }
 ?>
 <?php
   global $Opt;
   if (in_array($Opt['iacrType'], $withLNCS)) {
-    echo '<div><a id="menulncs" class="navitem" href="lncs.php">LNCS table of contents</a></div>';
+    echo '<div><a id="menulncs" class="navitem" href="../iacr_lncs">LNCS table of contents</a></div>';
   }
   if ($Opt['iacrType'] != 'cic') {
-    echo '<div><a id="menuprogram" class="navitem" href="program.php">Program</a></div>';
+    echo '<div><a id="menuprogram" class="navitem" href="../iacr_program">Program</a></div>';
   }
 ?>
   <div class="navheader font-weight-bold">IACR Documents</div>

@@ -1,0 +1,218 @@
+/* iacr-pages.css -- styles for the IACR chair pages (/iacr_*)
+   Part of the IACR extensions; not part of upstream HotCRP.
+
+   The IACR chair pages print their own <head> (src/pages/iacr/header.inc,
+   and src/pages/iacr/lncseditor.inc for the LNCS editor). They load, in
+   order: HotCRP's style.css, Bootstrap 5.3 from iacr.org
+   (https://iacr.org/libs/css/bootstrap/bootstrap-5.3/), any inline page
+   styles, and then this file. Ordinary HotCRP pages do not load it.
+
+   Dark mode: style.css defines color tokens (--paper, --text, --link-fg,
+   ...) whose values follow the browser's color scheme, or the theme the
+   user chose in HotCRP (see IACR_Page::print_theme_style()). Bootstrap's
+   own dark mode needs a data-bs-theme attribute, which these pages do not
+   set, so Bootstrap uses its light colors; and because it loads after
+   style.css (and is not in a CSS layer) its rules win. This file restates
+   the Bootstrap colors these pages use in terms of HotCRP's tokens. Where
+   no token fits, it uses a light-dark() pair whose light value is the
+   original color; browsers without light-dark() ignore such declarations
+   and keep the light colors. Values that are not colors, such as the
+   close button's filter, are set in style.css's "theme" and "dark-mode"
+   CSS layers, so they switch the same way HotCRP's tokens do. */
+
+@layer theme {
+:root {
+	--iacr-close-filter: none;
+}
+}
+@layer dark-mode {
+:root {
+	--iacr-close-filter: invert(1) grayscale(100%) brightness(200%);
+}
+}
+
+/* Page */
+body {
+	background-color: var(--paper);
+	color: var(--text);
+}
+/* Bootstrap 5 underlines links; these pages were designed for Bootstrap 4,
+   which underlined them only on hover. */
+a {
+	color: var(--link-fg);
+	text-decoration: none;
+}
+a:hover {
+	color: var(--link-hover-fg);
+	text-decoration: underline;
+}
+#header-site {
+	min-height: 120px;
+}
+.header-site-name {
+	font-size: 24px;
+}
+
+/* Left-hand menu (IACR_Page::print_menu()) */
+.leftnav {
+	background-color: var(--sidebar-bg);
+}
+.leftnav > div {
+	margin-top: 10px;
+	margin-bottom: 10px;
+}
+div.navheader {
+	margin-top: 10px;
+}
+.leftnav a.navitem {
+	border-radius: 5px;
+	margin-left: 5px;
+	color: var(--text);
+	text-decoration: none;
+	padding: 5px 5px 5px 10px;
+	border: 1px solid transparent;
+}
+.leftnav a.active {
+	border: 1px solid var(--error-fg);
+	color: var(--error-fg);
+	background-color: var(--paper);
+}
+.leftnav a:hover {
+	border: 1px solid var(--success-fg);
+	color: var(--success-fg);
+	background-color: var(--paper);
+}
+
+/* Buttons. HotCRP styles .btn and .btn-primary, so these pages use
+   .button and .button-primary, copied from Bootstrap 4.3. */
+.button {
+	background-image: none;
+	display: inline-block;
+	font-weight: 400;
+	color: var(--text);
+	text-align: center;
+	vertical-align: middle;
+	user-select: none;
+	background-color: transparent;
+	border: 1px solid transparent;
+	padding: 0.375rem 0.75rem;
+	font-size: 1rem;
+	line-height: 1.5;
+	border-radius: 0.25rem;
+	transition: color 0.15s ease-in-out, background-color 0.15s ease-in-out, border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+	.button {
+		transition: none;
+	}
+}
+.button:hover {
+	background: none;
+	background-image: none;
+	color: var(--text);
+	text-decoration: none;
+}
+/* White on blue reads well in both schemes. */
+.button-primary, .button-primary:hover {
+	color: #fff;
+}
+.button-primary {
+	background-color: #007bff;
+	border-color: #007bff;
+}
+.button-primary:hover {
+	background-color: #0069d9;
+	border-color: #0062cc;
+}
+.button-primary:focus, .button-primary.focus {
+	box-shadow: 0 0 0 0.2rem rgba(38, 143, 255, 0.5);
+}
+.btn-light {
+	background-image: var(--button-bgi);
+	background-color: transparent;
+	color: var(--text);
+	border-color: var(--input-border);
+}
+.btn-light:hover {
+	background-image: var(--button-hover-bgi);
+	color: var(--text);
+}
+
+/* Bootstrap components used by these pages */
+.alert-success {
+	color: var(--text);
+	background-color: var(--success-msg-bg);
+	border-color: var(--success-fg);
+}
+.alert-warning {
+	color: var(--text);
+	background-color: var(--warning-msg-bg);
+	border-color: var(--warning-fg);
+}
+.alert-danger {
+	color: var(--text);
+	background-color: var(--error-msg-bg);
+	border-color: var(--error-fg);
+}
+.alert a {
+	color: var(--link-fg);
+}
+/* Bootstrap draws the close button as a dark image; invert it when dark. */
+.btn-close {
+	filter: var(--iacr-close-filter);
+}
+.text-primary {
+	color: var(--link-fg) !important;
+}
+.bg-light {
+	background-color: var(--fieldset-bg) !important;
+}
+.form-control, .form-control:focus {
+	background-color: var(--paper);
+	color: var(--input-text);
+	border-color: var(--input-border);
+}
+.form-control::placeholder {
+	color: var(--dim-fg);
+}
+.modal-content, .dropdown-menu {
+	background-color: var(--dialog-bg);
+	color: var(--text);
+	border-color: var(--list-group-border);
+}
+.modal-header, .modal-footer {
+	border-color: var(--list-group-border);
+}
+.dropdown-item {
+	color: var(--text);
+}
+.dropdown-item:hover, .dropdown-item:focus {
+	color: var(--text);
+	background-color: var(--success-msg-bg);
+}
+.dropdown-item-danger:hover {
+	background-color: var(--error-msg-bg);
+}
+.dropdown-item.disabled {
+	color: var(--disabled-fg);
+}
+.list-group-item {
+	background-color: var(--paper);
+	color: var(--text);
+	border-color: var(--list-group-border);
+}
+
+/* LNCS editor (/iacr_lncs_editor): drop zones, volumes, and topics */
+.list-group, .topicList {
+	background-color: light-dark(#d0d0d0, #2b3036);
+}
+.list-group:empty:before {
+	color: var(--success-fg);
+}
+.volume {
+	border-color: var(--list-group-border);
+	background-color: light-dark(#e0f0e0, #1d2a1d);
+}
+.topic {
+	background-color: light-dark(lightyellow, #262811);
+}

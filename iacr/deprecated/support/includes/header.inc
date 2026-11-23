@@ -103,6 +103,6 @@
       <div id="h-site">
         <a class="q" href="/<?php echo $Opt['dbName'];?>/"><span class="header-site-name"><?php echo $Opt['shortName'];?> Home</span></a>
       </div>
-    <h2 class="float-right mt-4 mr-4"><a href="/<?php echo $Opt['dbName'] . '/iacr/';?>">IACR HotCRP integration</a></h2>
+    <h2 class="float-right mt-4 mr-4"><a href="../iacr_home">IACR HotCRP integration</a></h2>
     </div>
     

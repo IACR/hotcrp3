@@ -122,7 +122,7 @@ class IacrCopyright_Page {
         $action = $this->conf->hoturl("iacrcopyright/{$prow->paperId}/submit",
                                       ["c" => "update"], Conf::HOTURL_POST);
         $subst = $form[1] + [
-            '[$action]' => $action,
+            '[$action]' => htmlspecialchars($action),
             '[$title]' => htmlspecialchars($prow->title),
             '[$confName]' => htmlspecialchars($this->conf->opt("longName") ?? ""),
             '[$authors]' => htmlspecialchars($prow->authorInformation),
@@ -221,7 +221,7 @@ class IacrCopyright_Page {
                         $prow->paperId, PaperOption::IACR_COPYRIGHT_ID);
 
         echo "<html><body><h3>Your copyright form was successfully submitted</h3>",
-            "<p><strong><a href=\"", $this->conf->hoturl("paper", ["p" => $prow->paperId, "m" => "edit"]),
+            "<p><strong><a href=\"", htmlspecialchars($this->conf->hoturl("paper", ["p" => $prow->paperId, "m" => "edit"])),
             "\">Return</a></strong></p></body></html>";
 
         // Email a copy to IACR. If this fails, the database still has a copy.

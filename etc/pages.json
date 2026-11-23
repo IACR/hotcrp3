@@ -262,5 +262,19 @@
     {   "name": "search", "print_function": "Search_Page::go"   },
     {   "name": "settings", "print_function": "Settings_Page::go"   },
     {   "name": "users", "print_function": "Users_Page::go", "allow_disabled": true   },
-    {   "name": "iacrcopyright", "print_function": "IacrCopyright_Page::go"   }
+    {   "name": "iacrcopyright", "print_function": "IacrCopyright_Page::go"   },
+    {   "name": "iacr", "print_function": "IACR_Redirect_Page::go"   },
+    {   "name": "iacr_home", "print_function": "IACR_Home_Page::go"   },
+    {   "name": "iacr_accepted", "print_function": "IACR_Accepted_Page::go"   },
+    {   "name": "iacr_accepted_json", "print_function": "IACR_AcceptedJson_Page::go"   },
+    {   "name": "iacr_program", "print_function": "IACR_Program_Page::go"   },
+    {   "name": "iacr_final", "print_function": "IACR_Final_Page::go"   },
+    {   "name": "iacr_copyrights", "print_function": "IACR_Copyrights_Page::go"   },
+    {   "name": "iacr_lncs", "print_function": "IACR_Lncs_Page::go"   },
+    {   "name": "iacr_lncs_editor", "print_function": "IACR_LncsEditor_Page::go"   },
+    {   "name": "iacr_lncs_data", "print_function": "IACR_LncsData_Page::go"   },
+    {   "name": "iacr_lncs_frontmatter", "print_function": "IACR_LncsFrontmatter_Page::go"   },
+    {   "name": "iacr_frontmatter", "print_function": "IACR_Frontmatter_Page::go"   },
+    {   "name": "iacr_author_emails", "print_function": "IACR_AuthorEmails_Page::go"   },
+    {   "name": "iacr_final_json", "print_function": "IACR_FinalJson_Page::go"   }
 ]

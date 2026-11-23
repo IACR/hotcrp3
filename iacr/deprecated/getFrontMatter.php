@@ -1,6 +1,5 @@
 <?php
-  require "../conf/options.php";
-  require "../src/init.php";
+  require "init.php"; // chair/sysadmin only; also loads HotCRP
   require "/var/www/util/hotcrp/hmac.php";
   header('Content-Type: text/plain');
   include "ellipsize.php";

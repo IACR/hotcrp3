@@ -722,6 +722,15 @@ final class Contact extends ContactPermissions implements JsonSerializable {
         }
     }
 
+    /** Return canonical form of ORCID iD `$s`, or null if `$s` is invalid.
+     * Accepts orcid.org URLs and missing hyphens; checks the checksum.
+     * (From upstream PR #443; IACR delegates to the shared `Orcid::clean`.)
+     * @param string $s
+     * @return ?string */
+    static function clean_orcid($s) {
+        return Orcid::clean($s);
+    }
+
 
     // A sort specification is an integer divided into units of 3 bits.
     // A unit of 1 === first, 2 === last, 3 === email, 4 === affiliation.

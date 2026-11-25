@@ -32,18 +32,25 @@ try {
   $paper["authors"] = array();
   $paper["affiliations"] = array();
   $paper["authorlist"] = array();
+  $authorObjects = array();
   // concats first and last names and adds to authors array + populates affiliations array
   foreach ($authorInfo as $authorLine) {
     // this is a HotCRP thing
     $author = Author::make_tabbed($authorLine);
+    $authorObjects[] = $author;
     $name = $author->firstName . " " . $author->lastName;
-    $paper["authorlist"][] = array("name" => $name,
-                                   "lastName" => $author->lastName,
-                                   "email" => $author->email,
-                                   "affiliation" => $author->affiliation);
+    $entry = array("name" => $name,
+                   "lastName" => $author->lastName,
+                   "email" => $author->email,
+                   "affiliation" => $author->affiliation);
+    if ($author->has_orcid()) {
+      $entry["orcid"] = $author->orcid;
+    }
+    $paper["authorlist"][] = $entry;
     $paper["authors"][] = $name;
     $paper["affiliations"][] = $author->affiliation;
   }
+  setOrcidConfirmed($db, $authorObjects, $paper["authorlist"]);
   unset($paper["authorInformation"]);
   echo json_encode($paper, JSON_PRETTY_PRINT);
   $db = null;

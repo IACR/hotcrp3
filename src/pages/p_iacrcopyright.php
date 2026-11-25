@@ -116,6 +116,13 @@ class IacrCopyright_Page {
         }
     }
 
+    /** Return `authorInformation` without the optional ORCID iD fields, so
+     * the form and the stored record are unchanged by ORCID iDs.
+     * @return string */
+    static function authors_without_orcids(PaperInfo $prow) {
+        return preg_replace('/^((?:[^\t\n]*\t){3}[^\t\n]*)\t[^\n]*$/m', '$1', $prow->authorInformation ?? "");
+    }
+
     /** @param array{string,array<string,string>} $form
      * @return string */
     private function render_form(PaperInfo $prow, $form) {
@@ -125,7 +132,7 @@ class IacrCopyright_Page {
             '[$action]' => htmlspecialchars($action),
             '[$title]' => htmlspecialchars($prow->title),
             '[$confName]' => htmlspecialchars($this->conf->opt("longName") ?? ""),
-            '[$authors]' => htmlspecialchars($prow->authorInformation),
+            '[$authors]' => htmlspecialchars(self::authors_without_orcids($prow)),
             '[$date]' => date('F j, Y'),
             '[$year]' => date('Y'),
             '[$subId]' => (string) $prow->paperId,
@@ -197,7 +204,7 @@ class IacrCopyright_Page {
             "shortName" => $shortName,
             "longName" => $this->conf->opt("longName"),
             "title" => $prow->title,
-            "authorInformation" => $prow->authorInformation,
+            "authorInformation" => self::authors_without_orcids($prow),
             "corresponding_author" => $contact,
             "form" => $signed_form,
             "signedBy1" => $signedBy1,

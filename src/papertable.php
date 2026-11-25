@@ -1033,6 +1033,7 @@ class PaperTable {
 
         $highpreg = $this->matchPreg["au"] ?? null;
         $names = [];
+        Author::prefetch_orcid_status($this->conf, $table);
         if ($type === "last") {
             foreach ($table as $au) {
                 $n = Text::nameo($au, NAME_P|NAME_I);
@@ -1057,6 +1058,17 @@ class PaperTable {
             }
             if ($n !== "" && $e !== "") {
                 $t .= " " . $e;
+            }
+            if ($au->has_orcid() && Orcid::is_canonical($au->orcid)) {
+                // IACR extension
+                if ($au->orcid_status($this->conf) === Author::ORCID_CONFIRMED) {
+                    $ot = "ORCID iD confirmed by the author’s account";
+                    $ox = " ✓";
+                } else {
+                    $ot = "ORCID iD entered with the submission; not confirmed";
+                    $ox = "";
+                }
+                $t .= " <a href=\"https://orcid.org/{$au->orcid}\" class=\"auorcid q\" title=\"{$ot}\" target=\"_blank\" rel=\"noopener\">ORCID {$au->orcid}{$ox}</a>";
             }
             if ($au->email !== ""
                 && $au->contactId

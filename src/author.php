@@ -14,6 +14,13 @@ class Author {
     /** @var string
      * @readonly */
     public $affiliation = "";
+    /** @var ?string
+     *
+     * ORCID iD, stored as an optional fifth tab-separated field of
+     * `authorInformation` (IACR extension). `null` means “not supplied”
+     * (e.g., a JSON author object without an `orcid` key), so `merge()` can
+     * fill it from the saved author; `""` means explicitly empty. */
+    public $orcid;
     /** @var ?string */
     private $_name;
     /** @var ?int */
@@ -52,6 +59,7 @@ class Author {
         $au->lastName = $w[1] ?? "";
         $au->email = $w[2] ?? "";
         $au->affiliation = $w[3] ?? "";
+        $au->orcid = $w[4] ?? "";
         $au->author_index = $author_index;
         $au->seal_nea();
         return $au;
@@ -164,6 +172,11 @@ class Author {
             $this->affiliation = $o->affiliation;
             $need_seal = true;
         }
+        // copy ORCID iDs only between authors; profile iDs are filled in by
+        // Authors_PaperOption::expand_author, which applies the save rules
+        if ($this->orcid === null && $o instanceof Author) {
+            $this->orcid = $o->orcid;
+        }
         if ($need_seal) {
             $this->seal_nea();
         }
@@ -255,6 +268,7 @@ class Author {
         $l = $arr["family_name"] ?? $arr["lastName"] ?? $arr["last"] ?? $arr["familyName"] ?? $arr["family"] ?? null;
         $e = $arr["email"] ?? null;
         $a = $arr["affiliation"] ?? null;
+        $o = $arr["orcid"] ?? $arr["orcidid"] ?? $arr["ORCID"] ?? null;
         if (($n = $arr["name"] ?? $arr["fullName"] ?? null) !== null) {
             $this->_name = $n;
             list($ff, $ll, $ee) = Text::split_name($n, true);
@@ -268,6 +282,14 @@ class Author {
         $this->lastName = simplify_whitespace($l ?? "");
         $this->email = $e ?? "";
         $this->affiliation = simplify_whitespace($a ?? "");
+        if ($o === null) {
+            $this->orcid = null;
+        } else if (is_string($o)) {
+            // invalid iDs are kept as given so validation can report them
+            $this->orcid = Orcid::clean($o) ?? simplify_whitespace($o);
+        } else {
+            $this->orcid = "";
+        }
         $this->seal_nea();
     }
 
@@ -377,7 +399,55 @@ class Author {
 
     /** @return string */
     function unparse_tabbed() {
-        return "{$this->firstName}\t{$this->lastName}\t{$this->email}\t{$this->affiliation}";
+        $t = "{$this->firstName}\t{$this->lastName}\t{$this->email}\t{$this->affiliation}";
+        // write the ORCID field only when present, so lines without an
+        // ORCID iD are unchanged; never write a value that could break the
+        // tab-separated format
+        if (($o = $this->orcid ?? "") !== ""
+            && strpbrk($o, "\t\n\r") === false) {
+            $t .= "\t{$o}";
+        }
+        return $t;
+    }
+
+    /** Return true iff this author has a nonempty ORCID iD.
+     * @return bool */
+    function has_orcid() {
+        return ($this->orcid ?? "") !== "";
+    }
+
+    const ORCID_NONE = 0;
+    const ORCID_UNCONFIRMED = 1;
+    const ORCID_CONFIRMED = 2;
+
+    /** Return whether this author’s ORCID iD is confirmed (IACR extension).
+     * An iD entered on a paper is confirmed iff the author’s email belongs
+     * to an account whose confirmed ORCID iD is the same iD. This is
+     * computed when needed, never stored, so it stays current as accounts
+     * change. Prefetch users first when checking many authors.
+     * @return 0|1|2 */
+    function orcid_status(Conf $conf) {
+        if (!$this->has_orcid()) {
+            return self::ORCID_NONE;
+        }
+        if ($this->email !== ""
+            && ($u = $conf->user_by_email($this->email, USER_SLICE))
+            && $u->confirmed_orcid() === $this->orcid) {
+            return self::ORCID_CONFIRMED;
+        }
+        return self::ORCID_UNCONFIRMED;
+    }
+
+    /** Prefetch the accounts needed by `orcid_status` for `$aulist`.
+     * @param iterable<Author> $aulist */
+    static function prefetch_orcid_status(Conf $conf, $aulist) {
+        $emails = [];
+        foreach ($aulist as $au) {
+            if ($au->has_orcid() && $au->email !== "") {
+                $emails[] = $au->email;
+            }
+        }
+        $conf->prefetch_users_by_email($emails);
     }
 
     /** @return array{email?:string,given_name?:string,family_name?:string,affiliation?:string} */

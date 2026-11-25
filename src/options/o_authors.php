@@ -44,8 +44,15 @@ class Authors_PaperOption extends PaperOption {
     }
     function value_export_json(PaperValue $ov, PaperExport $pex) {
         $au = [];
-        foreach (self::author_list($ov) as $auth) {
-            $au[] = $auth->unparse_nea_json();
+        $aulist = self::author_list($ov);
+        Author::prefetch_orcid_status($this->conf, $aulist);
+        foreach ($aulist as $auth) {
+            $j = $auth->unparse_nea_json();
+            if ($auth->has_orcid()) {
+                $j["orcid"] = $auth->orcid;
+                $j["orcid_confirmed"] = $auth->orcid_status($this->conf) === Author::ORCID_CONFIRMED;
+            }
+            $au[] = $j;
         }
         return $au;
     }
@@ -55,10 +62,14 @@ class Authors_PaperOption extends PaperOption {
         $aulist = self::author_list($ov);
         $nreal = 0;
         $lemails = []; // lowercase email => first index
+        $orcids = []; // ORCID iD => first index
         foreach ($aulist as $i => $auth) {
             $nreal += $auth->is_empty() ? 0 : 1;
             $le = strtolower($auth->email);
             $lemails[$le] = $lemails[$le] ?? $i;
+            if ($auth->has_orcid() && !$auth->is_empty()) {
+                $orcids[$auth->orcid] = $orcids[$auth->orcid] ?? $i;
+            }
         }
         if ($nreal === 0) {
             if (!$ov->prow->allow_absent()
@@ -84,13 +95,40 @@ class Authors_PaperOption extends PaperOption {
             $base_authors = self::author_list($ov->prow->base_option($this->id));
         }
 
-        $msg_bademail = $msg_missing = $msg_dupemail = false;
+        // ORCID iDs already saved for the same author names are not looked up
+        $base_orcids = [];
+        if (!empty($orcids)) {
+            foreach (self::author_list($ov->prow->base_option($this->id)) as $auth) {
+                if ($auth->has_orcid()) {
+                    $base_orcids["{$auth->orcid}\t{$auth->firstName}\t{$auth->lastName}"] = true;
+                }
+            }
+        }
+
+        $msg_bademail = $msg_missing = $msg_dupemail = $msg_duporcid = false;
         $msg_orcid = [];
         $n = 0;
         foreach ($aulist as $auth) {
             ++$n;
             if ($auth->is_empty()) {
+                if ($auth->has_orcid()) {
+                    $ov->append_item(MessageItem::warning_at("authors:{$n}:orcid", "<0>ORCID iD ignored because the author has no name or email"));
+                }
                 continue;
+            }
+            // ORCID iD (IACR extension): must be canonical
+            if ($auth->has_orcid()) {
+                if (!Orcid::is_canonical($auth->orcid)) {
+                    $ov->append_item(MessageItem::estop_at("authors"));
+                    $ov->append_item(MessageItem::estop_at("authors:{$n}:orcid", "<0>Invalid ORCID iD ‘{$auth->orcid}’"));
+                } else if (($n2 = $orcids[$auth->orcid]) !== $n - 1) {
+                    $msg_duporcid = true;
+                    $ov->append_item(MessageItem::warning_at("authors:{$n}:orcid"));
+                    $ov->append_item(MessageItem::warning_at("authors:" . ($n2 + 1) . ":orcid"));
+                } else if (!isset($base_orcids["{$auth->orcid}\t{$auth->firstName}\t{$auth->lastName}"])
+                           && ($m = OrcidLookup::mismatch_message($auth->orcid, $auth->firstName, $auth->lastName))) {
+                    $ov->append_item(MessageItem::warning_at("authors:{$n}:orcid", $m));
+                }
             }
             if ($auth->firstName === ""
                 && $auth->lastName === ""
@@ -121,7 +159,9 @@ class Authors_PaperOption extends PaperOption {
                 if ($auth->email === "") {
                     $msg_missing = true;
                     $ov->append_item(new MessageItem($status, "authors:{$n}:email"));
-                } else if (!$this->has_confirmed_orcid($auth->email)) {
+                } else if (!$auth->has_orcid()
+                           && !$this->has_confirmed_orcid($auth->email)) {
+                    // IACR: an ORCID iD entered on the paper also counts
                     if (!Contact::is_bot_email($auth->email)) {
                         $msg_orcid[] = $auth->email;
                         $ov->append_item(new MessageItem($status, "authors:{$n}"));
@@ -168,6 +208,9 @@ class Authors_PaperOption extends PaperOption {
         }
         if ($msg_dupemail) {
             $ov->warning("<0>The same email address has been used for different authors. This is usually an error");
+        }
+        if ($msg_duporcid) {
+            $ov->warning("<0>The same ORCID iD has been used for different authors. This is usually an error");
         }
         if ($msg_orcid) {
             $status = 2;
@@ -216,9 +259,19 @@ class Authors_PaperOption extends PaperOption {
         }
     }
     static private function expand_author(Author $au, PaperInfo $prow) {
-        if ($au->email !== ""
-            && ($aux = $prow->author_by_email($au->email))) {
+        $aux = $au->email !== "" ? $prow->author_by_email($au->email) : null;
+        if ($aux) {
             $au->merge($aux);
+        }
+        // IACR: an author without an ORCID iD gets the iD from their profile,
+        // unless this request just removed the iD saved for them
+        if (!$au->has_orcid()
+            && $au->email !== ""
+            && ($au->orcid === null || !$aux || !$aux->has_orcid())
+            && ($u = $prow->conf->user_by_email($au->email, USER_SLICE))
+            && ($o = Orcid::clean($u->orcid())) !== null
+            && $o !== "") {
+            $au->orcid = $o;
         }
     }
     /** @param list<Author> $authors
@@ -236,6 +289,9 @@ class Authors_PaperOption extends PaperOption {
         if ($nreal > self::MAX_AUTHORS) {
             return $this->make_too_many($prow);
         }
+        $prow->conf->prefetch_users_by_email(array_map(function ($au) {
+            return $au->email;
+        }, $authors));
         $t = [];
         foreach ($authors as $au) {
             self::expand_author($au, $prow);
@@ -249,7 +305,9 @@ class Authors_PaperOption extends PaperOption {
             $email = $qreq["authors:{$n}:email"];
             $name = $qreq["authors:{$n}:name"];
             $aff = $qreq["authors:{$n}:affiliation"];
-            if ($email === null && $name === null && $aff === null) {
+            $orcid = $qreq["authors:{$n}:orcid"];
+            if ($email === null && $name === null && $aff === null
+                && $orcid === null) {
                 break;
             }
             $auf = $aul = $aue = $aua = "";
@@ -273,7 +331,14 @@ class Authors_PaperOption extends PaperOption {
                 $aue = $aua;
                 $aua = $tmp;
             }
-            $authors[] = Author::make_nae($auf, $aul, $aue, $aua);
+            $au = Author::make_nae($auf, $aul, $aue, $aua);
+            // an absent ORCID input means “not supplied”; invalid values are
+            // kept for `value_check` to report
+            if ($orcid !== null) {
+                $orcid = simplify_whitespace($orcid);
+                $au->orcid = Orcid::clean($orcid) ?? $orcid;
+            }
+            $authors[] = $au;
         }
         return $this->resolve_parse($prow, $authors);
     }
@@ -313,6 +378,10 @@ class Authors_PaperOption extends PaperOption {
             $js = ["size" => "30", "placeholder" => "Email", "autocomplete" => "off", "aria-label" => "Author email"];
             $auval = $au ? $au->email : "";
             $val = $reqau ? $reqau->email : "";
+        } else if ($component === "orcid") {
+            $js = ["size" => "20", "placeholder" => "ORCID iD (optional)", "autocomplete" => "off", "spellcheck" => "false", "aria-label" => "Author ORCID iD"];
+            $auval = $au ? $au->orcid ?? "" : "";
+            $val = $reqau ? $reqau->orcid ?? "" : "";
         } else {
             $js = ["size" => "32", "placeholder" => "Affiliation", "autocomplete" => "off", "aria-label" => "Author affiliation"];
             $auval = $au ? $au->affiliation : "";
@@ -339,6 +408,7 @@ class Authors_PaperOption extends PaperOption {
             && !$pt->user->is_admin($pt->prow)
             && (!$reqau || $reqau->nea_equals($pt->user->populated_user()))) {
             $reqau = Author::make_user($pt->user->populated_user());
+            $reqau->orcid = Orcid::clean($pt->user->orcid());
             $ignore_diff = true;
         }
 
@@ -350,7 +420,8 @@ class Authors_PaperOption extends PaperOption {
         echo '<div class="flex-grow-1">',
             $this->editable_author_component_entry($pt, $n, "email", $au, $reqau, $ignore_diff), ' ',
             $this->editable_author_component_entry($pt, $n, "name", $au, $reqau, $ignore_diff), ' ',
-            $this->editable_author_component_entry($pt, $n, "affiliation", $au, $reqau, $ignore_diff),
+            $this->editable_author_component_entry($pt, $n, "affiliation", $au, $reqau, $ignore_diff), ' ',
+            $this->editable_author_component_entry($pt, $n, "orcid", $au, $reqau, $ignore_diff),
             MessageSet::feedback_html($pt->message_list_for("authors:{$n}:*")),
             '</div></div>';
     }
@@ -409,6 +480,9 @@ class Authors_PaperOption extends PaperOption {
         foreach (self::author_list($ov) as $i => $au) {
             $n = $i + 1;
             echo Ht::hidden("authors:{$n}:email", $au->email, ["disabled" => true]);
+            if ($au->has_orcid()) {
+                echo Ht::hidden("authors:{$n}:orcid", $au->orcid, ["disabled" => true]);
+            }
             if (($n = $au->name(NAME_PARSABLE)) !== "") {
                 echo Ht::hidden("authors:{$n}:name", $n, ["disabled" => true]);
             }

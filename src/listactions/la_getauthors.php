@@ -35,9 +35,20 @@ class GetAuthors_ListAction extends ListAction {
                     "affiliation" => $au->affiliation
                 ];
                 $lemail = strtolower($au->email);
+                // IACR: the iD entered on the paper wins over the account’s
+                if ($au->has_orcid()) {
+                    $line["orcid"] = $au->orcid;
+                    $line["orcid_confirmed"] = $au->orcid_status($conf) === Author::ORCID_CONFIRMED ? "yes" : "no";
+                    $has_orcid = true;
+                }
                 if ($au->email !== ""
                     && ($u = $conf->user_by_email($au->email))) {
-                    $line["orcid"] = $u->decorated_orcid();
+                    if (!isset($line["orcid"])) {
+                        $line["orcid"] = $u->decorated_orcid();
+                        if ($line["orcid"] !== "") {
+                            $line["orcid_confirmed"] = $u->confirmed_orcid() !== "" ? "yes" : "no";
+                        }
+                    }
                     $line["country"] = $u->country_code();
                     $has_orcid = $has_orcid || $line["orcid"] !== "";
                     $has_country = $has_country || $line["country"] !== "";
@@ -65,6 +76,9 @@ class GetAuthors_ListAction extends ListAction {
                         "country" => $u->country_code(),
                         "iscontact" => "nonauthor"
                     ];
+                    if ($line["orcid"] !== "") {
+                        $texts[count($texts) - 1]["orcid_confirmed"] = $u->confirmed_orcid() !== "" ? "yes" : "no";
+                    }
                     $has_orcid = $has_orcid || $line["orcid"] !== "";
                     $has_country = $has_country || $line["country"] !== "";
                     $has_iscontact = true;
@@ -74,6 +88,7 @@ class GetAuthors_ListAction extends ListAction {
         $header = ["paper", "title", "given_name", "family_name", "email", "affiliation"];
         if ($has_orcid) {
             $header[] = "orcid";
+            $header[] = "orcid_confirmed";
         }
         if ($has_country) {
             $header[] = "country";

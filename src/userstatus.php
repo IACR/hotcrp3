@@ -431,7 +431,7 @@ class UserStatus extends MessageSet {
 
         // keys that might come from user or contactdb
         foreach (["email", "firstName", "lastName", "affiliation",
-                  "collaborators", "country", "phone", "address",
+                  "collaborators", "country", "orcid", "phone", "address",
                   "city", "state", "zip", "country", "theme"] as $prop) {
             $value = $user->gprop($prop);
             if ($value !== null && $value !== "") {
@@ -683,6 +683,38 @@ class UserStatus extends MessageSet {
         if (($cj->preferred_email ?? false)
             && (($cj->bot ?? false) || ($old_user && $old_user->is_bot()))) {
             $this->error_at("preferred_email", "<0>Bot accounts have no mailbox");
+        }
+
+        // ORCID iD. A newly entered iD is stored as unconfirmed, with a
+        // trailing “?”, since typing an iD does not prove ownership (IACR).
+        // An entry equal to the stored iD, with or without “?”, leaves the
+        // stored value (and its confirmation) unchanged.
+        if (isset($cj->orcid)
+            && !$this->has_problem_at("orcid")) {
+            $s = trim($cj->orcid);
+            if (str_ends_with($s, "?")) {
+                $s = substr($s, 0, -1);
+            }
+            $orcid = Contact::clean_orcid($s);
+            if ($orcid === null) {
+                $this->error_at("orcid", "<0>Invalid ORCID iD ‘{$cj->orcid}’");
+            } else if ($old_user
+                       && $orcid !== ""
+                       && $orcid === $old_user->orcid()) {
+                $cj->orcid = $old_user->decorated_orcid();
+            } else {
+                $cj->orcid = $orcid === "" ? "" : "{$orcid}?";
+                // IACR: warn if the ORCID record names someone else
+                if ($orcid !== "") {
+                    $nau = Author::make_keyed($cj);
+                    if ($nau->firstName === "" && $nau->lastName === "" && $old_user) {
+                        $nau = Author::make_user($old_user);
+                    }
+                    if (($m = OrcidLookup::mismatch_message($orcid, $nau->firstName, $nau->lastName))) {
+                        $this->warning_at("orcid", $m);
+                    }
+                }
+            }
         }
 
         // Address
@@ -1380,6 +1412,15 @@ class UserStatus extends MessageSet {
                 $this->diffs[$diff] = true;
             }
         }
+        // leave an unchanged ORCID iD alone, so its decoration survives
+        if (($v = $this->jval->orcid ?? null) !== null
+            && $v !== $user->orcid()
+            && $v !== $user->decorated_orcid()) {
+            $user->set_prop("orcid", $v, $ifempty);
+            if ($user->prop_changed("orcid")) {
+                $this->diffs["orcid"] = true;
+            }
+        }
         if ($user->conf->require_preferred_email()
             && ($v = $this->jval->preferred_email ?? null) !== null
             && strlen($v) <= 120) {
@@ -1550,7 +1591,7 @@ class UserStatus extends MessageSet {
         foreach (["firstName", "lastName", "preferredEmail", "affiliation",
                   "collaborators", "addressLine1", "addressLine2",
                   "addressLine3", "addressLine4", "addressLine5",
-                  "city", "state", "zipCode", "country", "phone", "theme"] as $k) {
+                  "city", "state", "zipCode", "country", "orcid", "phone", "theme"] as $k) {
             if (($v = $qreq[$k]) !== null) {
                 $cj->$k = $v;
             }
@@ -1629,7 +1670,7 @@ class UserStatus extends MessageSet {
         "firstName", "lastName", "name",
         "affiliation", "collaborators",
         "address", "address1", "address2", "address3", "address4", "address5",
-        "city", "state", "zip", "country",
+        "city", "state", "zip", "country", "orcid",
         "roles", "follow", "reset_tags", "tags", "add_tags", "remove_tags", "change_tags",
         "disabled", "theme"
     ];
@@ -1859,6 +1900,14 @@ class UserStatus extends MessageSet {
         $user_country = Countries::fix($us->user->country_code());
         $t = Countries::selector("country", $us->qreq->country ?? $user_country, ["id" => "country", "data-default-value" => $user_country, "autocomplete" => $us->autocomplete("country")]) . $us->global_profile_difference("country");
         $us->print_field("country", "Country/region", $t);
+    }
+
+    static function print_orcid(UserStatus $us) {
+        $user_orcid = $us->user->orcid();
+        $t = Ht::entry("orcid", $us->qreq->orcid ?? $user_orcid, ["size" => 24, "id" => "orcid", "autocomplete" => "off", "spellcheck" => false, "data-default-value" => $user_orcid])
+            . $us->global_profile_difference("orcid")
+            . '<p class="f-d">Example: “0000-0002-1825-0097”. Get an iD at <a href="https://orcid.org/" target="_blank" rel="noopener">orcid.org</a>.</p>';
+        $us->print_field("orcid", "ORCID iD", $t);
     }
 
     static function print_theme(UserStatus $us) {

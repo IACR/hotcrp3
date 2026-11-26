@@ -75,12 +75,19 @@ class IACR_AcceptedJson_Page {
                 "authors" => [],
                 "affiliations" => []
             ];
+            $orcids = [];
             foreach (preg_split('/\n/', $row["authorInformation"], -1, PREG_SPLIT_NO_EMPTY) as $line) {
                 $au = Author::make_tabbed($line);
                 $paper["authors"][] = $au->firstName . " " . $au->lastName;
                 $paper["affiliations"][] = $au->affiliation;
+                $orcids[] = $au->orcid;
             }
             $paper["affiliations"] = array_keys(array_fill_keys($paper["affiliations"], true));
+            // ORCID iDs, parallel to `authors` ("" for none); only present
+            // when some author has one, so other papers are unchanged
+            if (array_filter($orcids, "strlen")) {
+                $paper["orcids"] = $orcids;
+            }
             if (($fp = $final[$row["paperId"]] ?? null)) {
                 $paper["title"] = $fp["title"] ?? null;
                 $paper["abstract"] = $fp["abstract"] ?? null;

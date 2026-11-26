@@ -208,3 +208,14 @@ div.form-section h3#authors, div#sf_author_orcid {
 div#h-site a {
     color: var(--link-fg);
 }
+/* ORCID iD on author entries (IACR extension) */
+.editable-author-orcid {
+    margin: 2px 0.5em 2px 0;
+    width: 13.5em;
+    max-width: 100%;
+    font-variant-numeric: tabular-nums;
+}
+a.auorcid {
+    font-size: smaller;
+    white-space: nowrap;
+}
